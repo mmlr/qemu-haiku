@@ -136,25 +136,25 @@ haiku_to_pc_key[] = {
 
 // Key constants from vl.h
 #define QEMU_KEY_ESC1(c) ((c) | 0xe100)
-#define QEMU_KEY_BACKSPACE  0x007f
-#define QEMU_KEY_UP         QEMU_KEY_ESC1('A')
-#define QEMU_KEY_DOWN       QEMU_KEY_ESC1('B')
-#define QEMU_KEY_RIGHT      QEMU_KEY_ESC1('C')
-#define QEMU_KEY_LEFT       QEMU_KEY_ESC1('D')
-#define QEMU_KEY_HOME       QEMU_KEY_ESC1(1)
-#define QEMU_KEY_END        QEMU_KEY_ESC1(4)
-#define QEMU_KEY_PAGEUP     QEMU_KEY_ESC1(5)
-#define QEMU_KEY_PAGEDOWN   QEMU_KEY_ESC1(6)
-#define QEMU_KEY_DELETE     QEMU_KEY_ESC1(3)
+#define QEMU_KEY_BACKSPACE	0x007f
+#define QEMU_KEY_UP			QEMU_KEY_ESC1('A')
+#define QEMU_KEY_DOWN		QEMU_KEY_ESC1('B')
+#define QEMU_KEY_RIGHT		QEMU_KEY_ESC1('C')
+#define QEMU_KEY_LEFT		QEMU_KEY_ESC1('D')
+#define QEMU_KEY_HOME		QEMU_KEY_ESC1(1)
+#define QEMU_KEY_END		QEMU_KEY_ESC1(4)
+#define QEMU_KEY_PAGEUP		QEMU_KEY_ESC1(5)
+#define QEMU_KEY_PAGEDOWN	QEMU_KEY_ESC1(6)
+#define QEMU_KEY_DELETE		QEMU_KEY_ESC1(3)
 
-#define QEMU_KEY_CTRL_UP         0xe400
-#define QEMU_KEY_CTRL_DOWN       0xe401
-#define QEMU_KEY_CTRL_LEFT       0xe402
-#define QEMU_KEY_CTRL_RIGHT      0xe403
-#define QEMU_KEY_CTRL_HOME       0xe404
-#define QEMU_KEY_CTRL_END        0xe405
-#define QEMU_KEY_CTRL_PAGEUP     0xe406
-#define QEMU_KEY_CTRL_PAGEDOWN   0xe407
+#define QEMU_KEY_CTRL_UP		0xe400
+#define QEMU_KEY_CTRL_DOWN		0xe401
+#define QEMU_KEY_CTRL_LEFT		0xe402
+#define QEMU_KEY_CTRL_RIGHT		0xe403
+#define QEMU_KEY_CTRL_HOME		0xe404
+#define QEMU_KEY_CTRL_END		0xe405
+#define QEMU_KEY_CTRL_PAGEUP	0xe406
+#define QEMU_KEY_CTRL_PAGEDOWN	0xe407
 
 
 static void
