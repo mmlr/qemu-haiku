@@ -160,8 +160,6 @@ haiku_to_pc_key[] = {
 static void
 block_signals(bool block)
 {
-	printf("%sblocking signals from thread %d\n", block ? "" : "un", find_thread(NULL));
-
 	sigset_t set;
 	sigemptyset(&set);
 	sigaddset(&set, SIGUSR1);
