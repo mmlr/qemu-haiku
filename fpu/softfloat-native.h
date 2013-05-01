@@ -8,27 +8,6 @@
 #include <fenv.h>
 #endif
 
-#ifdef __HAIKU__
-#ifndef isgreater
-#define isgreater(x, y)		__builtin_isgreater(x, y)
-#endif
-#ifndef isgreaterequal
-#define isgreaterequal(x, y)	__builtin_isgreaterequal(x, y)
-#endif
-#ifndef isless
-#define isless(x, y)		__builtin_isless(x, y)
-#endif
-#ifndef islessequal
-#define islessequal(x, y)	__builtin_islessequal(x, y)
-#endif
-#ifndef isunordered
-#define isunordered(x, y)	__builtin_isunordered(x, y)
-#endif
-#ifndef fabsl
-#define fabsl(x) __builtin_fabsl(x)
-#endif
-#endif
-
 #if defined(__OpenBSD__) || defined(__NetBSD__)
 #include <sys/param.h>
 #endif
@@ -42,7 +21,8 @@
  */
 #if defined(HOST_SOLARIS) && (( HOST_SOLARIS <= 9 ) || ((HOST_SOLARIS >= 10) \
                                                         && (__GNUC__ < 4))) \
-    || (defined(__OpenBSD__) && (OpenBSD < 200811))
+    || (defined(__OpenBSD__) && (OpenBSD < 200811)) \
+    || defined(__HAIKU__)
 /*
  * C99 7.12.3 classification macros
  * and
@@ -55,7 +35,7 @@
 #define unordered(x, y) (isnan(x) || isnan(y))
 #endif
 
-#ifdef __NetBSD__
+#if defined(__NetBSD__) || defined(__HAIKU__)
 #ifndef isgreater
 #define isgreater(x, y)		__builtin_isgreater(x, y)
 #endif
@@ -71,15 +51,14 @@
 #ifndef isunordered
 #define isunordered(x, y)	__builtin_isunordered(x, y)
 #endif
-#endif
-
-
+#else /* __NetBSD__ || __HAIKU__ */
 #define isnormal(x)             (fpclass(x) >= FP_NZERO)
 #define isgreater(x, y)         ((!unordered(x, y)) && ((x) > (y)))
 #define isgreaterequal(x, y)    ((!unordered(x, y)) && ((x) >= (y)))
 #define isless(x, y)            ((!unordered(x, y)) && ((x) < (y)))
 #define islessequal(x, y)       ((!unordered(x, y)) && ((x) <= (y)))
 #define isunordered(x,y)        unordered(x, y)
+#endif
 #endif
 
 #if defined(__sun__) && !defined(NEED_LIBSUNMATH)

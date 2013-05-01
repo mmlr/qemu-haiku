@@ -221,7 +221,7 @@ static always_inline int ctpop32(uint32_t val)
 
 static always_inline int ctpop64(uint64_t val)
 {
-#if QEMU_GNUC_PREREQ(3, 4) && !defined(__HAIKU__)
+#if QEMU_GNUC_PREREQ(3, 4)
     return __builtin_popcountll(val);
 #else
     val = (val & 0x5555555555555555ULL) + ((val >>  1) & 0x5555555555555555ULL);
