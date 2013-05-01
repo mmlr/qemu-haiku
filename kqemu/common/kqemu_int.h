@@ -74,14 +74,9 @@ typedef signed long long int64_t;
 #define offsetof(type, field) ((size_t) &((type *)0)->field)
 #endif
 
-#ifndef __HAIKU__
 #define likely(x)	__builtin_expect(!!(x), 1)
 #define unlikely(x)	__builtin_expect(!!(x), 0)
 #define inline          inline __attribute__((always_inline))
-#else
-#define likely(x)	x
-#define unlikely(x)	x
-#endif
 
 #if defined (__x86_64__)
 #define FMT_lx "%016lx"

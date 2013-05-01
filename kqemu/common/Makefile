@@ -42,8 +42,8 @@ endif
 
 DEFINES=-D__KERNEL__
 INCLUDES=-nostdinc -iwithprefix include -I. -I..
-TOOLS_CFLAGS=-Wall -O2 $(WERROR) -g
-COMMON_CFLAGS=-Wall -O2 -fomit-frame-pointer -fno-strict-aliasing $(WERROR)
+TOOLS_CFLAGS=-Wall -O2 -Werror -g
+COMMON_CFLAGS=-Wall -O2 -fomit-frame-pointer -fno-strict-aliasing -Werror 
 ifeq ($(ARCH), x86_64)
 COMMON_CFLAGS+=-mno-red-zone
 endif

@@ -95,8 +95,12 @@ void qemu_vfree(void *ptr)
 #include <sys/types.h>
 #include <sys/mount.h>
 #else
+#ifndef __HAIKU__
 #ifndef __FreeBSD__
 #include <sys/vfs.h>
+#endif
+#else /* __HAIKU__ */
+#include <OS.h>
 #endif
 #endif
 
@@ -109,6 +113,7 @@ static void *kqemu_vmalloc(size_t size)
     static int phys_ram_size = 0;
     void *ptr;
 
+#ifndef __HAIKU__
 /* no need (?) for a dummy file on OpenBSD/FreeBSD */
 #if defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__DragonFly__)
     int map_anon = MAP_ANON;
@@ -192,6 +197,16 @@ static void *kqemu_vmalloc(size_t size)
     }
     phys_ram_size += size;
     return ptr;
+#else /* __HAIKU__ */
+	if (create_area("qemu kqemu_valloc area", &ptr, B_ANY_ADDRESS,
+		size, B_FULL_LOCK, B_READ_AREA | B_WRITE_AREA) < 0 || ptr == NULL) {
+		fprintf(stderr, "failed to allocate kqemu memory\n");
+		exit(1);
+	}
+
+	phys_ram_size += size;
+	return ptr;
+#endif
 }
 
 static void kqemu_vfree(void *ptr)

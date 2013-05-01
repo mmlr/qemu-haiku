@@ -57,8 +57,6 @@ void	console_select(unsigned int index);
 void	vga_hw_update(void);
 void	vga_hw_invalidate(void);
 void	kbd_put_keysym(int keysym);
-
-extern const char *bios_dir;
 }
 
 
@@ -158,11 +156,6 @@ haiku_to_pc_key[] = {
 int
 main(int argc, char **argv)
 {
-	BPath path = argv[0];
-	path.GetParent(&path);
-	path.Append("share/qemu");
-	bios_dir = path.Path();
-
 	sMainThread = find_thread(NULL);
 	QEMUApplication *app = new QEMUApplication(argc, argv);
 	app->Run();

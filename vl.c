@@ -3210,7 +3210,7 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
         if (flags & RAM_SAVE_FLAG_COMPRESS) {
             uint8_t ch = qemu_get_byte(f);
             memset(qemu_get_ram_ptr(addr), ch, TARGET_PAGE_SIZE);
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__HAIKU__)
             if (ch == 0 &&
                 (!kvm_enabled() || kvm_has_sync_mmu())) {
                 madvise(qemu_get_ram_ptr(addr), TARGET_PAGE_SIZE, MADV_DONTNEED);
@@ -5984,7 +5984,7 @@ int main(int argc, char **argv, char **envp)
     ds = display_state;
 
     if (display_type == DT_DEFAULT) {
-#if defined(CONFIG_SDL) || defined(CONFIG_COCOA)
+#if defined(CONFIG_SDL) || defined(CONFIG_COCOA) || defined(CONFIG_HAIKU)
         display_type = DT_SDL;
 #else
         display_type = DT_VNC;
@@ -6011,9 +6011,9 @@ int main(int argc, char **argv, char **envp)
         cocoa_display_init(ds, full_screen);
         break;
 #elif defined(CONFIG_HAIKU)
-	case DT_SDL:
-		haiku_display_init(ds, full_screen);
-		break;
+    case DT_SDL:
+        haiku_display_init(ds, full_screen);
+        break;
 #endif
     case DT_VNC:
         vnc_display_init(ds);

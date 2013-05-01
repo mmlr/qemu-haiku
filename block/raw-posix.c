@@ -856,9 +856,9 @@ again:
     if (ioctl(fd, B_GET_GEOMETRY, &dg) >= 0) {
         size = (off_t)dg.cylinder_count * (off_t)dg.sectors_per_track *
             (off_t)dg.head_count * (off_t)dg.bytes_per_sector;
-    } else if (fstat(fd, &st) >= 0) {
+    } else if (fstat(fd, &st) >= 0)
         size = st.st_size;
-    } else
+    else
 #endif
     {
         size = lseek(fd, 0, SEEK_END);

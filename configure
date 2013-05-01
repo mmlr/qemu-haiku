@@ -590,8 +590,8 @@ case "$cpu" in
            ARCH_CFLAGS="-march=z900"
            ;;
     i386)
-           ARCH_CFLAGS="-m32"
-           ARCH_LDFLAGS="-m32"
+           #ARCH_CFLAGS="-m32"
+           #ARCH_LDFLAGS="-m32"
            ;;
     x86_64)
            ARCH_CFLAGS="-m64"
@@ -1591,8 +1591,8 @@ if test "$aix" = "yes" ; then
 fi
 
 if test "$haiku" = "yes" ; then
-  echo "CONFIG_HAIKU=yes" >> $config_mak
-  echo "#define CONFIG_HAIKU 1" >> $config_h
+  echo "CONFIG_HAIKU=yes" >> $config_host_mak
+  echo "#define CONFIG_HAIKU 1" >> $config_host_h
 fi
 
 if test "$solaris" = "yes" ; then

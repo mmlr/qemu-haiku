@@ -382,9 +382,7 @@ static void vnc_dpy_resize(DisplayState *ds)
     VncDisplay *vd = ds->opaque;
     VncState *vs = vd->clients;
     while (vs != NULL) {
-        pthread_mutex_lock(&vs->resize_lock);
         vnc_resize(vs);
-        pthread_mutex_unlock(&vs->resize_lock);
         vs = vs->next;
     }
 }
@@ -723,14 +721,6 @@ static int find_and_clear_dirty_height(struct VncSurface *s,
     }
 
     return h;
-}
-
-static void vnc_update_client_timer(void *opaque)
-{
-    VncState *vs = opaque;
-    pthread_mutex_lock(&vs->resize_lock);
-	vnc_update_client(opaque);
-	pthread_mutex_unlock(&vs->resize_lock);
 }
 
 static void vnc_update_client(void *opaque)
@@ -2097,11 +2087,9 @@ static void vnc_connect(VncDisplay *vd, int csock)
     socket_set_nonblock(vs->csock);
     qemu_set_fd_handler2(vs->csock, NULL, vnc_client_read, NULL, vs);
 
-    pthread_mutex_init(&vs->resize_lock, NULL);
-
     vs->vd = vd;
     vs->ds = vd->ds;
-    vs->timer = qemu_new_timer(rt_clock, vnc_update_client_timer, vs);
+    vs->timer = qemu_new_timer(rt_clock, vnc_update_client, vs);
     vs->last_x = -1;
     vs->last_y = -1;
 
