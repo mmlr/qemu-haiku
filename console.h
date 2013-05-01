@@ -282,6 +282,9 @@ void sdl_display_init(DisplayState *ds, int full_screen, int no_frame);
 /* cocoa.m */
 void cocoa_display_init(DisplayState *ds, int full_screen);
 
+/* haiku.cpp */
+void haiku_display_init(DisplayState *ds, int full_screen);
+
 /* vnc.c */
 void vnc_display_init(DisplayState *ds);
 void vnc_display_close(DisplayState *ds);

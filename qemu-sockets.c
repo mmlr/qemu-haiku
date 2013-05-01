@@ -100,7 +100,7 @@ int inet_listen(const char *str, char *ostr, int olen,
     int slisten,rc,pos,to,try_next;
 
     memset(&ai,0, sizeof(ai));
-    ai.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
+    ai.ai_flags = AI_PASSIVE;
     ai.ai_family = PF_UNSPEC;
     ai.ai_socktype = socktype;
 
@@ -232,7 +232,7 @@ int inet_connect(const char *str, int socktype)
     int sock,rc;
 
     memset(&ai,0, sizeof(ai));
-    ai.ai_flags = AI_CANONNAME | AI_ADDRCONFIG;
+    ai.ai_flags = AI_CANONNAME;
     ai.ai_family = PF_UNSPEC;
     ai.ai_socktype = socktype;
 

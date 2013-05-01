@@ -108,6 +108,9 @@ ifdef CONFIG_COREAUDIO
 AUDIO_OBJS += coreaudio.o
 AUDIO_PT = yes
 endif
+ifdef CONFIG_HAIKU
+AUDIO_OBJS += haikuaudio.o
+endif
 ifdef CONFIG_ALSA
 AUDIO_OBJS += alsaaudio.o
 endif
@@ -147,6 +150,10 @@ OBJS+=vnc.o d3des.o
 
 ifdef CONFIG_COCOA
 OBJS+=cocoa.o
+endif
+
+ifdef CONFIG_HAIKU
+OBJS+=haiku.o
 endif
 
 ifdef CONFIG_SLIRP
@@ -240,11 +247,13 @@ ifneq ($(BLOBS),)
 		$(INSTALL) -m 644 $(SRC_PATH)/pc-bios/$$x "$(DESTDIR)$(datadir)"; \
 	done
 endif
+ifndef CONFIG_HAIKU
 ifndef CONFIG_WIN32
 	mkdir -p "$(DESTDIR)$(datadir)/keymaps"
 	set -e; for x in $(KEYMAPS); do \
 		$(INSTALL) -m 644 $(SRC_PATH)/keymaps/$$x "$(DESTDIR)$(datadir)/keymaps"; \
 	done
+endif
 endif
 	for d in $(TARGET_DIRS); do \
 	$(MAKE) -C $$d $@ || exit 1 ; \

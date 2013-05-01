@@ -8,6 +8,27 @@
 #include <fenv.h>
 #endif
 
+#ifdef __HAIKU__
+#ifndef isgreater
+#define isgreater(x, y)		__builtin_isgreater(x, y)
+#endif
+#ifndef isgreaterequal
+#define isgreaterequal(x, y)	__builtin_isgreaterequal(x, y)
+#endif
+#ifndef isless
+#define isless(x, y)		__builtin_isless(x, y)
+#endif
+#ifndef islessequal
+#define islessequal(x, y)	__builtin_islessequal(x, y)
+#endif
+#ifndef isunordered
+#define isunordered(x, y)	__builtin_isunordered(x, y)
+#endif
+#ifndef fabsl
+#define fabsl(x) __builtin_fabsl(x)
+#endif
+#endif
+
 #if defined(__OpenBSD__) || defined(__NetBSD__)
 #include <sys/param.h>
 #endif

@@ -5373,17 +5373,17 @@ int float128_lt_quiet( float128 a, float128 b STATUS_PARAM )
 #endif
 
 /* misc functions */
-float32 uint32_to_float32( unsigned int a STATUS_PARAM )
+float32 uint32_to_float32( uint32 a STATUS_PARAM )
 {
     return int64_to_float32(a STATUS_VAR);
 }
 
-float64 uint32_to_float64( unsigned int a STATUS_PARAM )
+float64 uint32_to_float64( uint32 a STATUS_PARAM )
 {
     return int64_to_float64(a STATUS_VAR);
 }
 
-unsigned int float32_to_uint32( float32 a STATUS_PARAM )
+uint32 float32_to_uint32( float32 a STATUS_PARAM )
 {
     int64_t v;
     unsigned int res;
@@ -5401,7 +5401,7 @@ unsigned int float32_to_uint32( float32 a STATUS_PARAM )
     return res;
 }
 
-unsigned int float32_to_uint32_round_to_zero( float32 a STATUS_PARAM )
+uint32 float32_to_uint32_round_to_zero( float32 a STATUS_PARAM )
 {
     int64_t v;
     unsigned int res;
@@ -5419,7 +5419,7 @@ unsigned int float32_to_uint32_round_to_zero( float32 a STATUS_PARAM )
     return res;
 }
 
-unsigned int float64_to_uint32( float64 a STATUS_PARAM )
+uint32 float64_to_uint32( float64 a STATUS_PARAM )
 {
     int64_t v;
     unsigned int res;
@@ -5437,7 +5437,7 @@ unsigned int float64_to_uint32( float64 a STATUS_PARAM )
     return res;
 }
 
-unsigned int float64_to_uint32_round_to_zero( float64 a STATUS_PARAM )
+uint32 float64_to_uint32_round_to_zero( float64 a STATUS_PARAM )
 {
     int64_t v;
     unsigned int res;

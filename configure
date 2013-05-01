@@ -188,6 +188,7 @@ aix="no"
 blobs="yes"
 fdt="yes"
 sdl_x11="no"
+haiku="no"
 
 # OS specific
 if check_define __linux__ ; then
@@ -297,6 +298,21 @@ SunOS)
 AIX)
 aix="yes"
 make="gmake"
+;;
+Haiku)
+haiku="yes"
+kvm="no"
+curses="no"
+aio="no"
+sdl="no"
+bluez="no"
+audio_drv_list="haiku"
+audio_possible_drivers="haiku"
+OS_CFLAGS="-fno-pic"
+OS_LDFLAGS="-lnetwork -lbe -lgame -lmedia"
+if [ "$cpu" = "i386" -o "$cpu" = "x86_64" ] ; then
+    kqemu="yes"
+fi
 ;;
 *)
 audio_drv_list="oss"
@@ -910,7 +926,7 @@ for drv in $audio_drv_list; do
         "pa_simple *s = NULL; pa_simple_free(s); return 0;"
     ;;
 
-    oss|sdl|core|wav|dsound)
+    oss|sdl|core|wav|dsound|haiku)
     # XXX: Probes for CoreAudio, DirectSound, SDL(?)
     ;;
 
@@ -1097,6 +1113,14 @@ if test "$mingw32" = "yes" ; then
   mansuffix=""
   datasuffix=""
   docsuffix=""
+  binsuffix=""
+elif test "$haiku" = "yes" ; then
+  if test -z "$prefix" ; then
+      prefix="/boot/apps/QEMU"
+  fi
+  mansuffix="/share/man"
+  datasuffix="/share/qemu"
+  docsuffix="/share/doc/qemu"
   binsuffix=""
 else
   if test -z "$prefix" ; then
@@ -1323,6 +1347,11 @@ if test "$aix" = "yes" ; then
   echo "#define CONFIG_AIX 1" >> $config_h
 fi
 
+if test "$haiku" = "yes" ; then
+  echo "CONFIG_HAIKU=yes" >> $config_mak
+  echo "#define CONFIG_HAIKU 1" >> $config_h
+fi
+
 if test "$solaris" = "yes" ; then
   echo "CONFIG_SOLARIS=yes" >> $config_mak
   echo "#define HOST_SOLARIS $solarisrev" >> $config_h
@@ -1535,8 +1564,8 @@ case "$target" in
 esac
 
 if test "$target_user_only" = "no" -a "$check_gfx" = "yes" \
-        -a "$sdl" = "no" -a "$cocoa" = "no" ; then
-    echo "ERROR: QEMU requires SDL or Cocoa for graphical output"
+        -a "$sdl" = "no" -a "$cocoa" = "no" -a "$haiku" = "no" ; then
+    echo "ERROR: QEMU requires SDL, Cocoa or Haiku for graphical output"
     echo "To build QEMU without graphical output configure with --disable-gfx-check"
     echo "Note that this will disable all output from the virtual graphics card"
     echo "except through VNC or curses."

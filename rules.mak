@@ -1,3 +1,5 @@
+%.o: %.cpp
+	$(CC) -I. -c -o $@ $<
 
 %.o: %.c
 	$(call quiet-command,$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<,"  CC    $(TARGET_DIR)$@")

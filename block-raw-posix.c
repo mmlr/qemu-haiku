@@ -63,6 +63,11 @@
 #include <sys/dkio.h>
 #endif
 
+#ifdef __HAIKU__
+#include <Drivers.h>
+#include <sys/stat.h>
+#endif
+
 //#define DEBUG_FLOPPY
 
 //#define DEBUG_BLOCK
@@ -745,6 +750,10 @@ static int64_t  raw_getlength(BlockDriverState *bs)
     BDRVRawState *s = bs->opaque;
     int fd = s->fd;
     int64_t size;
+#ifdef __HAIKU__
+    struct stat st;
+    device_geometry dg;
+#endif
 #ifdef _BSD
     struct stat sb;
 #endif
@@ -780,6 +789,14 @@ static int64_t  raw_getlength(BlockDriverState *bs)
     } else /* there are reports that lseek on some devices
               fails, but irc discussion said that contingency
               on contingency was overkill */
+#endif
+#ifdef __HAIKU__
+    if (ioctl(fd, B_GET_GEOMETRY, &dg) >= 0) {
+        size = (off_t)dg.cylinder_count * (off_t)dg.sectors_per_track *
+            (off_t)dg.head_count * (off_t)dg.bytes_per_sector;
+    } else if (fstat(fd, &st) >= 0) {
+        size = st.st_size;
+    } else
 #endif
     {
         size = lseek(fd, 0, SEEK_END);

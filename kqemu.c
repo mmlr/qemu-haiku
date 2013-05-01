@@ -62,6 +62,8 @@
 
 #ifdef _WIN32
 #define KQEMU_DEVICE "\\\\.\\kqemu"
+#elif defined(__HAIKU__)
+#define KQEMU_DEVICE "/dev/misc/kqemu"
 #else
 #define KQEMU_DEVICE "/dev/kqemu"
 #endif

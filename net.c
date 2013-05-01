@@ -943,6 +943,12 @@ static int tap_open(char *ifname, int ifname_size)
     fprintf (stderr, "no tap on AIX\n");
     return -1;
 }
+#elif defined(__HAIKU__)
+static int tap_open(char *ifname, int ifname_size)
+{
+    fprintf(stderr, "no tap on Haiku\n");
+    return -1;
+}
 #else
 static int tap_open(char *ifname, int ifname_size)
 {

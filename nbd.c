@@ -341,7 +341,7 @@ int nbd_receive_negotiate(int csock, off_t *size, size_t *blocksize)
         return 0;
 }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__HAIKU__)
 int nbd_init(int fd, int csock, off_t size, size_t blocksize)
 {
 	TRACE("Setting block size to %lu", (unsigned long)blocksize);

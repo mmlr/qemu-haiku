@@ -30,6 +30,7 @@
 #include "qemu-timer.h"
 #include "audio/audio.h"
 #include <zlib.h>
+#include <pthread.h>
 
 #define VNC_REFRESH_INTERVAL (1000 / 30)
 
@@ -116,6 +117,7 @@ struct VncDisplay
 struct VncState
 {
     QEMUTimer *timer;
+    pthread_mutex_t resize_lock;
     int csock;
     DisplayState *ds;
     VncDisplay *vd;
@@ -361,7 +363,9 @@ static void vnc_dpy_resize(DisplayState *ds)
     VncDisplay *vd = ds->opaque;
     VncState *vs = vd->clients;
     while (vs != NULL) {
+        pthread_mutex_lock(&vs->resize_lock);
         vnc_resize(vs);
+        pthread_mutex_unlock(&vs->resize_lock);
         vs = vs->next;
     }
 }
@@ -672,6 +676,14 @@ static int find_dirty_height(VncState *vs, int y, int last_x, int x)
     return h;
 }
 
+static void vnc_update_client_timer(void *opaque)
+{
+    VncState *vs = opaque;
+    pthread_mutex_lock(&vs->resize_lock);
+	vnc_update_client(opaque);
+	pthread_mutex_unlock(&vs->resize_lock);
+}
+
 static void vnc_update_client(void *opaque)
 {
     VncState *vs = opaque;
@@ -877,6 +889,7 @@ static int vnc_client_io_error(VncState *vs, int ret, int last_errno)
         if (!vs->vd->clients)
             dcl->idle = 1;
 
+        pthread_mutex_destroy(&vs->resize_lock);
         qemu_free(vs->old_data);
         qemu_free(vs);
   
@@ -2265,9 +2278,11 @@ static void vnc_connect(VncDisplay *vd, int csock)
     socket_set_nonblock(vs->csock);
     qemu_set_fd_handler2(vs->csock, NULL, vnc_client_read, NULL, vs);
 
+    pthread_mutex_init(&vs->resize_lock, NULL);
+
     vs->vd = vd;
     vs->ds = vd->ds;
-    vs->timer = qemu_new_timer(rt_clock, vnc_update_client, vs);
+    vs->timer = qemu_new_timer(rt_clock, vnc_update_client_timer, vs);
     vs->last_x = -1;
     vs->last_y = -1;
 

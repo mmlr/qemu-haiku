@@ -4574,6 +4574,10 @@ static void termsig_setup(void)
 
 #endif
 
+#ifdef __HAIKU__
+#define main	qemu_main
+#endif
+
 int main(int argc, char **argv, char **envp)
 {
 #ifdef CONFIG_GDBSTUB
@@ -5646,6 +5650,9 @@ int main(int argc, char **argv, char **envp)
 #elif defined(CONFIG_COCOA)
                 if (sdl || !vnc_display)
                     cocoa_display_init(ds, full_screen);
+#elif defined(CONFIG_HAIKU)
+				if (!vnc_display)
+					haiku_display_init(ds, full_screen);
 #endif
             }
     }

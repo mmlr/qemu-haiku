@@ -117,7 +117,9 @@ CFLAGS+=$(OS_CFLAGS) $(ARCH_CFLAGS)
 LDFLAGS+=$(OS_LDFLAGS) $(ARCH_LDFLAGS)
 
 CPPFLAGS+=-D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
+ifndef CONFIG_HAIKU
 LIBS+=-lm
+endif
 ifdef CONFIG_WIN32
 LIBS+=-lwinmm -lws2_32 -liphlpapi
 endif
@@ -700,7 +702,9 @@ ifndef CONFIG_DARWIN
 ifndef CONFIG_WIN32
 ifndef CONFIG_SOLARIS
 ifndef CONFIG_AIX
+ifndef CONFIG_HAIKU
 LIBS+=-lutil
+endif
 endif
 endif
 endif
