@@ -82,6 +82,7 @@ fmod="no"
 fmod_lib=""
 fmod_inc=""
 linux="no"
+haiku="no"
 kqemu="no"
 kernel_path=""
 cocoa="no"
@@ -116,6 +117,13 @@ oss="yes"
 Darwin)
 bsd="yes"
 darwin="yes"
+;;
+Haiku)
+haiku="yes"
+CFLAGS="-O2 -fno-pic -fomit-frame-pointer"
+if [ "$cpu" = "i386" -o "$cpu" = "x86_64" ] ; then
+    kqemu="yes"
+fi
 ;;
 *)
 oss="yes"
@@ -348,6 +356,10 @@ if test $linux = "yes" ; then
   if test $kbuild26 = "yes" ; then
     echo "CONFIG_KBUILD26=yes" >> $config_mak
   fi
+fi
+if test $haiku = "yes" ; then
+  echo "CONFIG_HAIKU=yes" >> $config_mak
+  echo "#define CONFIG_HAIKU 1" >> config_h
 fi
 echo "SRC_PATH=$source_path" >> $config_mak
 

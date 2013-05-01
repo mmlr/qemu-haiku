@@ -4593,6 +4593,8 @@ QO(                 case OT_LONG | 8:\
                     val = s->cpu_state.dr2;
                     break;
                 case 3:
+                    raise_exception(s, KQEMU_RET_SOFTMMU);
+                    goto insn_next;
                     val = s->cpu_state.dr3;
                     break;
                 case 6:

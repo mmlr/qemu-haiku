@@ -42,11 +42,16 @@ endif
 
 DEFINES=-D__KERNEL__
 INCLUDES=-nostdinc -iwithprefix include -I. -I..
-TOOLS_CFLAGS=-Wall -O2 -Werror -g
-COMMON_CFLAGS=-Wall -O2 -fomit-frame-pointer -fno-strict-aliasing -Werror 
+TOOLS_CFLAGS=-Wall -O2 $(WERROR) -g
+COMMON_CFLAGS=-Wall -O2 -fomit-frame-pointer -fno-strict-aliasing $(WERROR)
 ifeq ($(ARCH), x86_64)
 COMMON_CFLAGS+=-mno-red-zone
 endif
+
+ifdef CONFIG_HAIKU
+COMMON_CFLAGS+=-fno-pic
+endif
+
 CFLAGS=$(COMMON_CFLAGS)
 MON_CFLAGS=$(COMMON_CFLAGS)
 KERNEL_CFLAGS=$(COMMON_CFLAGS)
