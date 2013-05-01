@@ -41,6 +41,7 @@ static QEMUApplication *sApplication = NULL;
 static QEMUWindow *sWindow = NULL;
 static QEMUView *sView = NULL;
 static bool sFullScreen = false;
+static bool sGraphicConsole = false;
 static int sWidth = 100;
 static int sHeight = 100;
 static BPoint sCenter;
@@ -48,6 +49,13 @@ static BPoint sPreviousLocation;
 static thread_id sMainThread = -1;
 
 static const uint32 kMessageBlockSignals = 'bksg';
+
+static const uint32 kKeycodeEvent = 'keyc';
+static const uint32 kKeysymEvent = 'keys';
+static const uint32 kMouseEvent = 'mous';
+static const uint32 kConsoleSelectEvent = 'cons';
+static const uint32 kShutdownRequest = 'shut';
+static const uint32 kInvalidationRequest = 'ival';
 
 
 // Required functions into QEMU
@@ -199,7 +207,7 @@ QEMUApplication::QEMUApplication(int argc, char **argv)
 bool
 QEMUApplication::QuitRequested()
 {
-	qemu_system_shutdown_request();
+	sView->QueueShutdownRequest();
 	return true;
 }
 
@@ -340,32 +348,172 @@ QEMUView::EndGrab(bool &grab, int32 modifiers)
 
 	// reset any set modifiers
 	if (modifiers & B_LEFT_SHIFT_KEY)
-		kbd_put_keycode(0xaa);
+		QueueKeycode(0xaa);
 	if (modifiers & B_RIGHT_SHIFT_KEY)
-		kbd_put_keycode(0xb6);
+		QueueKeycode(0xb6);
 
 	if (modifiers & B_LEFT_COMMAND_KEY)
-		kbd_put_keycode(0xb8);
+		QueueKeycode(0xb8);
 	if (modifiers & B_RIGHT_COMMAND_KEY) {
-		kbd_put_keycode(0xe0);
-		kbd_put_keycode(0xb8);
+		QueueKeycode(0xe0);
+		QueueKeycode(0xb8);
 	}
 
 	if (modifiers & B_LEFT_CONTROL_KEY)
-		kbd_put_keycode(0x9d);
+		QueueKeycode(0x9d);
 	if (modifiers & B_RIGHT_CONTROL_KEY) {
-		kbd_put_keycode(0xe0);
-		kbd_put_keycode(0x9d);
+		QueueKeycode(0xe0);
+		QueueKeycode(0x9d);
 	}
 
 	if (modifiers & B_LEFT_OPTION_KEY) {
-		kbd_put_keycode(0xe0);
-		kbd_put_keycode(0xdb);
+		QueueKeycode(0xe0);
+		QueueKeycode(0xdb);
 	}
 	if (modifiers & B_RIGHT_OPTION_KEY) {
-		kbd_put_keycode(0xe0);
-		kbd_put_keycode(0xdc);
+		QueueKeycode(0xe0);
+		QueueKeycode(0xdc);
 	}
+}
+
+
+void
+QEMUView::QueueEvent(BMessage *event)
+{
+	if (!fEventQueue.Lock())
+		return;
+
+	fEventQueue.AddMessage(event);
+	fEventQueue.Unlock();
+}
+
+
+void
+QEMUView::QueueKeycode(uint8 keycode)
+{
+	BMessage *event = new BMessage(kKeycodeEvent);
+	event->AddUInt8("keycode", keycode);
+	sView->QueueEvent(event);
+}
+
+
+void
+QEMUView::QueueKeysym(int32 keysym)
+{
+	BMessage *event = new BMessage(kKeysymEvent);
+	event->AddInt32("keysym", keysym);
+	sView->QueueEvent(event);
+}
+
+
+void
+QEMUView::QueueMouseEvent(int32 deltaX, int32 deltaY, int32 deltaZ,
+	int32 buttonState)
+{
+	BMessage *event = new BMessage(kMouseEvent);
+	event->AddInt32("deltaX", deltaX);
+	event->AddInt32("deltaY", deltaY);
+	event->AddInt32("deltaZ", deltaZ);
+	event->AddInt32("buttonState", buttonState);
+	sView->QueueEvent(event);
+}
+
+
+void
+QEMUView::QueueShutdownRequest()
+{
+	sView->QueueEvent(new BMessage(kShutdownRequest));
+}
+
+
+void
+QEMUView::QueueConsoleSelect(uint8 console)
+{
+	BMessage *event = new BMessage(kConsoleSelectEvent);
+	event->AddUInt8("console", console);
+	sView->QueueEvent(event);
+}
+
+
+void
+QEMUView::QueueInvalidation()
+{
+	sView->QueueEvent(new BMessage(kInvalidationRequest));
+}
+
+
+void
+QEMUView::ProcessEvents()
+{
+	if (!fEventQueue.Lock())
+		return;
+
+	while (!fEventQueue.IsEmpty()) {
+		BMessage *event = fEventQueue.NextMessage();
+
+		switch (event->what) {
+			case kKeycodeEvent:
+			{
+				uint8 keycode = 0;
+				if (event->FindUInt8("keycode", &keycode) != B_OK)
+					break;
+
+				kbd_put_keycode(keycode);
+				break;
+			}
+
+			case kKeysymEvent:
+			{
+				int32 keysym = 0;
+				if (event->FindInt32("keysym", &keysym) != B_OK)
+					break;
+
+				kbd_put_keysym(keysym);
+				break;
+			}
+
+			case kMouseEvent:
+			{
+				int32 deltaX = 0;
+				int32 deltaY = 0;
+				int32 deltaZ = 0;
+				int32 buttonState = 0;
+				if (event->FindInt32("deltaX", &deltaX) != B_OK
+					|| event->FindInt32("deltaY", &deltaY) != B_OK
+					|| event->FindInt32("deltaZ", &deltaZ) != B_OK
+					|| event->FindInt32("buttonState", &buttonState) != B_OK) {
+					break;
+				}
+
+				kbd_mouse_event(deltaX, deltaY, deltaZ, buttonState);
+				break;
+			}
+
+			case kShutdownRequest:
+				qemu_system_shutdown_request();
+				break;
+
+			case kConsoleSelectEvent:
+			{
+				uint8 console = 0;
+				if (event->FindUInt8("console", &console) != B_OK)
+					break;
+
+				console_select(console);
+				sGraphicConsole = is_graphic_console();
+				break;
+			}
+
+			case kInvalidationRequest:
+				vga_hw_invalidate();
+				vga_hw_update();
+				break;
+		}
+
+		delete event;
+	}
+
+	fEventQueue.Unlock();
 }
 
 
@@ -415,11 +563,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 						}
 
 						UpdateFullScreen();
-						if (is_graphic_console()) {
-							vga_hw_invalidate();
-							vga_hw_update();
-						}
-
+						QueueInvalidation();
 						return B_SKIP_MESSAGE;
 					} break;
 
@@ -432,25 +576,17 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 							sWindow->MoveTo(0, 0);
 						}
 
-						if (is_graphic_console()) {
-							vga_hw_invalidate();
-							vga_hw_update();
-						}
-
+						QueueInvalidation();
 						return B_SKIP_MESSAGE;
 					} break;
 
 					case 0x12 ... 0x1a: { /* 1 to 9 - switch console */
-						console_select(key - 0x12);
-						if (is_graphic_console()) {
-							vga_hw_invalidate();
-							vga_hw_update();
-						}
-
+						QueueConsoleSelect(key - 0x12);
+						QueueInvalidation();
 						return B_SKIP_MESSAGE;
 					} break;
 				}
-			} else if (!is_graphic_console()) {
+			} else if (!sGraphicConsole) {
 				if (!keyDown)
 					return B_SKIP_MESSAGE;
 
@@ -485,22 +621,22 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 				}
 
 				if (keysym)
-					kbd_put_keysym(keysym);
+					QueueKeysym(keysym);
 				else {
 					const char *bytes;
 					if (message->FindString("bytes", &bytes) == B_OK && bytes[0] != 0)
-						kbd_put_keysym(bytes[0]);
+						QueueKeysym(bytes[0]);
 				}
 				return B_SKIP_MESSAGE;
 			}
 
 			if (keycode & 0x80)
-				kbd_put_keycode(0xe0);
+				QueueKeycode(0xe0);
 
 			if (keyDown)
-				kbd_put_keycode(keycode & 0x7f);
+				QueueKeycode(keycode & 0x7f);
 			else
-				kbd_put_keycode(keycode | 0x80);
+				QueueKeycode(keycode | 0x80);
 
 			return B_SKIP_MESSAGE;
 		} break;
@@ -519,7 +655,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 			BPoint delta = where - sCenter;
 
 			// Haiku buttons are the same as QEMU
-			kbd_mouse_event((int)delta.x, (int)delta.y, 0, sMouseButtons);
+			QueueMouseEvent((int32)delta.x, (int32)delta.y, 0, sMouseButtons);
 
 			CenterMouse(sMouseWarp);
 			return B_SKIP_MESSAGE;
@@ -541,7 +677,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 
 			sMouseButtons = buttons;
 			// Haiku buttons are the same as QEMU
-			kbd_mouse_event(0, 0, 0, sMouseButtons);
+			QueueMouseEvent(0, 0, 0, sMouseButtons);
 			return B_SKIP_MESSAGE;
 		} break;
 
@@ -551,7 +687,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 
 			float delta;
 			message->FindFloat("be:wheel_delta_y", &delta);
-			kbd_mouse_event(0, 0, (int)delta, sMouseButtons);
+			QueueMouseEvent(0, 0, (int32)delta, sMouseButtons);
 			return B_SKIP_MESSAGE;
 		} break;
 	}
@@ -653,14 +789,15 @@ haiku_resize(DisplayState *ds)
 	sView->UpdateFrameBuffer(ds_get_width(ds), ds_get_height(ds),
 		ds_get_data(ds), ds_get_linesize(ds), ds_get_bits_per_pixel(ds));
 	sView->UpdateFullScreen();
+	sGraphicConsole = is_graphic_console();
 }
 
 
 static void
 haiku_refresh(DisplayState *ds)
 {
-	//printf("refreshing\n");
-	if (is_graphic_console())
+	sView->ProcessEvents();
+	if (sGraphicConsole)
 		vga_hw_update();
 }
 

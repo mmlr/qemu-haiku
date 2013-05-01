@@ -24,10 +24,12 @@
 
 #ifndef _HAIKU_H_
 #define _HAIKU_H_
+
 #include <Accelerant.h>
 #include <Application.h>
 #include <Bitmap.h>
 #include <MessageFilter.h>
+#include <MessageQueue.h>
 #include <View.h>
 #include <Window.h>
 
@@ -83,7 +85,19 @@ static	void				CenterMouse(bool &warp);
 static	void				StartGrab(bool &grab);
 static	void				EndGrab(bool &grab, int32 modifiers);
 
+static	void				QueueKeycode(uint8 keycode);
+static	void				QueueKeysym(int32 keysym);
+static	void				QueueMouseEvent(int32 deltaX, int32 deltaY,
+								int32 deltaZ, int32 buttonState);
+static	void				QueueShutdownRequest();
+static	void				QueueConsoleSelect(uint8 console);
+static	void				QueueInvalidation();
+
+		void				ProcessEvents();
+
 private:
+		void				QueueEvent(BMessage *event);
+
 static	filter_result		MessageFilter(BMessage *message, BHandler **target,
 								BMessageFilter *filter);
 
@@ -95,6 +109,8 @@ static	filter_result		MessageFilter(BMessage *message, BHandler **target,
 		uint32				fFrameBufferSize;
 		uint32				fBytesPerRow;
 		color_space			fColorSpace;
+
+		BMessageQueue		fEventQueue;
 };
 
 #endif
