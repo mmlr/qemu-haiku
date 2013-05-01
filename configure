@@ -309,7 +309,7 @@ bluez="no"
 audio_drv_list="haiku"
 audio_possible_drivers="haiku"
 OS_CFLAGS="-fno-pic"
-OS_LDFLAGS="-lnetwork -lbe -lgame -lmedia"
+OS_LDFLAGS="-lnetwork -lbe -lgame -lmedia -lstdc++"
 if [ "$cpu" = "i386" -o "$cpu" = "x86_64" ] ; then
     kqemu="yes"
 fi
