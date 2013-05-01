@@ -34,6 +34,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <signal.h>
+
 
 static QEMUApplication *sApplication = NULL;
 static QEMUWindow *sWindow = NULL;
@@ -44,6 +46,8 @@ static int sHeight = 100;
 static BPoint sCenter;
 static BPoint sPreviousLocation;
 static thread_id sMainThread = -1;
+
+static const uint32 kMessageBlockSignals = 'bksg';
 
 
 // Required functions into QEMU
@@ -153,9 +157,24 @@ haiku_to_pc_key[] = {
 #define QEMU_KEY_CTRL_PAGEDOWN   0xe407
 
 
+static void
+block_signals(bool block)
+{
+	printf("%sblocking signals from thread %d\n", block ? "" : "un", find_thread(NULL));
+
+	sigset_t set;
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	sigaddset(&set, SIGUSR2);
+	sigaddset(&set, SIGALRM);
+	pthread_sigmask(block ? SIG_BLOCK : SIG_UNBLOCK, &set, NULL);
+}
+
+
 int
 main(int argc, char **argv)
 {
+	block_signals(true);
 	sMainThread = find_thread(NULL);
 	QEMUApplication *app = new QEMUApplication(argc, argv);
 	app->Run();
@@ -192,6 +211,9 @@ QEMUApplication::InitDisplay()
 {
 	fWindow = new QEMUWindow();
 	fWindow->Show();
+
+	BMessage reply;
+	BMessenger(fWindow->Looper()).SendMessage(kMessageBlockSignals	, &reply);
 }
 
 
@@ -209,6 +231,8 @@ QEMUApplication::RunQEMUMain(void *arg)
 {
 	QEMUApplication *app = (QEMUApplication *)arg;
 	atexit(QEMUApplication::AtExit);
+
+	block_signals(false);
 	qemu_main(app->fArgC, app->fArgV);
 	app->PostMessage(B_QUIT_REQUESTED);
 	return B_OK;
@@ -223,6 +247,18 @@ QEMUWindow::QEMUWindow()
 	fView = new QEMUView(Bounds());
 	AddChild(fView);
 	fView->MakeFocus();
+}
+
+
+void
+QEMUWindow::MessageReceived(BMessage *message)
+{
+	if (message->what == kMessageBlockSignals) {
+		block_signals(true);
+		return;
+	}
+
+	BWindow::MessageReceived(message);
 }
 
 

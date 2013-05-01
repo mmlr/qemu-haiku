@@ -83,9 +83,9 @@ void cpu_resume_from_signal(CPUState *env1, void *puc)
     if (puc) {
         /* XXX: use siglongjmp ? */
 #ifdef __linux__
-        sigprocmask(SIG_SETMASK, &uc->uc_sigmask, NULL);
+        pthread_sigmask(SIG_SETMASK, &uc->uc_sigmask, NULL);
 #elif defined(__OpenBSD__)
-        sigprocmask(SIG_SETMASK, &uc->sc_mask, NULL);
+        pthread_sigmask(SIG_SETMASK, &uc->sc_mask, NULL);
 #endif
     }
 #endif
@@ -828,7 +828,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
 #endif
         /* we restore the process signal mask as the sigreturn should
            do it (XXX: use sigsetjmp) */
-        sigprocmask(SIG_SETMASK, old_set, NULL);
+        pthread_sigmask(SIG_SETMASK, old_set, NULL);
         raise_exception_err(env->exception_index, env->error_code);
     } else {
         /* activate soft MMU for this block */
@@ -872,7 +872,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
     }
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-    sigprocmask(SIG_SETMASK, old_set, NULL);
+    pthread_sigmask(SIG_SETMASK, old_set, NULL);
     cpu_loop_exit();
     /* never comes here */
     return 1;
@@ -910,7 +910,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
     }
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-    sigprocmask(SIG_SETMASK, old_set, NULL);
+    pthread_sigmask(SIG_SETMASK, old_set, NULL);
     cpu_loop_exit();
     /* never comes here */
     return 1;
@@ -955,7 +955,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
 #endif
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-        sigprocmask(SIG_SETMASK, old_set, NULL);
+        pthread_sigmask(SIG_SETMASK, old_set, NULL);
         cpu_loop_exit();
     } else {
         /* activate soft MMU for this block */
@@ -998,7 +998,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
     }
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-    sigprocmask(SIG_SETMASK, old_set, NULL);
+    pthread_sigmask(SIG_SETMASK, old_set, NULL);
     cpu_loop_exit();
     /* never comes here */
     return 1;
@@ -1044,7 +1044,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
 #endif
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-        sigprocmask(SIG_SETMASK, old_set, NULL);
+        pthread_sigmask(SIG_SETMASK, old_set, NULL);
         cpu_loop_exit();
     } else {
         /* activate soft MMU for this block */
@@ -1094,7 +1094,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
 #endif
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-        sigprocmask(SIG_SETMASK, old_set, NULL);
+        pthread_sigmask(SIG_SETMASK, old_set, NULL);
         cpu_loop_exit();
     } else {
         /* activate soft MMU for this block */
@@ -1143,7 +1143,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
 #endif
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-    sigprocmask(SIG_SETMASK, old_set, NULL);
+    pthread_sigmask(SIG_SETMASK, old_set, NULL);
     cpu_loop_exit();
     /* never comes here */
     return 1;
@@ -1188,7 +1188,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
 #endif
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-    sigprocmask(SIG_SETMASK, old_set, NULL);
+    pthread_sigmask(SIG_SETMASK, old_set, NULL);
     cpu_loop_exit();
     /* never comes here */
     return 1;
@@ -1228,7 +1228,7 @@ static inline int handle_cpu_signal(unsigned long pc, unsigned long address,
     }
     /* we restore the process signal mask as the sigreturn should
        do it (XXX: use sigsetjmp) */
-    sigprocmask(SIG_SETMASK, old_set, NULL);
+    pthread_sigmask(SIG_SETMASK, old_set, NULL);
     cpu_loop_exit();
     /* never comes here */
     return 1;

@@ -57,6 +57,8 @@ class QEMUWindow : public BWindow {
 public:
 							QEMUWindow();
 
+virtual	void				MessageReceived(BMessage *message);
+
 private:
 		QEMUView *			fView;
 };
