@@ -69,6 +69,8 @@ public:
 							QEMUView(BRect frame);
 virtual						~QEMUView();
 
+virtual	void				AttachedToWindow();
+
 		void				Update(BPoint point, int width, int height);
 virtual	void				Draw(BRect updateRect);
 

@@ -246,7 +246,6 @@ QEMUWindow::QEMUWindow()
 	sWindow = this;
 	fView = new QEMUView(Bounds());
 	AddChild(fView);
-	fView->MakeFocus();
 }
 
 
@@ -276,6 +275,13 @@ QEMUView::~QEMUView()
 {
 	if (sFullScreen)
 		BScreen().SetMode(&fDisplayMode);
+}
+
+
+void
+QEMUView::AttachedToWindow()
+{
+	MakeFocus();
 }
 
 
