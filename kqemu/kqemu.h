@@ -143,6 +143,12 @@ struct kqemu_phys_mem {
 #define KQEMU_GET_VERSION      CTL_CODE(FILE_DEVICE_UNKNOWN, 3, METHOD_BUFFERED, FILE_READ_ACCESS)
 #define KQEMU_MODIFY_RAM_PAGES CTL_CODE(FILE_DEVICE_UNKNOWN, 4, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 #define KQEMU_SET_PHYS_MEM     CTL_CODE(FILE_DEVICE_UNKNOWN, 5, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#elif defined(__HAIKU__)
+#define KQEMU_EXEC             'kqex'
+#define KQEMU_INIT             'kqin'
+#define KQEMU_GET_VERSION      'kqgv'
+#define KQEMU_MODIFY_RAM_PAGES 'kqmr'
+#define KQEMU_SET_PHYS_MEM     'kqsp'
 #else
 #define KQEMU_EXEC             _IOWR('q', 1, struct kqemu_cpu_state)
 #define KQEMU_INIT             _IOW('q', 2, struct kqemu_init)

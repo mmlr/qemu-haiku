@@ -44,6 +44,7 @@ FILES=configure Makefile README Changelog LICENSE COPYING \
       install.sh kqemu-linux.c kqemu.h \
       kqemu-kernel.h \
       kqemu-freebsd.c Makefile.freebsd \
+      kqemu-haiku.c Makefile.haiku \
       kqemu-win32.c kqemu.sys kqemu.inf Makefile.winnt \
       kqemu-doc.texi kqemu-doc.html kqemu-tech.texi kqemu-tech.html
 FILES+=common/Makefile common/insn_table.h  common/kqemu_int.h \
