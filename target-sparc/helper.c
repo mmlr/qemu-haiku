@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdarg.h>
 #include <stdlib.h>
@@ -23,7 +22,6 @@
 #include <string.h>
 #include <inttypes.h>
 #include <signal.h>
-#include <assert.h>
 
 #include "cpu.h"
 #include "exec-all.h"
@@ -370,42 +368,79 @@ void dump_mmu(CPUState *env)
 #endif /* DEBUG_MMU */
 
 #else /* !TARGET_SPARC64 */
+
+// 41 bit physical address space
+static inline target_phys_addr_t ultrasparc_truncate_physical(uint64_t x)
+{
+    return x & 0x1ffffffffffULL;
+}
+
 /*
  * UltraSparc IIi I/DMMUs
  */
+
+static inline int compare_masked(uint64_t x, uint64_t y, uint64_t mask)
+{
+    return (x & mask) == (y & mask);
+}
+
+// Returns true if TTE tag is valid and matches virtual address value in context
+// requires virtual address mask value calculated from TTE entry size
+static inline int ultrasparc_tag_match(uint64_t tlb_tag, uint64_t tlb_tte,
+                                       uint64_t address, uint64_t context,
+                                       target_phys_addr_t *physical)
+{
+    uint64_t mask;
+
+    switch ((tlb_tte >> 61) & 3) {
+    default:
+    case 0x0: // 8k
+        mask = 0xffffffffffffe000ULL;
+        break;
+    case 0x1: // 64k
+        mask = 0xffffffffffff0000ULL;
+        break;
+    case 0x2: // 512k
+        mask = 0xfffffffffff80000ULL;
+        break;
+    case 0x3: // 4M
+        mask = 0xffffffffffc00000ULL;
+        break;
+    }
+
+    // valid, context match, virtual address match?
+    if ((tlb_tte & 0x8000000000000000ULL) &&
+            compare_masked(context, tlb_tag, 0x1fff) &&
+            compare_masked(address, tlb_tag, mask))
+    {
+        // decode physical address
+        *physical = ((tlb_tte & mask) | (address & ~mask)) & 0x1ffffffe000ULL;
+        return 1;
+    }
+
+    return 0;
+}
+
 static int get_physical_address_data(CPUState *env,
                                      target_phys_addr_t *physical, int *prot,
                                      target_ulong address, int rw, int is_user)
 {
-    target_ulong mask;
     unsigned int i;
+    uint64_t context;
 
     if ((env->lsu & DMMU_E) == 0) { /* DMMU disabled */
-        *physical = address;
+        *physical = ultrasparc_truncate_physical(address);
         *prot = PAGE_READ | PAGE_WRITE;
         return 0;
     }
 
+    context = env->dmmuregs[1] & 0x1fff;
+
     for (i = 0; i < 64; i++) {
-        switch ((env->dtlb_tte[i] >> 61) & 3) {
-        default:
-        case 0x0: // 8k
-            mask = 0xffffffffffffe000ULL;
-            break;
-        case 0x1: // 64k
-            mask = 0xffffffffffff0000ULL;
-            break;
-        case 0x2: // 512k
-            mask = 0xfffffffffff80000ULL;
-            break;
-        case 0x3: // 4M
-            mask = 0xffffffffffc00000ULL;
-            break;
-        }
         // ctx match, vaddr match, valid?
-        if (env->dmmuregs[1] == (env->dtlb_tag[i] & 0x1fff) &&
-            (address & mask) == (env->dtlb_tag[i] & ~0x1fffULL) &&
-            (env->dtlb_tte[i] & 0x8000000000000000ULL)) {
+        if (ultrasparc_tag_match(env->dtlb_tag[i], env->dtlb_tte[i],
+                                 address, context, physical)
+        ) {
             // access ok?
             if (((env->dtlb_tte[i] & 0x4) && is_user) ||
                 (!(env->dtlb_tte[i] & 0x2) && (rw == 1))) {
@@ -420,8 +455,6 @@ static int get_physical_address_data(CPUState *env,
 #endif
                 return 1;
             }
-            *physical = (env->dtlb_tte[i] & mask & 0x1fffffff000ULL) +
-                (address & ~mask & 0x1fffffff000ULL);
             *prot = PAGE_READ;
             if (env->dtlb_tte[i] & 0x2)
                 *prot |= PAGE_WRITE;
@@ -431,7 +464,7 @@ static int get_physical_address_data(CPUState *env,
 #ifdef DEBUG_MMU
     printf("DMISS at 0x%" PRIx64 "\n", address);
 #endif
-    env->dmmuregs[6] = (address & ~0x1fffULL) | (env->dmmuregs[1] & 0x1fff);
+    env->dmmuregs[6] = (address & ~0x1fffULL) | context;
     env->exception_index = TT_DMISS;
     return 1;
 }
@@ -440,35 +473,23 @@ static int get_physical_address_code(CPUState *env,
                                      target_phys_addr_t *physical, int *prot,
                                      target_ulong address, int is_user)
 {
-    target_ulong mask;
     unsigned int i;
+    uint64_t context;
 
-    if ((env->lsu & IMMU_E) == 0) { /* IMMU disabled */
-        *physical = address;
+    if ((env->lsu & IMMU_E) == 0 || (env->pstate & PS_RED) != 0) {
+        /* IMMU disabled */
+        *physical = ultrasparc_truncate_physical(address);
         *prot = PAGE_EXEC;
         return 0;
     }
 
+    context = env->dmmuregs[1] & 0x1fff;
+
     for (i = 0; i < 64; i++) {
-        switch ((env->itlb_tte[i] >> 61) & 3) {
-        default:
-        case 0x0: // 8k
-            mask = 0xffffffffffffe000ULL;
-            break;
-        case 0x1: // 64k
-            mask = 0xffffffffffff0000ULL;
-            break;
-        case 0x2: // 512k
-            mask = 0xfffffffffff80000ULL;
-            break;
-        case 0x3: // 4M
-            mask = 0xffffffffffc00000ULL;
-                break;
-        }
         // ctx match, vaddr match, valid?
-        if (env->dmmuregs[1] == (env->itlb_tag[i] & 0x1fff) &&
-            (address & mask) == (env->itlb_tag[i] & ~0x1fffULL) &&
-            (env->itlb_tte[i] & 0x8000000000000000ULL)) {
+        if (ultrasparc_tag_match(env->itlb_tag[i], env->itlb_tte[i],
+                                 address, context, physical)
+        ) {
             // access ok?
             if ((env->itlb_tte[i] & 0x4) && is_user) {
                 if (env->immuregs[3]) /* Fault status register */
@@ -481,8 +502,6 @@ static int get_physical_address_code(CPUState *env,
 #endif
                 return 1;
             }
-            *physical = (env->itlb_tte[i] & mask & 0x1fffffff000ULL) +
-                (address & ~mask & 0x1fffffff000ULL);
             *prot = PAGE_EXEC;
             return 0;
         }
@@ -490,7 +509,8 @@ static int get_physical_address_code(CPUState *env,
 #ifdef DEBUG_MMU
     printf("TMISS at 0x%" PRIx64 "\n", address);
 #endif
-    env->immuregs[6] = (address & ~0x1fffULL) | (env->dmmuregs[1] & 0x1fff);
+    /* Context is stored in DMMU (dmmuregs[1]) also for IMMU */
+    env->immuregs[6] = (address & ~0x1fffULL) | context;
     env->exception_index = TT_TMISS;
     return 1;
 }
@@ -563,15 +583,15 @@ void dump_mmu(CPUState *env)
                 break;
             }
             if ((env->dtlb_tte[i] & 0x8000000000000000ULL) != 0) {
-                printf("VA: " TARGET_FMT_lx ", PA: " TARGET_FMT_lx
+                printf("VA: %" PRIx64 ", PA: %" PRIx64
                        ", %s, %s, %s, %s, ctx %" PRId64 "\n",
-                       env->dtlb_tag[i] & ~0x1fffULL,
-                       env->dtlb_tte[i] & 0x1ffffffe000ULL,
+                       env->dtlb_tag[i] & (uint64_t)~0x1fffULL,
+                       env->dtlb_tte[i] & (uint64_t)0x1ffffffe000ULL,
                        mask,
                        env->dtlb_tte[i] & 0x4? "priv": "user",
                        env->dtlb_tte[i] & 0x2? "RW": "RO",
                        env->dtlb_tte[i] & 0x40? "locked": "unlocked",
-                       env->dtlb_tag[i] & 0x1fffULL);
+                       env->dtlb_tag[i] & (uint64_t)0x1fffULL);
             }
         }
     }
@@ -596,14 +616,14 @@ void dump_mmu(CPUState *env)
                 break;
             }
             if ((env->itlb_tte[i] & 0x8000000000000000ULL) != 0) {
-                printf("VA: " TARGET_FMT_lx ", PA: " TARGET_FMT_lx
+                printf("VA: %" PRIx64 ", PA: %" PRIx64
                        ", %s, %s, %s, ctx %" PRId64 "\n",
-                       env->itlb_tag[i] & ~0x1fffULL,
-                       env->itlb_tte[i] & 0x1ffffffe000ULL,
+                       env->itlb_tag[i] & (uint64_t)~0x1fffULL,
+                       env->itlb_tte[i] & (uint64_t)0x1ffffffe000ULL,
                        mask,
                        env->itlb_tte[i] & 0x4? "priv": "user",
                        env->itlb_tte[i] & 0x40? "locked": "unlocked",
-                       env->itlb_tag[i] & 0x1fffULL);
+                       env->itlb_tag[i] & (uint64_t)0x1fffULL);
             }
         }
     }
@@ -646,7 +666,9 @@ void cpu_reset(CPUSPARCState *env)
 
     tlb_flush(env, 1);
     env->cwp = 0;
+#ifndef TARGET_SPARC64
     env->wim = 1;
+#endif
     env->regwptr = env->regbase + (env->cwp * 16);
 #if defined(CONFIG_USER_ONLY)
 #ifdef TARGET_SPARC64
@@ -656,9 +678,12 @@ void cpu_reset(CPUSPARCState *env)
     env->asi = 0x82; // Primary no-fault
 #endif
 #else
+#if !defined(TARGET_SPARC64)
     env->psret = 0;
+#endif
     env->psrs = 1;
     env->psrps = 1;
+    CC_OP = CC_OP_FLAGS;
 #ifdef TARGET_SPARC64
     env->pstate = PS_PRIV;
     env->hpstate = HS_PRIV;
@@ -723,6 +748,7 @@ CPUSPARCState *cpu_sparc_init(const char *cpu_model)
         return NULL;
     }
     cpu_reset(env);
+    qemu_init_vcpu(env);
 
     return env;
 }
@@ -1288,7 +1314,7 @@ static int cpu_sparc_find_by_name(sparc_def_t *cpu_def, const char *cpu_model)
                 }
                 cpu_def->fpu_version = fpu_version;
 #ifdef DEBUG_FEATURES
-                fprintf(stderr, "fpu_version %llx\n", fpu_version);
+                fprintf(stderr, "fpu_version %x\n", fpu_version);
 #endif
             } else if (!strcmp(featurestr, "mmu_version")) {
                 char *err;
@@ -1300,7 +1326,7 @@ static int cpu_sparc_find_by_name(sparc_def_t *cpu_def, const char *cpu_model)
                 }
                 cpu_def->mmu_version = mmu_version;
 #ifdef DEBUG_FEATURES
-                fprintf(stderr, "mmu_version %llx\n", mmu_version);
+                fprintf(stderr, "mmu_version %x\n", mmu_version);
 #endif
             } else if (!strcmp(featurestr, "nwindows")) {
                 char *err;
@@ -1366,8 +1392,6 @@ void sparc_cpu_list(FILE *f, int (*cpu_fprintf)(FILE *f, const char *fmt, ...))
                    "fpu_version mmu_version nwindows\n");
 }
 
-#define GET_FLAG(a,b) ((env->psr & a)?b:'-')
-
 void cpu_dump_state(CPUState *env, FILE *f,
                     int (*cpu_fprintf)(FILE *f, const char *fmt, ...),
                     int flags)
@@ -1411,6 +1435,9 @@ void cpu_dump_state(CPUState *env, FILE *f,
                 env->cansave, env->canrestore, env->otherwin, env->wstate,
                 env->cleanwin, env->nwindows - 1 - env->cwp);
 #else
+
+#define GET_FLAG(a,b) ((env->psr & a)?b:'-')
+
     cpu_fprintf(f, "psr: 0x%08x -> %c%c%c%c %c%c%c wim: 0x%08x\n",
                 GET_PSR(env), GET_FLAG(PSR_ZERO, 'Z'), GET_FLAG(PSR_OVF, 'V'),
                 GET_FLAG(PSR_NEG, 'N'), GET_FLAG(PSR_CARRY, 'C'),

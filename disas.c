@@ -33,10 +33,7 @@ target_read_memory (bfd_vma memaddr,
                     int length,
                     struct disassemble_info *info)
 {
-    int i;
-    for(i = 0; i < length; i++) {
-        myaddr[i] = ldub_code(memaddr + i);
-    }
+    cpu_memory_rw_debug(cpu_single_env, memaddr, myaddr, length, 0);
     return 0;
 }
 
@@ -198,6 +195,9 @@ void target_disas(FILE *out, target_ulong code, target_ulong size, int flags)
 #elif defined(TARGET_CRIS)
     disasm_info.mach = bfd_mach_cris_v32;
     print_insn = print_insn_crisv32;
+#elif defined(TARGET_MICROBLAZE)
+    disasm_info.mach = bfd_arch_microblaze;
+    print_insn = print_insn_microblaze;
 #else
     fprintf(out, "0x" TARGET_FMT_lx
 	    ": Asm output not supported on this arch\n", code);
@@ -222,6 +222,13 @@ void target_disas(FILE *out, target_ulong code, target_ulong size, int flags)
 	fprintf(out, "\n");
 	if (count < 0)
 	    break;
+        if (size < count) {
+            fprintf(out,
+                    "Disassembler disagrees with translator over instruction "
+                    "decoding\n"
+                    "Please report this to qemu-devel@nongnu.org\n");
+            break;
+        }
     }
 }
 
@@ -308,8 +315,7 @@ const char *lookup_symbol(target_ulong orig_addr)
 
 #if !defined(CONFIG_USER_ONLY)
 
-void term_vprintf(const char *fmt, va_list ap);
-void term_printf(const char *fmt, ...);
+#include "monitor.h"
 
 static int monitor_disas_is_physical;
 static CPUState *monitor_disas_env;
@@ -330,19 +336,19 @@ static int monitor_fprintf(FILE *stream, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    term_vprintf(fmt, ap);
+    monitor_vprintf((Monitor *)stream, fmt, ap);
     va_end(ap);
     return 0;
 }
 
-void monitor_disas(CPUState *env,
+void monitor_disas(Monitor *mon, CPUState *env,
                    target_ulong pc, int nb_insn, int is_physical, int flags)
 {
     int count, i;
     struct disassemble_info disasm_info;
     int (*print_insn)(bfd_vma pc, disassemble_info *info);
 
-    INIT_DISASSEMBLE_INFO(disasm_info, NULL, monitor_fprintf);
+    INIT_DISASSEMBLE_INFO(disasm_info, (FILE *)mon, monitor_fprintf);
 
     monitor_disas_env = env;
     monitor_disas_is_physical = is_physical;
@@ -388,15 +394,15 @@ void monitor_disas(CPUState *env,
     print_insn = print_insn_little_mips;
 #endif
 #else
-    term_printf("0x" TARGET_FMT_lx
-		": Asm output not supported on this arch\n", pc);
+    monitor_printf(mon, "0x" TARGET_FMT_lx
+                   ": Asm output not supported on this arch\n", pc);
     return;
 #endif
 
     for(i = 0; i < nb_insn; i++) {
-	term_printf("0x" TARGET_FMT_lx ":  ", pc);
+	monitor_printf(mon, "0x" TARGET_FMT_lx ":  ", pc);
 	count = print_insn(pc, &disasm_info);
-	term_printf("\n");
+	monitor_printf(mon, "\n");
 	if (count < 0)
 	    break;
         pc += count;

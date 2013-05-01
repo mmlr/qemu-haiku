@@ -15,8 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -29,7 +28,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
-#include <assert.h>
 
 #include "cpu.h"
 #include "exec-all.h"
@@ -957,7 +955,8 @@ static void gen_tst_cc (DisasContext *dc, TCGv cc, int cond)
 				else if (dc->cc_size == 2)
 					bits = 15;	
 
-				tcg_gen_shri_tl(cc, cc_result, 31);
+				tcg_gen_shri_tl(cc, cc_result, bits);
+				tcg_gen_andi_tl(cc, cc, 1);
 			}
 			else {
 				cris_evaluate_flags(dc);
@@ -2392,7 +2391,7 @@ static unsigned int dec_test_m(DisasContext *dc)
 	TCGv t[2];
 	int memsize = memsize_zz(dc);
 	int insn_len;
-	LOG_DIS("test.%d [$r%u%s] op2=%x\n",
+	LOG_DIS("test.%c [$r%u%s] op2=%x\n",
 		    memsize_char(memsize),
 		    dc->op1, dc->postinc ? "+]" : "]",
 		    dc->op2);
@@ -2416,7 +2415,7 @@ static unsigned int dec_and_m(DisasContext *dc)
 	TCGv t[2];
 	int memsize = memsize_zz(dc);
 	int insn_len;
-	LOG_DIS("and.%d [$r%u%s, $r%u\n",
+	LOG_DIS("and.%c [$r%u%s, $r%u\n",
 		    memsize_char(memsize),
 		    dc->op1, dc->postinc ? "+]" : "]",
 		    dc->op2);
@@ -2435,7 +2434,7 @@ static unsigned int dec_add_m(DisasContext *dc)
 	TCGv t[2];
 	int memsize = memsize_zz(dc);
 	int insn_len;
-	LOG_DIS("add.%d [$r%u%s, $r%u\n",
+	LOG_DIS("add.%c [$r%u%s, $r%u\n",
 		    memsize_char(memsize),
 		    dc->op1, dc->postinc ? "+]" : "]",
 		    dc->op2);
@@ -2455,7 +2454,7 @@ static unsigned int dec_addo_m(DisasContext *dc)
 	TCGv t[2];
 	int memsize = memsize_zz(dc);
 	int insn_len;
-	LOG_DIS("add.%d [$r%u%s, $r%u\n",
+	LOG_DIS("add.%c [$r%u%s, $r%u\n",
 		    memsize_char(memsize),
 		    dc->op1, dc->postinc ? "+]" : "]",
 		    dc->op2);
@@ -2474,7 +2473,7 @@ static unsigned int dec_bound_m(DisasContext *dc)
 	TCGv l[2];
 	int memsize = memsize_zz(dc);
 	int insn_len;
-	LOG_DIS("bound.%d [$r%u%s, $r%u\n",
+	LOG_DIS("bound.%c [$r%u%s, $r%u\n",
 		    memsize_char(memsize),
 		    dc->op1, dc->postinc ? "+]" : "]",
 		    dc->op2);
@@ -2537,7 +2536,7 @@ static unsigned int dec_or_m(DisasContext *dc)
 	TCGv t[2];
 	int memsize = memsize_zz(dc);
 	int insn_len;
-	LOG_DIS("or.%d [$r%u%s, $r%u pc=%x\n",
+	LOG_DIS("or.%c [$r%u%s, $r%u pc=%x\n",
 		    memsize_char(memsize),
 		    dc->op1, dc->postinc ? "+]" : "]",
 		    dc->op2, dc->pc);
@@ -2692,8 +2691,8 @@ static unsigned int dec_move_rm(DisasContext *dc)
 
 	memsize = memsize_zz(dc);
 
-	LOG_DIS("move.%d $r%u, [$r%u]\n",
-		     memsize, dc->op2, dc->op1);
+	LOG_DIS("move.%c $r%u, [$r%u]\n",
+		     memsize_char(memsize), dc->op2, dc->op1);
 
 	/* prepare store.  */
 	cris_flush_cc_state(dc);
@@ -3272,6 +3271,7 @@ gen_intermediate_code_internal(CPUState *env, TranslationBlock *tb,
 			break;
 	} while (!dc->is_jmp && !dc->cpustate_changed
 		 && gen_opc_ptr < gen_opc_end
+                 && !singlestep
 		 && (dc->pc < next_page_start)
                  && num_insns < max_insns);
 
@@ -3404,6 +3404,7 @@ CPUCRISState *cpu_cris_init (const char *cpu_model)
 
 	cpu_exec_init(env);
 	cpu_reset(env);
+	qemu_init_vcpu(env);
 
 	if (tcg_initialized)
 		return env;

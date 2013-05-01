@@ -9,5 +9,11 @@
 0009_qemu-bios-pci-hotplug-support.patch
 0010_bios-mark-the-acpi-sci-interrupt-as-connected-to-irq-9.patch
 0011_read-additional-acpi-tables-from-a-vm.patch
+0012-load-smbios-entries-and-files-from-qemu.patch
 0013_fix-non-acpi-timer-interrupt-routing.patch
+0014_add-srat-acpi-table-support.patch
 0015_enable-power-button-even-generation.patch
+0016-use-correct-mask-to-size-pci-option-rom-bar.patch
+0017-bochs-bios-Move-QEMU_CFG-constants-to-rombios.h.patch
+0018-bochs-bios-Make-boot-prompt-optional.patch
+0019-bios-fix-multiple-calls.patch

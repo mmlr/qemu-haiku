@@ -1,7 +1,6 @@
-typedef struct {
-	const char* name;
-	int keysym;
-} name2keysym_t;
+
+#include "keymaps.h"
+
 static const name2keysym_t name2keysym[]={
 /* ascii */
     { "space",                0x020},
@@ -274,5 +273,5 @@ static const name2keysym_t name2keysym[]={
 {"Pause", SDLK_PAUSE},
 {"Escape", SDLK_ESCAPE},
 
-{0,0},
+{NULL, 0},
 };

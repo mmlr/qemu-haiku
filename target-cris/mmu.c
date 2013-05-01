@@ -15,8 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef CONFIG_USER_ONLY
@@ -123,7 +122,7 @@ static void dump_tlb(CPUState *env, int mmu)
 #endif
 
 /* rw 0 = read, 1 = write, 2 = exec.  */
-static int cris_mmu_translate_page(struct cris_mmu_result_t *res,
+static int cris_mmu_translate_page(struct cris_mmu_result *res,
 				   CPUState *env, uint32_t vaddr,
 				   int rw, int usermode)
 {
@@ -324,7 +323,7 @@ void cris_mmu_flush_pid(CPUState *env, uint32_t pid)
 	}
 }
 
-int cris_mmu_translate(struct cris_mmu_result_t *res,
+int cris_mmu_translate(struct cris_mmu_result *res,
 		       CPUState *env, uint32_t vaddr,
 		       int rw, int mmu_idx)
 {

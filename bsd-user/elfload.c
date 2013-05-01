@@ -545,8 +545,6 @@ static inline void memcpy_fromfs(void * to, const void * from, unsigned long n)
         memcpy(to, from, n);
 }
 
-extern unsigned long x86_stack_size;
-
 static int load_aout_interp(void * exptr, int interp_fd);
 
 #ifdef BSWAP_NEEDED
@@ -1014,7 +1012,7 @@ static const char *lookup_symbolxx(struct syminfo *s, target_ulong orig_addr)
     key.st_value = orig_addr;
 
     sym = bsearch(&key, syms, s->disas_num_syms, sizeof(*syms), symfind);
-    if (sym != 0) {
+    if (sym != NULL) {
         return s->disas_strtab + sym->st_name;
     }
 
@@ -1295,7 +1293,7 @@ int load_elf_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
         }
 
         if (interp_elf_ex.e_ident[0] != 0x7f ||
-                strncmp(&interp_elf_ex.e_ident[1], "ELF",3) != 0) {
+                strncmp((char *)&interp_elf_ex.e_ident[1], "ELF",3) != 0) {
             interpreter_type &= ~INTERPRETER_ELF;
         }
 

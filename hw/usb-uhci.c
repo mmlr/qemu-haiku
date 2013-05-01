@@ -72,7 +72,7 @@
 #ifdef DEBUG
 #define dprintf printf
 
-const char *pid2str(int pid)
+static const char *pid2str(int pid)
 {
     switch (pid) {
     case USB_TOKEN_SETUP: return "SETUP";
@@ -319,8 +319,9 @@ static void uhci_update_irq(UHCIState *s)
     qemu_set_irq(s->dev.irq[3], level);
 }
 
-static void uhci_reset(UHCIState *s)
+static void uhci_reset(void *opaque)
 {
+    UHCIState *s = opaque;
     uint8_t *pci_conf;
     int i;
     UHCIPort *port;
@@ -1084,7 +1085,7 @@ void usb_uhci_piix3_init(PCIBus *bus, int devfn)
     pci_conf[0x08] = 0x01; // revision number
     pci_conf[0x09] = 0x00;
     pci_config_set_class(pci_conf, PCI_CLASS_SERIAL_USB);
-    pci_conf[0x0e] = 0x00; // header_type
+    pci_conf[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
     pci_conf[0x3d] = 4; // interrupt pin 3
     pci_conf[0x60] = 0x10; // release number
 
@@ -1093,11 +1094,12 @@ void usb_uhci_piix3_init(PCIBus *bus, int devfn)
     }
     s->frame_timer = qemu_new_timer(vm_clock, uhci_frame_timer, s);
 
+    qemu_register_reset(uhci_reset, s);
     uhci_reset(s);
 
     /* Use region 4 for consistency with real hardware.  BSD guests seem
        to rely on this.  */
-    pci_register_io_region(&s->dev, 4, 0x20,
+    pci_register_bar(&s->dev, 4, 0x20,
                            PCI_ADDRESS_SPACE_IO, uhci_map);
 
     register_savevm("uhci", 0, 1, uhci_save, uhci_load, s);
@@ -1118,7 +1120,7 @@ void usb_uhci_piix4_init(PCIBus *bus, int devfn)
     pci_conf[0x08] = 0x01; // revision number
     pci_conf[0x09] = 0x00;
     pci_config_set_class(pci_conf, PCI_CLASS_SERIAL_USB);
-    pci_conf[0x0e] = 0x00; // header_type
+    pci_conf[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
     pci_conf[0x3d] = 4; // interrupt pin 3
     pci_conf[0x60] = 0x10; // release number
 
@@ -1127,11 +1129,12 @@ void usb_uhci_piix4_init(PCIBus *bus, int devfn)
     }
     s->frame_timer = qemu_new_timer(vm_clock, uhci_frame_timer, s);
 
+    qemu_register_reset(uhci_reset, s);
     uhci_reset(s);
 
     /* Use region 4 for consistency with real hardware.  BSD guests seem
        to rely on this.  */
-    pci_register_io_region(&s->dev, 4, 0x20,
+    pci_register_bar(&s->dev, 4, 0x20,
                            PCI_ADDRESS_SPACE_IO, uhci_map);
 
     register_savevm("uhci", 0, 1, uhci_save, uhci_load, s);

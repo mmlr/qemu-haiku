@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * with this program; if not, if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "qemu-common.h"
@@ -324,7 +323,8 @@ static void bt_hid_control_transaction(struct bt_hid_device_s *s,
             break;
         }
         s->proto = parameter;
-        s->usbdev->handle_control(s->usbdev, SET_PROTOCOL, s->proto, 0, 0, 0);
+        s->usbdev->handle_control(s->usbdev, SET_PROTOCOL, s->proto, 0, 0,
+                                  NULL);
         ret = BT_HS_SUCCESSFUL;
         break;
 
@@ -347,7 +347,7 @@ static void bt_hid_control_transaction(struct bt_hid_device_s *s,
         /* We don't need to know about the Idle Rate here really,
          * so just pass it on to the device.  */
         ret = s->usbdev->handle_control(s->usbdev,
-                        SET_IDLE, data[1], 0, 0, 0) ?
+                        SET_IDLE, data[1], 0, 0, NULL) ?
                 BT_HS_SUCCESSFUL : BT_HS_ERR_INVALID_PARAMETER;
         /* XXX: Does this generate a handshake? */
         break;
@@ -382,7 +382,7 @@ static void bt_hid_control_sdu(void *opaque, const uint8_t *data, int len)
 {
     struct bt_hid_device_s *hid = opaque;
 
-    return bt_hid_control_transaction(hid, data, len);
+    bt_hid_control_transaction(hid, data, len);
 }
 
 static void bt_hid_datain(void *opaque)
@@ -462,7 +462,7 @@ static void bt_hid_close_control(void *opaque)
 {
     struct bt_hid_device_s *hid = opaque;
 
-    hid->control = 0;
+    hid->control = NULL;
     bt_hid_connected_update(hid);
 }
 
@@ -470,7 +470,7 @@ static void bt_hid_close_interrupt(void *opaque)
 {
     struct bt_hid_device_s *hid = opaque;
 
-    hid->interrupt = 0;
+    hid->interrupt = NULL;
     bt_hid_connected_update(hid);
 }
 

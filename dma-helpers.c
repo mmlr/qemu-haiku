@@ -10,8 +10,6 @@
 #include "dma.h"
 #include "block_int.h"
 
-static AIOPool dma_aio_pool;
-
 void qemu_sglist_init(QEMUSGList *qsg, int alloc_hint)
 {
     qsg->sg = qemu_malloc(alloc_hint * sizeof(ScatterGatherEntry));
@@ -39,6 +37,7 @@ void qemu_sglist_destroy(QEMUSGList *qsg)
 }
 
 typedef struct {
+    BlockDriverAIOCB common;
     BlockDriverState *bs;
     BlockDriverAIOCB *acb;
     QEMUSGList *sg;
@@ -48,13 +47,13 @@ typedef struct {
     target_phys_addr_t sg_cur_byte;
     QEMUIOVector iov;
     QEMUBH *bh;
-} DMABlockState;
+} DMAAIOCB;
 
 static void dma_bdrv_cb(void *opaque, int ret);
 
 static void reschedule_dma(void *opaque)
 {
-    DMABlockState *dbs = (DMABlockState *)opaque;
+    DMAAIOCB *dbs = (DMAAIOCB *)opaque;
 
     qemu_bh_delete(dbs->bh);
     dbs->bh = NULL;
@@ -63,32 +62,38 @@ static void reschedule_dma(void *opaque)
 
 static void continue_after_map_failure(void *opaque)
 {
-    DMABlockState *dbs = (DMABlockState *)opaque;
+    DMAAIOCB *dbs = (DMAAIOCB *)opaque;
 
     dbs->bh = qemu_bh_new(reschedule_dma, dbs);
     qemu_bh_schedule(dbs->bh);
 }
 
-static void dma_bdrv_cb(void *opaque, int ret)
+static void dma_bdrv_unmap(DMAAIOCB *dbs)
 {
-    DMABlockState *dbs = (DMABlockState *)opaque;
-    target_phys_addr_t cur_addr, cur_len;
-    void *mem;
     int i;
 
-    dbs->sector_num += dbs->iov.size / 512;
     for (i = 0; i < dbs->iov.niov; ++i) {
         cpu_physical_memory_unmap(dbs->iov.iov[i].iov_base,
                                   dbs->iov.iov[i].iov_len, !dbs->is_write,
                                   dbs->iov.iov[i].iov_len);
     }
+}
+
+static void dma_bdrv_cb(void *opaque, int ret)
+{
+    DMAAIOCB *dbs = (DMAAIOCB *)opaque;
+    target_phys_addr_t cur_addr, cur_len;
+    void *mem;
+
+    dbs->acb = NULL;
+    dbs->sector_num += dbs->iov.size / 512;
+    dma_bdrv_unmap(dbs);
     qemu_iovec_reset(&dbs->iov);
 
     if (dbs->sg_cur_index == dbs->sg->nsg || ret < 0) {
-        dbs->acb->cb(dbs->acb->opaque, ret);
+        dbs->common.cb(dbs->common.opaque, ret);
         qemu_iovec_destroy(&dbs->iov);
-        qemu_aio_release(dbs->acb);
-        qemu_free(dbs);
+        qemu_aio_release(dbs);
         return;
     }
 
@@ -112,23 +117,42 @@ static void dma_bdrv_cb(void *opaque, int ret)
     }
 
     if (dbs->is_write) {
-        bdrv_aio_writev(dbs->bs, dbs->sector_num, &dbs->iov,
-                        dbs->iov.size / 512, dma_bdrv_cb, dbs);
+        dbs->acb = bdrv_aio_writev(dbs->bs, dbs->sector_num, &dbs->iov,
+                                   dbs->iov.size / 512, dma_bdrv_cb, dbs);
     } else {
-        bdrv_aio_readv(dbs->bs, dbs->sector_num, &dbs->iov,
-                       dbs->iov.size / 512, dma_bdrv_cb, dbs);
+        dbs->acb = bdrv_aio_readv(dbs->bs, dbs->sector_num, &dbs->iov,
+                                  dbs->iov.size / 512, dma_bdrv_cb, dbs);
+    }
+    if (!dbs->acb) {
+        dma_bdrv_unmap(dbs);
+        qemu_iovec_destroy(&dbs->iov);
+        return;
     }
 }
+
+static void dma_aio_cancel(BlockDriverAIOCB *acb)
+{
+    DMAAIOCB *dbs = container_of(acb, DMAAIOCB, common);
+
+    if (dbs->acb) {
+        bdrv_aio_cancel(dbs->acb);
+    }
+}
+
+static AIOPool dma_aio_pool = {
+    .aiocb_size         = sizeof(DMAAIOCB),
+    .cancel             = dma_aio_cancel,
+};
 
 static BlockDriverAIOCB *dma_bdrv_io(
     BlockDriverState *bs, QEMUSGList *sg, uint64_t sector_num,
     BlockDriverCompletionFunc *cb, void *opaque,
     int is_write)
 {
-    DMABlockState *dbs = qemu_malloc(sizeof(*dbs));
+    DMAAIOCB *dbs =  qemu_aio_get(&dma_aio_pool, bs, cb, opaque);
 
+    dbs->acb = NULL;
     dbs->bs = bs;
-    dbs->acb = qemu_aio_get_pool(&dma_aio_pool, bs, cb, opaque);
     dbs->sg = sg;
     dbs->sector_num = sector_num;
     dbs->sg_cur_index = 0;
@@ -137,7 +161,11 @@ static BlockDriverAIOCB *dma_bdrv_io(
     dbs->bh = NULL;
     qemu_iovec_init(&dbs->iov, sg->nsg);
     dma_bdrv_cb(dbs, 0);
-    return dbs->acb;
+    if (!dbs->acb) {
+        qemu_aio_release(dbs);
+        return NULL;
+    }
+    return &dbs->common;
 }
 
 
@@ -153,16 +181,4 @@ BlockDriverAIOCB *dma_bdrv_write(BlockDriverState *bs,
                                  void (*cb)(void *opaque, int ret), void *opaque)
 {
     return dma_bdrv_io(bs, sg, sector, cb, opaque, 1);
-}
-
-static void dma_aio_cancel(BlockDriverAIOCB *acb)
-{
-    DMABlockState *dbs = (DMABlockState *)acb->opaque;
-
-    bdrv_aio_cancel(dbs->acb);
-}
-
-void dma_helper_init(void)
-{
-    aio_pool_init(&dma_aio_pool, sizeof(BlockDriverAIOCB), dma_aio_cancel);
 }

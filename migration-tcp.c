@@ -16,7 +16,6 @@
 #include "migration.h"
 #include "qemu-char.h"
 #include "sysemu.h"
-#include "console.h"
 #include "buffered_file.h"
 #include "block.h"
 
@@ -59,7 +58,7 @@ static void tcp_wait_for_connect(void *opaque)
 
     dprintf("connect completed\n");
     do {
-        ret = getsockopt(s->fd, SOL_SOCKET, SO_ERROR, &val, &valsize);
+        ret = getsockopt(s->fd, SOL_SOCKET, SO_ERROR, (void *) &val, &valsize);
     } while (ret == -1 && (s->get_error(s)) == EINTR);
 
     if (ret < 0) {
@@ -79,7 +78,7 @@ static void tcp_wait_for_connect(void *opaque)
 
 MigrationState *tcp_start_outgoing_migration(const char *host_port,
                                              int64_t bandwidth_limit,
-                                             int async)
+                                             int detach)
 {
     struct sockaddr_in addr;
     FdMigrationState *s;
@@ -98,7 +97,7 @@ MigrationState *tcp_start_outgoing_migration(const char *host_port,
     s->mig_state.release = migrate_fd_release;
 
     s->state = MIG_STATE_ACTIVE;
-    s->detach = !async;
+    s->mon_resume = NULL;
     s->bandwidth_limit = bandwidth_limit;
     s->fd = socket(PF_INET, SOCK_STREAM, 0);
     if (s->fd == -1) {
@@ -108,11 +107,8 @@ MigrationState *tcp_start_outgoing_migration(const char *host_port,
 
     socket_set_nonblock(s->fd);
 
-    if (s->detach == 1) {
-        dprintf("detaching from monitor\n");
-        monitor_suspend();
-        s->detach = 2;
-    }
+    if (!detach)
+        migrate_fd_monitor_suspend(s);
 
     do {
         ret = connect(s->fd, (struct sockaddr *)&addr, sizeof(addr));
@@ -159,7 +155,6 @@ static void tcp_accept_incoming_migration(void *opaque)
         goto out;
     }
 
-    vm_stop(0); /* just in case */
     ret = qemu_loadvm_state(f);
     if (ret < 0) {
         fprintf(stderr, "load of migration failed\n");
@@ -171,8 +166,8 @@ static void tcp_accept_incoming_migration(void *opaque)
     /* we've successfully migrated, close the server socket */
     qemu_set_fd_handler2(s, NULL, NULL, NULL, NULL);
     close(s);
-
-    vm_start();
+    if (autostart)
+        vm_start();
 
 out_fopen:
     qemu_fclose(f);

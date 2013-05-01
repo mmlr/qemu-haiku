@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "hw.h"
 #include "arm-misc.h"
@@ -425,7 +424,7 @@ struct omap_intr_handler_s *omap_inth_init(target_phys_addr_t base,
 
     omap_inth_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_inth_readfn,
+    iomemtype = cpu_register_io_memory(omap_inth_readfn,
                     omap_inth_writefn, s);
     cpu_register_physical_memory(base, size, iomemtype);
 
@@ -645,7 +644,7 @@ struct omap_intr_handler_s *omap2_inth_init(target_phys_addr_t base,
 
     omap_inth_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap2_inth_readfn,
+    iomemtype = cpu_register_io_memory(omap2_inth_readfn,
                     omap2_inth_writefn, s);
     cpu_register_physical_memory(base, size, iomemtype);
 
@@ -834,7 +833,7 @@ struct omap_mpu_timer_s *omap_mpu_timer_init(target_phys_addr_t base,
     omap_mpu_timer_reset(s);
     omap_timer_clk_setup(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_mpu_timer_readfn,
+    iomemtype = cpu_register_io_memory(omap_mpu_timer_readfn,
                     omap_mpu_timer_writefn, s);
     cpu_register_physical_memory(base, 0x100, iomemtype);
 
@@ -957,7 +956,7 @@ struct omap_watchdog_timer_s *omap_wd_timer_init(target_phys_addr_t base,
     omap_wd_timer_reset(s);
     omap_timer_clk_setup(&s->timer);
 
-    iomemtype = cpu_register_io_memory(0, omap_wd_timer_readfn,
+    iomemtype = cpu_register_io_memory(omap_wd_timer_readfn,
                     omap_wd_timer_writefn, s);
     cpu_register_physical_memory(base, 0x100, iomemtype);
 
@@ -1059,7 +1058,7 @@ struct omap_32khz_timer_s *omap_os_timer_init(target_phys_addr_t base,
     omap_os_timer_reset(s);
     omap_timer_clk_setup(&s->timer);
 
-    iomemtype = cpu_register_io_memory(0, omap_os_timer_readfn,
+    iomemtype = cpu_register_io_memory(omap_os_timer_readfn,
                     omap_os_timer_writefn, s);
     cpu_register_physical_memory(base, 0x800, iomemtype);
 
@@ -1286,7 +1285,7 @@ static void omap_ulpd_pm_reset(struct omap_mpu_state_s *mpu)
 static void omap_ulpd_pm_init(target_phys_addr_t base,
                 struct omap_mpu_state_s *mpu)
 {
-    int iomemtype = cpu_register_io_memory(0, omap_ulpd_pm_readfn,
+    int iomemtype = cpu_register_io_memory(omap_ulpd_pm_readfn,
                     omap_ulpd_pm_writefn, mpu);
 
     cpu_register_physical_memory(base, 0x800, iomemtype);
@@ -1501,7 +1500,7 @@ static void omap_pin_cfg_reset(struct omap_mpu_state_s *mpu)
 static void omap_pin_cfg_init(target_phys_addr_t base,
                 struct omap_mpu_state_s *mpu)
 {
-    int iomemtype = cpu_register_io_memory(0, omap_pin_cfg_readfn,
+    int iomemtype = cpu_register_io_memory(omap_pin_cfg_readfn,
                     omap_pin_cfg_writefn, mpu);
 
     cpu_register_physical_memory(base, 0x800, iomemtype);
@@ -1531,7 +1530,7 @@ static uint32_t omap_id_read(void *opaque, target_phys_addr_t addr)
         case omap1510:
             return 0x03310115;
         default:
-            cpu_abort(cpu_single_env, "%s: bad mpu model\n", __FUNCTION__);
+            hw_error("%s: bad mpu model\n", __FUNCTION__);
         }
         break;
 
@@ -1542,7 +1541,7 @@ static uint32_t omap_id_read(void *opaque, target_phys_addr_t addr)
         case omap1510:
             return 0xfb47002f;
         default:
-            cpu_abort(cpu_single_env, "%s: bad mpu model\n", __FUNCTION__);
+            hw_error("%s: bad mpu model\n", __FUNCTION__);
         }
         break;
     }
@@ -1571,7 +1570,7 @@ static CPUWriteMemoryFunc *omap_id_writefn[] = {
 
 static void omap_id_init(struct omap_mpu_state_s *mpu)
 {
-    int iomemtype = cpu_register_io_memory(0, omap_id_readfn,
+    int iomemtype = cpu_register_io_memory(omap_id_readfn,
                     omap_id_writefn, mpu);
     cpu_register_physical_memory_offset(0xfffe1800, 0x800, iomemtype, 0xfffe1800);
     cpu_register_physical_memory_offset(0xfffed400, 0x100, iomemtype, 0xfffed400);
@@ -1654,7 +1653,7 @@ static void omap_mpui_reset(struct omap_mpu_state_s *s)
 static void omap_mpui_init(target_phys_addr_t base,
                 struct omap_mpu_state_s *mpu)
 {
-    int iomemtype = cpu_register_io_memory(0, omap_mpui_readfn,
+    int iomemtype = cpu_register_io_memory(omap_mpui_readfn,
                     omap_mpui_writefn, mpu);
 
     cpu_register_physical_memory(base, 0x100, iomemtype);
@@ -1763,7 +1762,7 @@ struct omap_tipb_bridge_s *omap_tipb_bridge_init(target_phys_addr_t base,
     s->abort = abort_irq;
     omap_tipb_bridge_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_tipb_bridge_readfn,
+    iomemtype = cpu_register_io_memory(omap_tipb_bridge_readfn,
                     omap_tipb_bridge_writefn, s);
     cpu_register_physical_memory(base, 0x100, iomemtype);
 
@@ -1869,7 +1868,7 @@ static void omap_tcmi_reset(struct omap_mpu_state_s *mpu)
 static void omap_tcmi_init(target_phys_addr_t base,
                 struct omap_mpu_state_s *mpu)
 {
-    int iomemtype = cpu_register_io_memory(0, omap_tcmi_readfn,
+    int iomemtype = cpu_register_io_memory(omap_tcmi_readfn,
                     omap_tcmi_writefn, mpu);
 
     cpu_register_physical_memory(base, 0x100, iomemtype);
@@ -1942,7 +1941,7 @@ static void omap_dpll_reset(struct dpll_ctl_s *s)
 static void omap_dpll_init(struct dpll_ctl_s *s, target_phys_addr_t base,
                 omap_clk clk)
 {
-    int iomemtype = cpu_register_io_memory(0, omap_dpll_readfn,
+    int iomemtype = cpu_register_io_memory(omap_dpll_readfn,
                     omap_dpll_writefn, s);
 
     s->dpll = clk;
@@ -2089,7 +2088,7 @@ struct omap_uart_s *omap2_uart_init(struct omap_target_agent_s *ta,
     target_phys_addr_t base = omap_l4_attach(ta, 0, 0);
     struct omap_uart_s *s = omap_uart_init(base, irq,
                     fclk, iclk, txdma, rxdma, chr);
-    int iomemtype = cpu_register_io_memory(0, omap_uart_readfn,
+    int iomemtype = cpu_register_io_memory(omap_uart_readfn,
                     omap_uart_writefn, s);
 
     s->ta = ta;
@@ -2504,8 +2503,8 @@ static void omap_clkm_init(target_phys_addr_t mpu_base,
                 target_phys_addr_t dsp_base, struct omap_mpu_state_s *s)
 {
     int iomemtype[2] = {
-        cpu_register_io_memory(0, omap_clkm_readfn, omap_clkm_writefn, s),
-        cpu_register_io_memory(0, omap_clkdsp_readfn, omap_clkdsp_writefn, s),
+        cpu_register_io_memory(omap_clkm_readfn, omap_clkm_writefn, s),
+        cpu_register_io_memory(omap_clkdsp_readfn, omap_clkdsp_writefn, s),
     };
 
     s->clkm.arm_idlect1 = 0x03ff;
@@ -2758,7 +2757,7 @@ struct omap_mpuio_s *omap_mpuio_init(target_phys_addr_t base,
     s->in = qemu_allocate_irqs(omap_mpuio_set, s, 16);
     omap_mpuio_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_mpuio_readfn,
+    iomemtype = cpu_register_io_memory(omap_mpuio_readfn,
                     omap_mpuio_writefn, s);
     cpu_register_physical_memory(base, 0x800, iomemtype);
 
@@ -2775,15 +2774,14 @@ qemu_irq *omap_mpuio_in_get(struct omap_mpuio_s *s)
 void omap_mpuio_out_set(struct omap_mpuio_s *s, int line, qemu_irq handler)
 {
     if (line >= 16 || line < 0)
-        cpu_abort(cpu_single_env, "%s: No GPIO line %i\n", __FUNCTION__, line);
+        hw_error("%s: No GPIO line %i\n", __FUNCTION__, line);
     s->handler[line] = handler;
 }
 
 void omap_mpuio_key(struct omap_mpuio_s *s, int row, int col, int down)
 {
     if (row >= 5 || row < 0)
-        cpu_abort(cpu_single_env, "%s: No key %i-%i\n",
-                        __FUNCTION__, col, row);
+        hw_error("%s: No key %i-%i\n", __FUNCTION__, col, row);
 
     if (down)
         s->buttons[row] |= 1 << col;
@@ -2955,7 +2953,7 @@ struct omap_gpio_s *omap_gpio_init(target_phys_addr_t base,
     s->in = qemu_allocate_irqs(omap_gpio_set, s, 16);
     omap_gpio_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_gpio_readfn,
+    iomemtype = cpu_register_io_memory(omap_gpio_readfn,
                     omap_gpio_writefn, s);
     cpu_register_physical_memory(base, 0x1000, iomemtype);
 
@@ -2970,7 +2968,7 @@ qemu_irq *omap_gpio_in_get(struct omap_gpio_s *s)
 void omap_gpio_out_set(struct omap_gpio_s *s, int line, qemu_irq handler)
 {
     if (line >= 16 || line < 0)
-        cpu_abort(cpu_single_env, "%s: No GPIO line %i\n", __FUNCTION__, line);
+        hw_error("%s: No GPIO line %i\n", __FUNCTION__, line);
     s->handler[line] = handler;
 }
 
@@ -2985,13 +2983,13 @@ struct omap_uwire_s {
     uint16_t control;
     uint16_t setup[5];
 
-    struct uwire_slave_s *chip[4];
+    uWireSlave *chip[4];
 };
 
 static void omap_uwire_transfer_start(struct omap_uwire_s *s)
 {
     int chipselect = (s->control >> 10) & 3;		/* INDEX */
-    struct uwire_slave_s *slave = s->chip[chipselect];
+    uWireSlave *slave = s->chip[chipselect];
 
     if ((s->control >> 5) & 0x1f) {			/* NB_BITS_WR */
         if (s->control & (1 << 12))			/* CS_CMD */
@@ -3125,7 +3123,7 @@ struct omap_uwire_s *omap_uwire_init(target_phys_addr_t base,
     s->txdrq = dma;
     omap_uwire_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_uwire_readfn,
+    iomemtype = cpu_register_io_memory(omap_uwire_readfn,
                     omap_uwire_writefn, s);
     cpu_register_physical_memory(base, 0x800, iomemtype);
 
@@ -3133,7 +3131,7 @@ struct omap_uwire_s *omap_uwire_init(target_phys_addr_t base,
 }
 
 void omap_uwire_attach(struct omap_uwire_s *s,
-                struct uwire_slave_s *slave, int chipselect)
+                uWireSlave *slave, int chipselect)
 {
     if (chipselect < 0 || chipselect > 3) {
         fprintf(stderr, "%s: Bad chipselect %i\n", __FUNCTION__, chipselect);
@@ -3226,7 +3224,7 @@ static void omap_pwl_init(target_phys_addr_t base, struct omap_mpu_state_s *s,
 
     omap_pwl_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_pwl_readfn,
+    iomemtype = cpu_register_io_memory(omap_pwl_readfn,
                     omap_pwl_writefn, s);
     cpu_register_physical_memory(base, 0x800, iomemtype);
 
@@ -3321,7 +3319,7 @@ static void omap_pwt_init(target_phys_addr_t base, struct omap_mpu_state_s *s,
     s->pwt.clk = clk;
     omap_pwt_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_pwt_readfn,
+    iomemtype = cpu_register_io_memory(omap_pwt_readfn,
                     omap_pwt_writefn, s);
     cpu_register_physical_memory(base, 0x800, iomemtype);
 }
@@ -3744,7 +3742,7 @@ struct omap_rtc_s *omap_rtc_init(target_phys_addr_t base,
 
     omap_rtc_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_rtc_readfn,
+    iomemtype = cpu_register_io_memory(omap_rtc_readfn,
                     omap_rtc_writefn, s);
     cpu_register_physical_memory(base, 0x800, iomemtype);
 
@@ -3771,7 +3769,7 @@ struct omap_mcbsp_s {
     int tx_req;
     int rx_req;
 
-    struct i2s_codec_s *codec;
+    I2SCodec *codec;
     QEMUTimer *source_timer;
     QEMUTimer *sink_timer;
 };
@@ -4264,7 +4262,7 @@ struct omap_mcbsp_s *omap_mcbsp_init(target_phys_addr_t base,
     s->source_timer = qemu_new_timer(vm_clock, omap_mcbsp_source_tick, s);
     omap_mcbsp_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_mcbsp_readfn,
+    iomemtype = cpu_register_io_memory(omap_mcbsp_readfn,
                     omap_mcbsp_writefn, s);
     cpu_register_physical_memory(base, 0x800, iomemtype);
 
@@ -4291,7 +4289,7 @@ static void omap_mcbsp_i2s_start(void *opaque, int line, int level)
     }
 }
 
-void omap_mcbsp_i2s_attach(struct omap_mcbsp_s *s, struct i2s_codec_s *slave)
+void omap_mcbsp_i2s_attach(struct omap_mcbsp_s *s, I2SCodec *slave)
 {
     s->codec = slave;
     slave->rx_swallow = qemu_allocate_irqs(omap_mcbsp_i2s_swallow, s, 1)[0];
@@ -4436,7 +4434,7 @@ struct omap_lpg_s *omap_lpg_init(target_phys_addr_t base, omap_clk clk)
 
     omap_lpg_reset(s);
 
-    iomemtype = cpu_register_io_memory(0, omap_lpg_readfn,
+    iomemtype = cpu_register_io_memory(omap_lpg_readfn,
                     omap_lpg_writefn, s);
     cpu_register_physical_memory(base, 0x800, iomemtype);
 
@@ -4469,7 +4467,7 @@ static CPUWriteMemoryFunc *omap_mpui_io_writefn[] = {
 
 static void omap_setup_mpui_io(struct omap_mpu_state_s *mpu)
 {
-    int iomemtype = cpu_register_io_memory(0, omap_mpui_io_readfn,
+    int iomemtype = cpu_register_io_memory(omap_mpui_io_readfn,
                     omap_mpui_io_writefn, mpu);
     cpu_register_physical_memory(OMAP_MPUI_BASE, 0x7fff, iomemtype);
 }

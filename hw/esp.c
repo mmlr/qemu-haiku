@@ -22,7 +22,7 @@
  * THE SOFTWARE.
  */
 
-#include "hw.h"
+#include "sysbus.h"
 #include "scsi-disk.h"
 #include "scsi.h"
 
@@ -38,14 +38,14 @@
  */
 
 #ifdef DEBUG_ESP
-#define DPRINTF(fmt, args...) \
-do { printf("ESP: " fmt , ##args); } while (0)
+#define DPRINTF(fmt, ...)                                       \
+    do { printf("ESP: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define DPRINTF(fmt, args...) do {} while (0)
+#define DPRINTF(fmt, ...) do {} while (0)
 #endif
 
-#define ESP_ERROR(fmt, args...) \
-do { printf("ESP ERROR: %s: " fmt, __func__ , ##args); } while (0)
+#define ESP_ERROR(fmt, ...)                                             \
+    do { printf("ESP ERROR: %s: " fmt, __func__ , ## __VA_ARGS__); } while (0)
 
 #define ESP_REGS 16
 #define TI_BUFSZ 16
@@ -53,6 +53,7 @@ do { printf("ESP ERROR: %s: " fmt, __func__ , ##args); } while (0)
 typedef struct ESPState ESPState;
 
 struct ESPState {
+    SysBusDevice busdev;
     uint32_t it_shift;
     qemu_irq irq;
     uint8_t rregs[ESP_REGS];
@@ -400,8 +401,6 @@ static void esp_reset(void *opaque)
 {
     ESPState *s = opaque;
 
-    esp_lower_irq(s);
-
     memset(s->rregs, 0, ESP_REGS);
     memset(s->wregs, 0, ESP_REGS);
     s->rregs[ESP_TCHI] = TCHI_FAS100A; // Indicate fas100a
@@ -423,7 +422,7 @@ static void parent_esp_reset(void *opaque, int irq, int level)
 static uint32_t esp_mem_readb(void *opaque, target_phys_addr_t addr)
 {
     ESPState *s = opaque;
-    uint32_t saddr;
+    uint32_t saddr, old_val;
 
     saddr = addr >> s->it_shift;
     DPRINTF("read reg[%d]: 0x%2.2x\n", saddr, s->rregs[saddr]);
@@ -446,10 +445,15 @@ static uint32_t esp_mem_readb(void *opaque, target_phys_addr_t addr)
         }
         break;
     case ESP_RINTR:
-        // Clear interrupt/error status bits
-        s->rregs[ESP_RSTAT] &= ~(STAT_GE | STAT_PE);
+        /* Clear sequence step, interrupt register and all status bits
+           except TC */
+        old_val = s->rregs[ESP_RINTR];
+        s->rregs[ESP_RINTR] = 0;
+        s->rregs[ESP_RSTAT] &= ~STAT_TC;
+        s->rregs[ESP_RSEQ] = SEQ_CD;
         esp_lower_irq(s);
-        break;
+
+        return old_val;
     default:
         break;
     }
@@ -617,9 +621,9 @@ static int esp_load(QEMUFile *f, void *opaque, int version_id)
     return 0;
 }
 
-void esp_scsi_attach(void *opaque, BlockDriverState *bd, int id)
+static void esp_scsi_attach(DeviceState *host, BlockDriverState *bd, int id)
 {
-    ESPState *s = (ESPState *)opaque;
+    ESPState *s = FROM_SYSBUS(ESPState, sysbus_from_qdev(host));
 
     if (id < 0) {
         for (id = 0; id < ESP_MAX_DEVS; id++) {
@@ -644,31 +648,51 @@ void esp_scsi_attach(void *opaque, BlockDriverState *bd, int id)
         s->scsi_dev[id] = scsi_disk_init(bd, 0, esp_command_complete, s);
 }
 
-void *esp_init(target_phys_addr_t espaddr, int it_shift,
-               espdma_memory_read_write dma_memory_read,
-               espdma_memory_read_write dma_memory_write,
-               void *dma_opaque, qemu_irq irq, qemu_irq *reset)
+void esp_init(target_phys_addr_t espaddr, int it_shift,
+              espdma_memory_read_write dma_memory_read,
+              espdma_memory_read_write dma_memory_write,
+              void *dma_opaque, qemu_irq irq, qemu_irq *reset)
 {
-    ESPState *s;
+    DeviceState *dev;
+    SysBusDevice *s;
+    ESPState *esp;
+
+    dev = qdev_create(NULL, "esp");
+    esp = DO_UPCAST(ESPState, busdev.qdev, dev);
+    esp->dma_memory_read = dma_memory_read;
+    esp->dma_memory_write = dma_memory_write;
+    esp->dma_opaque = dma_opaque;
+    esp->it_shift = it_shift;
+    qdev_init(dev);
+    s = sysbus_from_qdev(dev);
+    sysbus_connect_irq(s, 0, irq);
+    sysbus_mmio_map(s, 0, espaddr);
+}
+
+static void esp_init1(SysBusDevice *dev)
+{
+    ESPState *s = FROM_SYSBUS(ESPState, dev);
     int esp_io_memory;
 
-    s = qemu_mallocz(sizeof(ESPState));
+    sysbus_init_irq(dev, &s->irq);
+    assert(s->it_shift != -1);
 
-    s->irq = irq;
-    s->it_shift = it_shift;
-    s->dma_memory_read = dma_memory_read;
-    s->dma_memory_write = dma_memory_write;
-    s->dma_opaque = dma_opaque;
-
-    esp_io_memory = cpu_register_io_memory(0, esp_mem_read, esp_mem_write, s);
-    cpu_register_physical_memory(espaddr, ESP_REGS << it_shift, esp_io_memory);
+    esp_io_memory = cpu_register_io_memory(esp_mem_read, esp_mem_write, s);
+    sysbus_init_mmio(dev, ESP_REGS << s->it_shift, esp_io_memory);
 
     esp_reset(s);
 
-    register_savevm("esp", espaddr, 3, esp_save, esp_load, s);
+    register_savevm("esp", -1, 3, esp_save, esp_load, s);
     qemu_register_reset(esp_reset, s);
 
-    *reset = *qemu_allocate_irqs(parent_esp_reset, s, 1);
+    qdev_init_gpio_in(&dev->qdev, parent_esp_reset, 1);
 
-    return s;
+    scsi_bus_new(&dev->qdev, esp_scsi_attach);
 }
+
+static void esp_register_devices(void)
+{
+    sysbus_register_dev("esp", sizeof(ESPState), esp_init1);
+}
+
+device_init(esp_register_devices)

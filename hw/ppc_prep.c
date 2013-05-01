@@ -41,6 +41,7 @@
 
 #define MAX_IDE_BUS 2
 
+#define BIOS_SIZE (1024 * 1024)
 #define BIOS_FILENAME "ppc_rom.bin"
 #define KERNEL_LOAD_ADDR 0x01000000
 #define INITRD_LOAD_ADDR 0x01800000
@@ -50,18 +51,19 @@
 #endif
 
 #if defined (HARD_DEBUG_PPC_IO)
-#define PPC_IO_DPRINTF(fmt, args...)                     \
+#define PPC_IO_DPRINTF(fmt, ...)                         \
 do {                                                     \
     if (qemu_loglevel_mask(CPU_LOG_IOPORT)) {            \
-        qemu_log("%s: " fmt, __func__ , ##args); \
+        qemu_log("%s: " fmt, __func__ , ## __VA_ARGS__); \
     } else {                                             \
-        printf("%s : " fmt, __func__ , ##args);          \
+        printf("%s : " fmt, __func__ , ## __VA_ARGS__);  \
     }                                                    \
 } while (0)
 #elif defined (DEBUG_PPC_IO)
-#define PPC_IO_DPRINTF(fmt, args...) qemu_log_mask(CPU_LOG_IOPORT, ## __VA_ARGS__)
+#define PPC_IO_DPRINTF(fmt, ...) \
+qemu_log_mask(CPU_LOG_IOPORT, fmt, ## __VA_ARGS__)
 #else
-#define PPC_IO_DPRINTF(fmt, args...) do { } while (0)
+#define PPC_IO_DPRINTF(fmt, ...) do { } while (0)
 #endif
 
 /* Constants for devices init */
@@ -530,7 +532,7 @@ static CPUReadMemoryFunc *PPC_prep_io_read[] = {
 #define NVRAM_SIZE        0x2000
 
 /* PowerPC PREP hardware initialisation */
-static void ppc_prep_init (ram_addr_t ram_size, int vga_ram_size,
+static void ppc_prep_init (ram_addr_t ram_size,
                            const char *boot_device,
                            const char *kernel_filename,
                            const char *kernel_cmdline,
@@ -538,12 +540,12 @@ static void ppc_prep_init (ram_addr_t ram_size, int vga_ram_size,
                            const char *cpu_model)
 {
     CPUState *env = NULL, *envs[MAX_CPUS];
-    char buf[1024];
+    char *filename;
     nvram_t nvram;
     m48t59_t *m48t59;
     int PPC_io_memory;
     int linux_boot, i, nb_nics1, bios_size;
-    ram_addr_t ram_offset, vga_ram_offset, bios_offset;
+    ram_addr_t ram_offset, bios_offset;
     uint32_t kernel_base, kernel_size, initrd_base, initrd_size;
     PCIBus *pci_bus;
     qemu_irq *i8259;
@@ -580,44 +582,51 @@ static void ppc_prep_init (ram_addr_t ram_size, int vga_ram_size,
     ram_offset = qemu_ram_alloc(ram_size);
     cpu_register_physical_memory(0, ram_size, ram_offset);
 
-    /* allocate VGA RAM */
-    vga_ram_offset = qemu_ram_alloc(vga_ram_size);
-
     /* allocate and load BIOS */
     bios_offset = qemu_ram_alloc(BIOS_SIZE);
     if (bios_name == NULL)
         bios_name = BIOS_FILENAME;
-    snprintf(buf, sizeof(buf), "%s/%s", bios_dir, bios_name);
-    bios_size = load_image(buf, phys_ram_base + bios_offset);
+    filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+    if (filename) {
+        bios_size = get_image_size(filename);
+    } else {
+        bios_size = -1;
+    }
+    if (bios_size > 0 && bios_size <= BIOS_SIZE) {
+        target_phys_addr_t bios_addr;
+        bios_size = (bios_size + 0xfff) & ~0xfff;
+        bios_addr = (uint32_t)(-bios_size);
+        cpu_register_physical_memory(bios_addr, bios_size,
+                                     bios_offset | IO_MEM_ROM);
+        bios_size = load_image_targphys(filename, bios_addr, bios_size);
+    }
     if (bios_size < 0 || bios_size > BIOS_SIZE) {
-        cpu_abort(env, "qemu: could not load PPC PREP bios '%s'\n", buf);
-        exit(1);
+        hw_error("qemu: could not load PPC PREP bios '%s'\n", bios_name);
+    }
+    if (filename) {
+        qemu_free(filename);
     }
     if (env->nip < 0xFFF80000 && bios_size < 0x00100000) {
-        cpu_abort(env, "PowerPC 601 / 620 / 970 need a 1MB BIOS\n");
+        hw_error("PowerPC 601 / 620 / 970 need a 1MB BIOS\n");
     }
-    bios_size = (bios_size + 0xfff) & ~0xfff;
-    cpu_register_physical_memory((uint32_t)(-bios_size),
-                                 bios_size, bios_offset | IO_MEM_ROM);
 
     if (linux_boot) {
         kernel_base = KERNEL_LOAD_ADDR;
         /* now we can load the kernel */
-        kernel_size = load_image(kernel_filename, phys_ram_base + kernel_base);
+        kernel_size = load_image_targphys(kernel_filename, kernel_base,
+                                          ram_size - kernel_base);
         if (kernel_size < 0) {
-            cpu_abort(env, "qemu: could not load kernel '%s'\n",
-                      kernel_filename);
+            hw_error("qemu: could not load kernel '%s'\n", kernel_filename);
             exit(1);
         }
         /* load initrd */
         if (initrd_filename) {
             initrd_base = INITRD_LOAD_ADDR;
-            initrd_size = load_image(initrd_filename,
-                                     phys_ram_base + initrd_base);
+            initrd_size = load_image_targphys(initrd_filename, initrd_base,
+                                              ram_size - initrd_base);
             if (initrd_size < 0) {
-                cpu_abort(env, "qemu: could not load initial ram disk '%s'\n",
+                hw_error("qemu: could not load initial ram disk '%s'\n",
                           initrd_filename);
-                exit(1);
             }
         } else {
             initrd_base = 0;
@@ -645,20 +654,18 @@ static void ppc_prep_init (ram_addr_t ram_size, int vga_ram_size,
 
     isa_mem_base = 0xc0000000;
     if (PPC_INPUT(env) != PPC_FLAGS_INPUT_6xx) {
-        cpu_abort(env, "Only 6xx bus is supported on PREP machine\n");
-        exit(1);
+        hw_error("Only 6xx bus is supported on PREP machine\n");
     }
     i8259 = i8259_init(first_cpu->irq_inputs[PPC6xx_INPUT_INT]);
     pci_bus = pci_prep_init(i8259);
     //    pci_bus = i440fx_init();
     /* Register 8 MB of ISA IO space (needed for non-contiguous map) */
-    PPC_io_memory = cpu_register_io_memory(0, PPC_prep_io_read,
+    PPC_io_memory = cpu_register_io_memory(PPC_prep_io_read,
                                            PPC_prep_io_write, sysctrl);
     cpu_register_physical_memory(0x80000000, 0x00800000, PPC_io_memory);
 
     /* init basic PC hardware */
-    pci_vga_init(pci_bus, phys_ram_base + vga_ram_offset,
-                 vga_ram_offset, vga_ram_size, 0, 0);
+    pci_vga_init(pci_bus, 0, 0);
     //    openpic = openpic_init(0x00000000, 0xF0000000, 1);
     //    pit = pit_init(0x40, i8259[0]);
     rtc_init(0x70, i8259[8], 2000);
@@ -674,7 +681,7 @@ static void ppc_prep_init (ram_addr_t ram_size, int vga_ram_size,
         if (strcmp(nd_table[i].model, "ne2k_isa") == 0) {
             isa_ne2000_init(ne2000_io[i], i8259[ne2000_irq[i]], &nd_table[i]);
         } else {
-            pci_nic_init(pci_bus, &nd_table[i], -1, "ne2k_pci");
+            pci_nic_init(&nd_table[i], "ne2k_pci", NULL);
         }
     }
 
@@ -698,7 +705,6 @@ static void ppc_prep_init (ram_addr_t ram_size, int vga_ram_size,
     }
     i8042_init(i8259[1], i8259[12], 0x60);
     DMA_init(1);
-    //    AUD_init();
     //    SB16_init();
 
     for(i = 0; i < MAX_FD; i++) {
@@ -723,12 +729,12 @@ static void ppc_prep_init (ram_addr_t ram_size, int vga_ram_size,
     register_ioport_read(0x0800, 0x52, 1, &PREP_io_800_readb, sysctrl);
     register_ioport_write(0x0800, 0x52, 1, &PREP_io_800_writeb, sysctrl);
     /* PCI intack location */
-    PPC_io_memory = cpu_register_io_memory(0, PPC_intack_read,
+    PPC_io_memory = cpu_register_io_memory(PPC_intack_read,
                                            PPC_intack_write, NULL);
     cpu_register_physical_memory(0xBFFFFFF0, 0x4, PPC_io_memory);
     /* PowerPC control and status register group */
 #if 0
-    PPC_io_memory = cpu_register_io_memory(0, PPC_XCSR_read, PPC_XCSR_write,
+    PPC_io_memory = cpu_register_io_memory(PPC_XCSR_read, PPC_XCSR_write,
                                            NULL);
     cpu_register_physical_memory(0xFEFF0000, 0x1000, PPC_io_memory);
 #endif
@@ -758,10 +764,16 @@ static void ppc_prep_init (ram_addr_t ram_size, int vga_ram_size,
     register_ioport_write(0x0F00, 4, 1, &PPC_debug_write, NULL);
 }
 
-QEMUMachine prep_machine = {
+static QEMUMachine prep_machine = {
     .name = "prep",
     .desc = "PowerPC PREP platform",
     .init = ppc_prep_init,
-    .ram_require = BIOS_SIZE + VGA_RAM_SIZE,
     .max_cpus = MAX_CPUS,
 };
+
+static void prep_machine_init(void)
+{
+    qemu_register_machine(&prep_machine);
+}
+
+machine_init(prep_machine_init);

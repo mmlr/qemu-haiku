@@ -13,9 +13,7 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston,
- *  MA 02110-1301, USA.
+ *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  *      Copyright (C) 2006 CodeSourcery.
  *	Copyright (C) 2000-2003 David McCullough <davidm@snapgear.com>
@@ -47,9 +45,9 @@
 //#define DEBUG
 
 #ifdef DEBUG
-#define	DBG_FLT(a...)	printf(a)
+#define	DBG_FLT(...)	printf(__VA_ARGS__)
 #else
-#define	DBG_FLT(a...)
+#define	DBG_FLT(...)
 #endif
 
 #define flat_reloc_valid(reloc, size)             ((reloc) <= (size))

@@ -41,12 +41,7 @@
 #include <slirp.h>
 #include "ip_icmp.h"
 
-struct socket tcb;
-
 #define	TCPREXMTTHRESH 3
-struct	socket *tcp_last_so = &tcb;
-
-tcp_seq tcp_iss;                /* tcp initial send seq # */
 
 #define TCP_PAWS_IDLE	(24 * 24 * 60 * 60 * PR_SLOWHZ)
 
@@ -75,13 +70,10 @@ tcp_seq tcp_iss;                /* tcp initial send seq # */
                        tp->t_flags |= TF_DELACK; \
                (tp)->rcv_nxt += (ti)->ti_len; \
                flags = (ti)->ti_flags & TH_FIN; \
-               STAT(tcpstat.tcps_rcvpack++);         \
-               STAT(tcpstat.tcps_rcvbyte += (ti)->ti_len);   \
                if (so->so_emu) { \
 		       if (tcp_emu((so),(m))) sbappend((so), (m)); \
 	       } else \
 	       	       sbappend((so), (m)); \
-/*               sorwakeup(so); */ \
 	} else {\
                (flags) = tcp_reass((tp), (ti), (m)); \
                tp->t_flags |= TF_ACKNOW; \
@@ -95,13 +87,10 @@ tcp_seq tcp_iss;                /* tcp initial send seq # */
 		tp->t_flags |= TF_DELACK; \
 		(tp)->rcv_nxt += (ti)->ti_len; \
 		flags = (ti)->ti_flags & TH_FIN; \
-		STAT(tcpstat.tcps_rcvpack++);        \
-		STAT(tcpstat.tcps_rcvbyte += (ti)->ti_len);  \
 		if (so->so_emu) { \
 			if (tcp_emu((so),(m))) sbappend(so, (m)); \
 		} else \
 			sbappend((so), (m)); \
-/*		sorwakeup(so); */ \
 	} else { \
 		(flags) = tcp_reass((tp), (ti), (m)); \
 		tp->t_flags |= TF_ACKNOW; \
@@ -121,10 +110,10 @@ tcp_reass(register struct tcpcb *tp, register struct tcpiphdr *ti,
 	int flags;
 
 	/*
-	 * Call with ti==0 after become established to
+	 * Call with ti==NULL after become established to
 	 * force pre-ESTABLISHED data up to user socket.
 	 */
-	if (ti == 0)
+        if (ti == NULL)
 		goto present;
 
 	/*
@@ -147,8 +136,6 @@ tcp_reass(register struct tcpcb *tp, register struct tcpiphdr *ti,
 		i = q->ti_seq + q->ti_len - ti->ti_seq;
 		if (i > 0) {
 			if (i >= ti->ti_len) {
-				STAT(tcpstat.tcps_rcvduppack++);
-				STAT(tcpstat.tcps_rcvdupbyte += ti->ti_len);
 				m_freem(m);
 				/*
 				 * Try to present any queued data
@@ -164,8 +151,6 @@ tcp_reass(register struct tcpcb *tp, register struct tcpiphdr *ti,
 		}
 		q = tcpiphdr_next(q);
 	}
-	STAT(tcpstat.tcps_rcvoopack++);
-	STAT(tcpstat.tcps_rcvoobyte += ti->ti_len);
 	ti->ti_mbuf = m;
 
 	/*
@@ -211,7 +196,6 @@ present:
 		remque(tcpiphdr2qlink(ti));
 		m = ti->ti_mbuf;
 		ti = tcpiphdr_next(ti);
-/*		if (so->so_state & SS_FCANTRCVMORE) */
 		if (so->so_state & SS_FCANTSENDMORE)
 			m_freem(m);
 		else {
@@ -221,7 +205,6 @@ present:
 				sbappend(so, m);
 		}
 	} while (ti != (struct tcpiphdr *)tp && ti->ti_seq == tp->rcv_nxt);
-/*	sorwakeup(so); */
 	return (flags);
 }
 
@@ -230,26 +213,22 @@ present:
  * protocol specification dated September, 1981 very closely.
  */
 void
-tcp_input(m, iphlen, inso)
-	register struct mbuf *m;
-	int iphlen;
-	struct socket *inso;
+tcp_input(struct mbuf *m, int iphlen, struct socket *inso)
 {
   	struct ip save_ip, *ip;
 	register struct tcpiphdr *ti;
 	caddr_t optp = NULL;
 	int optlen = 0;
 	int len, tlen, off;
-	register struct tcpcb *tp = 0;
+        register struct tcpcb *tp = NULL;
 	register int tiflags;
-	struct socket *so = 0;
+        struct socket *so = NULL;
 	int todrop, acked, ourfinisacked, needoutput = 0;
-/*	int dropsocket = 0; */
 	int iss = 0;
 	u_long tiwin;
 	int ret;
-/*	int ts_present = 0; */
     struct ex_list *ex_ptr;
+    Slirp *slirp;
 
 	DEBUG_CALL("tcp_input");
 	DEBUG_ARGS((dfd," m = %8lx  iphlen = %2d  inso = %lx\n",
@@ -260,20 +239,20 @@ tcp_input(m, iphlen, inso)
 	 */
 	if (m == NULL) {
 		so = inso;
+		slirp = so->slirp;
 
 		/* Re-set a few variables */
 		tp = sototcpcb(so);
 		m = so->so_m;
-		so->so_m = 0;
+                so->so_m = NULL;
 		ti = so->so_ti;
 		tiwin = ti->ti_win;
 		tiflags = ti->ti_flags;
 
 		goto cont_conn;
 	}
+	slirp = m->slirp;
 
-
-	STAT(tcpstat.tcps_rcvtotal++);
 	/*
 	 * Get IP and TCP header together in first mbuf.
 	 * Note: IP leaves IP header in first mbuf.
@@ -298,16 +277,12 @@ tcp_input(m, iphlen, inso)
 	 * Checksum extended TCP header and data.
 	 */
 	tlen = ((struct ip *)ti)->ip_len;
-	tcpiphdr2qlink(ti)->next = tcpiphdr2qlink(ti)->prev = 0;
-    memset(&ti->ti_i.ih_mbuf, 0 , sizeof(struct mbuf_ptr));
+        tcpiphdr2qlink(ti)->next = tcpiphdr2qlink(ti)->prev = NULL;
+        memset(&ti->ti_i.ih_mbuf, 0 , sizeof(struct mbuf_ptr));
 	ti->ti_x1 = 0;
 	ti->ti_len = htons((u_int16_t)tlen);
 	len = sizeof(struct ip ) + tlen;
-	/* keep checksum for ICMP reply
-	 * ti->ti_sum = cksum(m, len);
-	 * if (ti->ti_sum) { */
 	if(cksum(m, len)) {
-	  STAT(tcpstat.tcps_rcvbadsum++);
 	  goto drop;
 	}
 
@@ -317,7 +292,6 @@ tcp_input(m, iphlen, inso)
 	 */
 	off = ti->ti_off << 2;
 	if (off < sizeof (struct tcphdr) || off > tlen) {
-	  STAT(tcpstat.tcps_rcvbadoff++);
 	  goto drop;
 	}
 	tlen -= off;
@@ -325,25 +299,6 @@ tcp_input(m, iphlen, inso)
 	if (off > sizeof (struct tcphdr)) {
 	  optlen = off - sizeof (struct tcphdr);
 	  optp = mtod(m, caddr_t) + sizeof (struct tcpiphdr);
-
-		/*
-		 * Do quick retrieval of timestamp options ("options
-		 * prediction?").  If timestamp is the only option and it's
-		 * formatted as recommended in RFC 1323 appendix A, we
-		 * quickly get the values now and not bother calling
-		 * tcp_dooptions(), etc.
-		 */
-/*		if ((optlen == TCPOLEN_TSTAMP_APPA ||
- *		     (optlen > TCPOLEN_TSTAMP_APPA &&
- *			optp[TCPOLEN_TSTAMP_APPA] == TCPOPT_EOL)) &&
- *		     *(u_int32_t *)optp == htonl(TCPOPT_TSTAMP_HDR) &&
- *		     (ti->ti_flags & TH_SYN) == 0) {
- *			ts_present = 1;
- *			ts_val = ntohl(*(u_int32_t *)(optp + 4));
- *			ts_ecr = ntohl(*(u_int32_t *)(optp + 8));
- *			optp = NULL;   / * we've parsed the options * /
- *		}
- */
 	}
 	tiflags = ti->ti_flags;
 
@@ -361,12 +316,13 @@ tcp_input(m, iphlen, inso)
 	m->m_data += sizeof(struct tcpiphdr)+off-sizeof(struct tcphdr);
 	m->m_len  -= sizeof(struct tcpiphdr)+off-sizeof(struct tcphdr);
 
-    if (slirp_restrict) {
-        for (ex_ptr = exec_list; ex_ptr; ex_ptr = ex_ptr->ex_next)
+    if (slirp->restricted) {
+        for (ex_ptr = slirp->exec_list; ex_ptr; ex_ptr = ex_ptr->ex_next) {
             if (ex_ptr->ex_fport == ti->ti_dport &&
-                    (ntohl(ti->ti_dst.s_addr) & 0xff) == ex_ptr->ex_addr)
+                ti->ti_dst.s_addr == ex_ptr->ex_addr.s_addr) {
                 break;
-
+            }
+        }
         if (!ex_ptr)
             goto drop;
     }
@@ -374,16 +330,15 @@ tcp_input(m, iphlen, inso)
 	 * Locate pcb for segment.
 	 */
 findso:
-	so = tcp_last_so;
+	so = slirp->tcp_last_so;
 	if (so->so_fport != ti->ti_dport ||
 	    so->so_lport != ti->ti_sport ||
 	    so->so_laddr.s_addr != ti->ti_src.s_addr ||
 	    so->so_faddr.s_addr != ti->ti_dst.s_addr) {
-		so = solookup(&tcb, ti->ti_src, ti->ti_sport,
+		so = solookup(&slirp->tcb, ti->ti_src, ti->ti_sport,
 			       ti->ti_dst, ti->ti_dport);
 		if (so)
-			tcp_last_so = so;
-		STAT(tcpstat.tcps_socachemiss++);
+			slirp->tcp_last_so = so;
 	}
 
 	/*
@@ -399,11 +354,11 @@ findso:
 	 * the only flag set, then create a session, mark it
 	 * as if it was LISTENING, and continue...
 	 */
-	if (so == 0) {
+        if (so == NULL) {
 	  if ((tiflags & (TH_SYN|TH_FIN|TH_RST|TH_URG|TH_ACK)) != TH_SYN)
 	    goto dropwithreset;
 
-	  if ((so = socreate()) == NULL)
+	  if ((so = socreate(slirp)) == NULL)
 	    goto dropwithreset;
 	  if (tcp_attach(so) < 0) {
 	    free(so); /* Not sofree (if it failed, it's not insqued) */
@@ -412,9 +367,6 @@ findso:
 
 	  sbreserve(&so->so_snd, TCP_SNDSPACE);
 	  sbreserve(&so->so_rcv, TCP_RCVSPACE);
-
-	  /*		tcp_last_so = so; */  /* XXX ? */
-	  /*		tp = sototcpcb(so);    */
 
 	  so->so_laddr = ti->ti_src;
 	  so->so_lport = ti->ti_sport;
@@ -439,17 +391,12 @@ findso:
 	tp = sototcpcb(so);
 
 	/* XXX Should never fail */
-	if (tp == 0)
+        if (tp == NULL)
 		goto dropwithreset;
 	if (tp->t_state == TCPS_CLOSED)
 		goto drop;
 
-	/* Unscale the window into a 32-bit value. */
-/*	if ((tiflags & TH_SYN) == 0)
- *		tiwin = ti->ti_win << tp->snd_scale;
- *	else
- */
-		tiwin = ti->ti_win;
+	tiwin = ti->ti_win;
 
 	/*
 	 * Segment received on connection.
@@ -467,8 +414,6 @@ findso:
 	 */
 	if (optp && tp->t_state != TCPS_LISTEN)
 		tcp_dooptions(tp, (u_char *)optp, optlen, ti);
-/* , */
-/*			&ts_present, &ts_val, &ts_ecr); */
 
 	/*
 	 * Header prediction: check for the two common cases
@@ -490,20 +435,9 @@ findso:
 	 */
 	if (tp->t_state == TCPS_ESTABLISHED &&
 	    (tiflags & (TH_SYN|TH_FIN|TH_RST|TH_URG|TH_ACK)) == TH_ACK &&
-/*	    (!ts_present || TSTMP_GEQ(ts_val, tp->ts_recent)) && */
 	    ti->ti_seq == tp->rcv_nxt &&
 	    tiwin && tiwin == tp->snd_wnd &&
 	    tp->snd_nxt == tp->snd_max) {
-		/*
-		 * If last ACK falls within this segment's sequence numbers,
-		 *  record the timestamp.
-		 */
-/*		if (ts_present && SEQ_LEQ(ti->ti_seq, tp->last_ack_sent) &&
- *		   SEQ_LT(tp->last_ack_sent, ti->ti_seq + ti->ti_len)) {
- *			tp->ts_recent_age = tcp_now;
- *			tp->ts_recent = ts_val;
- *		}
- */
 		if (ti->ti_len == 0) {
 			if (SEQ_GT(ti->ti_ack, tp->snd_una) &&
 			    SEQ_LEQ(ti->ti_ack, tp->snd_max) &&
@@ -511,16 +445,10 @@ findso:
 				/*
 				 * this is a pure ack for outstanding data.
 				 */
-				STAT(tcpstat.tcps_predack++);
-/*				if (ts_present)
- *					tcp_xmit_timer(tp, tcp_now-ts_ecr+1);
- *				else
- */				     if (tp->t_rtt &&
-					    SEQ_GT(ti->ti_ack, tp->t_rtseq))
+				if (tp->t_rtt &&
+				    SEQ_GT(ti->ti_ack, tp->t_rtseq))
 					tcp_xmit_timer(tp, tp->t_rtt);
 				acked = ti->ti_ack - tp->snd_una;
-				STAT(tcpstat.tcps_rcvackpack++);
-				STAT(tcpstat.tcps_rcvackbyte += acked);
 				sbdrop(&so->so_snd, acked);
 				tp->snd_una = ti->ti_ack;
 				m_freem(m);
@@ -540,13 +468,6 @@ findso:
 					tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
 
 				/*
-				 * There's room in so_snd, sowwakup will read()
-				 * from the socket if we can
-				 */
-/*				if (so->so_snd.sb_flags & SB_NOTIFY)
- *					sowwakeup(so);
- */
-				/*
 				 * This is called because sowwakeup might have
 				 * put data into so_snd.  Since we don't so sowwakeup,
 				 * we don't need this.. XXX???
@@ -564,10 +485,7 @@ findso:
 			 * with nothing on the reassembly queue and
 			 * we have enough buffer space to take it.
 			 */
-			STAT(tcpstat.tcps_preddat++);
 			tp->rcv_nxt += ti->ti_len;
-			STAT(tcpstat.tcps_rcvpack++);
-			STAT(tcpstat.tcps_rcvbyte += ti->ti_len);
 			/*
 			 * Add data to socket buffer.
 			 */
@@ -575,13 +493,6 @@ findso:
 				if (tcp_emu(so,m)) sbappend(so, m);
 			} else
 				sbappend(so, m);
-
-			/*
-			 * XXX This is called when data arrives.  Later, check
-			 * if we can actually write() to the socket
-			 * XXX Need to check? It's be NON_BLOCKING
-			 */
-/*			sorwakeup(so); */
 
 			/*
 			 * If this is a short packet, then ACK now - with Nagel
@@ -642,26 +553,22 @@ findso:
 	   * If this is destined for the control address, then flag to
 	   * tcp_ctl once connected, otherwise connect
 	   */
-	  if ((so->so_faddr.s_addr&htonl(0xffffff00)) == special_addr.s_addr) {
-	    int lastbyte=ntohl(so->so_faddr.s_addr) & 0xff;
-	    if (lastbyte!=CTL_ALIAS && lastbyte!=CTL_DNS) {
-#if 0
-	      if(lastbyte==CTL_CMD || lastbyte==CTL_EXEC) {
-		/* Command or exec adress */
-		so->so_state |= SS_CTL;
-	      } else
-#endif
-              {
+	  if ((so->so_faddr.s_addr & slirp->vnetwork_mask.s_addr) ==
+	      slirp->vnetwork_addr.s_addr) {
+	    if (so->so_faddr.s_addr != slirp->vhost_addr.s_addr &&
+		so->so_faddr.s_addr != slirp->vnameserver_addr.s_addr) {
 		/* May be an add exec */
-		for(ex_ptr = exec_list; ex_ptr; ex_ptr = ex_ptr->ex_next) {
+		for (ex_ptr = slirp->exec_list; ex_ptr;
+		     ex_ptr = ex_ptr->ex_next) {
 		  if(ex_ptr->ex_fport == so->so_fport &&
-		     lastbyte == ex_ptr->ex_addr) {
+		     so->so_faddr.s_addr == ex_ptr->ex_addr.s_addr) {
 		    so->so_state |= SS_CTL;
 		    break;
 		  }
 		}
-	      }
-	      if(so->so_state & SS_CTL) goto cont_input;
+		if (so->so_state & SS_CTL) {
+		    goto cont_input;
+		}
 	    }
 	    /* CTL_ALIAS: Do nothing, tcp_fconnect will be called on it */
 	  }
@@ -719,21 +626,18 @@ findso:
 
 	  if (optp)
 	    tcp_dooptions(tp, (u_char *)optp, optlen, ti);
-	  /* , */
-	  /*				&ts_present, &ts_val, &ts_ecr); */
 
 	  if (iss)
 	    tp->iss = iss;
 	  else
-	    tp->iss = tcp_iss;
-	  tcp_iss += TCP_ISSINCR/2;
+	    tp->iss = slirp->tcp_iss;
+	  slirp->tcp_iss += TCP_ISSINCR/2;
 	  tp->irs = ti->ti_seq;
 	  tcp_sendseqinit(tp);
 	  tcp_rcvseqinit(tp);
 	  tp->t_flags |= TF_ACKNOW;
 	  tp->t_state = TCPS_SYN_RECEIVED;
 	  tp->t_timer[TCPT_KEEP] = TCPTV_KEEP_INIT;
-	  STAT(tcpstat.tcps_accepts++);
 	  goto trimthenstep6;
 	} /* case TCPS_LISTEN */
 
@@ -774,17 +678,9 @@ findso:
 		tcp_rcvseqinit(tp);
 		tp->t_flags |= TF_ACKNOW;
 		if (tiflags & TH_ACK && SEQ_GT(tp->snd_una, tp->iss)) {
-			STAT(tcpstat.tcps_connects++);
 			soisfconnected(so);
 			tp->t_state = TCPS_ESTABLISHED;
 
-			/* Do window scaling on this connection? */
-/*			if ((tp->t_flags & (TF_RCVD_SCALE|TF_REQ_SCALE)) ==
- *				(TF_RCVD_SCALE|TF_REQ_SCALE)) {
- * 				tp->snd_scale = tp->requested_s_scale;
- *				tp->rcv_scale = tp->request_r_scale;
- *			}
- */
 			(void) tcp_reass(tp, (struct tcpiphdr *)0,
 				(struct mbuf *)0);
 			/*
@@ -808,8 +704,6 @@ trimthenstep6:
 			m_adj(m, -todrop);
 			ti->ti_len = tp->rcv_wnd;
 			tiflags &= ~TH_FIN;
-			STAT(tcpstat.tcps_rcvpackafterwin++);
-			STAT(tcpstat.tcps_rcvbyteafterwin += todrop);
 		}
 		tp->snd_wl1 = ti->ti_seq - 1;
 		tp->rcv_up = ti->ti_seq;
@@ -817,40 +711,10 @@ trimthenstep6:
 	} /* switch tp->t_state */
 	/*
 	 * States other than LISTEN or SYN_SENT.
-	 * First check timestamp, if present.
-	 * Then check that at least some bytes of segment are within
+	 * Check that at least some bytes of segment are within
 	 * receive window.  If segment begins before rcv_nxt,
 	 * drop leading data (and SYN); if nothing left, just ack.
-	 *
-	 * RFC 1323 PAWS: If we have a timestamp reply on this segment
-	 * and it's less than ts_recent, drop it.
 	 */
-/*	if (ts_present && (tiflags & TH_RST) == 0 && tp->ts_recent &&
- *	    TSTMP_LT(ts_val, tp->ts_recent)) {
- *
- */		/* Check to see if ts_recent is over 24 days old.  */
-/*		if ((int)(tcp_now - tp->ts_recent_age) > TCP_PAWS_IDLE) {
- */			/*
- *			 * Invalidate ts_recent.  If this segment updates
- *			 * ts_recent, the age will be reset later and ts_recent
- *			 * will get a valid value.  If it does not, setting
- *			 * ts_recent to zero will at least satisfy the
- *			 * requirement that zero be placed in the timestamp
- *			 * echo reply when ts_recent isn't valid.  The
- *			 * age isn't reset until we get a valid ts_recent
- *			 * because we don't want out-of-order segments to be
- *			 * dropped when ts_recent is old.
- *			 */
-/*			tp->ts_recent = 0;
- *		} else {
- *			tcpstat.tcps_rcvduppack++;
- *			tcpstat.tcps_rcvdupbyte += ti->ti_len;
- *			tcpstat.tcps_pawsdrop++;
- *			goto dropafterack;
- *		}
- *	}
- */
-
 	todrop = tp->rcv_nxt - ti->ti_seq;
 	if (todrop > 0) {
 		if (tiflags & TH_SYN) {
@@ -880,11 +744,6 @@ trimthenstep6:
 			 */
 			tp->t_flags |= TF_ACKNOW;
 			todrop = ti->ti_len;
-			STAT(tcpstat.tcps_rcvduppack++);
-			STAT(tcpstat.tcps_rcvdupbyte += todrop);
-		} else {
-			STAT(tcpstat.tcps_rcvpartduppack++);
-			STAT(tcpstat.tcps_rcvpartdupbyte += todrop);
 		}
 		m_adj(m, todrop);
 		ti->ti_seq += todrop;
@@ -903,7 +762,6 @@ trimthenstep6:
 	if ((so->so_state & SS_NOFDREF) &&
 	    tp->t_state > TCPS_CLOSE_WAIT && ti->ti_len) {
 		tp = tcp_close(tp);
-		STAT(tcpstat.tcps_rcvafterclose++);
 		goto dropwithreset;
 	}
 
@@ -913,9 +771,7 @@ trimthenstep6:
 	 */
 	todrop = (ti->ti_seq+ti->ti_len) - (tp->rcv_nxt+tp->rcv_wnd);
 	if (todrop > 0) {
-		STAT(tcpstat.tcps_rcvpackafterwin++);
 		if (todrop >= ti->ti_len) {
-			STAT(tcpstat.tcps_rcvbyteafterwin += ti->ti_len);
 			/*
 			 * If a new connection request is received
 			 * while in TIME_WAIT, drop the old connection
@@ -938,27 +794,14 @@ trimthenstep6:
 			 */
 			if (tp->rcv_wnd == 0 && ti->ti_seq == tp->rcv_nxt) {
 				tp->t_flags |= TF_ACKNOW;
-				STAT(tcpstat.tcps_rcvwinprobe++);
-			} else
+			} else {
 				goto dropafterack;
-		} else
-			STAT(tcpstat.tcps_rcvbyteafterwin += todrop);
+			}
+		}
 		m_adj(m, -todrop);
 		ti->ti_len -= todrop;
 		tiflags &= ~(TH_PUSH|TH_FIN);
 	}
-
-	/*
-	 * If last ACK falls within this segment's sequence numbers,
-	 * record its timestamp.
-	 */
-/*	if (ts_present && SEQ_LEQ(ti->ti_seq, tp->last_ack_sent) &&
- *	    SEQ_LT(tp->last_ack_sent, ti->ti_seq + ti->ti_len +
- *		   ((tiflags & (TH_SYN|TH_FIN)) != 0))) {
- *		tp->ts_recent_age = tcp_now;
- *		tp->ts_recent = ts_val;
- *	}
- */
 
 	/*
 	 * If the RST bit is set examine the state:
@@ -973,17 +816,11 @@ trimthenstep6:
 	if (tiflags&TH_RST) switch (tp->t_state) {
 
 	case TCPS_SYN_RECEIVED:
-/*		so->so_error = ECONNREFUSED; */
-		goto close;
-
 	case TCPS_ESTABLISHED:
 	case TCPS_FIN_WAIT_1:
 	case TCPS_FIN_WAIT_2:
 	case TCPS_CLOSE_WAIT:
-/*		so->so_error = ECONNRESET; */
-	close:
 		tp->t_state = TCPS_CLOSED;
-		STAT(tcpstat.tcps_drops++);
 		tp = tcp_close(tp);
 		goto drop;
 
@@ -1022,7 +859,6 @@ trimthenstep6:
 		if (SEQ_GT(tp->snd_una, ti->ti_ack) ||
 		    SEQ_GT(ti->ti_ack, tp->snd_max))
 			goto dropwithreset;
-		STAT(tcpstat.tcps_connects++);
 		tp->t_state = TCPS_ESTABLISHED;
 		/*
 		 * The sent SYN is ack'ed with our sequence number +1
@@ -1039,7 +875,8 @@ trimthenstep6:
 		    soisfconnected(so);
 		    so->so_state &= ~SS_CTL;   /* success XXX */
 		  } else if (ret == 2) {
-		    so->so_state = SS_NOFDREF; /* CTL_CMD */
+		    so->so_state &= SS_PERSISTENT_MASK;
+		    so->so_state |= SS_NOFDREF; /* CTL_CMD */
 		  } else {
 		    needoutput = 1;
 		    tp->t_state = TCPS_FIN_WAIT_1;
@@ -1048,13 +885,6 @@ trimthenstep6:
 		  soisfconnected(so);
 		}
 
-		/* Do window scaling? */
-/*		if ((tp->t_flags & (TF_RCVD_SCALE|TF_REQ_SCALE)) ==
- *			(TF_RCVD_SCALE|TF_REQ_SCALE)) {
- *			tp->snd_scale = tp->requested_s_scale;
- *			tp->rcv_scale = tp->request_r_scale;
- *		}
- */
 		(void) tcp_reass(tp, (struct tcpiphdr *)0, (struct mbuf *)0);
 		tp->snd_wl1 = ti->ti_seq - 1;
 		/* Avoid ack processing; snd_una==ti_ack  =>  dup ack */
@@ -1079,7 +909,6 @@ trimthenstep6:
 
 		if (SEQ_LEQ(ti->ti_ack, tp->snd_una)) {
 			if (ti->ti_len == 0 && tiwin == tp->snd_wnd) {
-			  STAT(tcpstat.tcps_rcvdupack++);
 			  DEBUG_MISC((dfd," dup ack  m = %lx  so = %lx \n",
 				      (long )m, (long )so));
 				/*
@@ -1147,27 +976,18 @@ trimthenstep6:
 			tp->snd_cwnd = tp->snd_ssthresh;
 		tp->t_dupacks = 0;
 		if (SEQ_GT(ti->ti_ack, tp->snd_max)) {
-			STAT(tcpstat.tcps_rcvacktoomuch++);
 			goto dropafterack;
 		}
 		acked = ti->ti_ack - tp->snd_una;
-		STAT(tcpstat.tcps_rcvackpack++);
-		STAT(tcpstat.tcps_rcvackbyte += acked);
 
 		/*
-		 * If we have a timestamp reply, update smoothed
-		 * round trip time.  If no timestamp is present but
-		 * transmit timer is running and timed sequence
+		 * If transmit timer is running and timed sequence
 		 * number was acked, update smoothed round trip time.
 		 * Since we now have an rtt measurement, cancel the
 		 * timer backoff (cf., Phil Karn's retransmit alg.).
 		 * Recompute the initial retransmit timer.
 		 */
-/*		if (ts_present)
- *			tcp_xmit_timer(tp, tcp_now-ts_ecr+1);
- *		else
- */
-		     if (tp->t_rtt && SEQ_GT(ti->ti_ack, tp->t_rtseq))
+		if (tp->t_rtt && SEQ_GT(ti->ti_ack, tp->t_rtseq))
 			tcp_xmit_timer(tp,tp->t_rtt);
 
 		/*
@@ -1205,13 +1025,6 @@ trimthenstep6:
 			tp->snd_wnd -= acked;
 			ourfinisacked = 0;
 		}
-		/*
-		 * XXX sowwakup is called when data is acked and there's room for
-		 * for more data... it should read() the socket
-		 */
-/*		if (so->so_snd.sb_flags & SB_NOTIFY)
- *			sowwakeup(so);
- */
 		tp->snd_una = ti->ti_ack;
 		if (SEQ_LT(tp->snd_nxt, tp->snd_una))
 			tp->snd_nxt = tp->snd_una;
@@ -1233,7 +1046,6 @@ trimthenstep6:
 				 * we'll hang forever.
 				 */
 				if (so->so_state & SS_FCANTRCVMORE) {
-					soisfdisconnected(so);
 					tp->t_timer[TCPT_2MSL] = TCP_MAXIDLE;
 				}
 				tp->t_state = TCPS_FIN_WAIT_2;
@@ -1251,7 +1063,6 @@ trimthenstep6:
 				tp->t_state = TCPS_TIME_WAIT;
 				tcp_canceltimers(tp);
 				tp->t_timer[TCPT_2MSL] = 2 * TCPTV_MSL;
-				soisfdisconnected(so);
 			}
 			break;
 
@@ -1288,10 +1099,6 @@ step6:
 	    (SEQ_LT(tp->snd_wl1, ti->ti_seq) ||
 	    (tp->snd_wl1 == ti->ti_seq && (SEQ_LT(tp->snd_wl2, ti->ti_ack) ||
 	    (tp->snd_wl2 == ti->ti_ack && tiwin > tp->snd_wnd))))) {
-		/* keep track of pure window updates */
-		if (ti->ti_len == 0 &&
-		    tp->snd_wl2 == ti->ti_ack && tiwin > tp->snd_wnd)
-			STAT(tcpstat.tcps_rcvwinupd++);
 		tp->snd_wnd = tiwin;
 		tp->snd_wl1 = ti->ti_seq;
 		tp->snd_wl2 = ti->ti_ack;
@@ -1384,7 +1191,6 @@ dodata:
 			 * will got to TCPS_LAST_ACK, and use tcp_output()
 			 * to send the FIN.
 			 */
-/*			sofcantrcvmore(so); */
 			sofwdrain(so);
 
 			tp->t_flags |= TF_ACKNOW;
@@ -1421,7 +1227,6 @@ dodata:
 			tp->t_state = TCPS_TIME_WAIT;
 			tcp_canceltimers(tp);
 			tp->t_timer[TCPT_2MSL] = 2 * TCPTV_MSL;
-			soisfdisconnected(so);
 			break;
 
 		/*
@@ -1440,13 +1245,6 @@ dodata:
 	 *
 	 * See above.
 	 */
-/*	if (ti->ti_len && (unsigned)ti->ti_len < tp->t_maxseg) {
- */
-/*	if ((ti->ti_len && (unsigned)ti->ti_len < tp->t_maxseg &&
- *		(so->so_iptos & IPTOS_LOWDELAY) == 0) ||
- *	       ((so->so_iptos & IPTOS_LOWDELAY) &&
- *	       ((struct tcpiphdr_2 *)ti)->first_char == (char)27)) {
- */
 	if (ti->ti_len && (unsigned)ti->ti_len <= 5 &&
 	    ((struct tcpiphdr_2 *)ti)->first_char == (char)27) {
 		tp->t_flags |= TF_ACKNOW;
@@ -1493,10 +1291,6 @@ drop:
 	return;
 }
 
- /* , ts_present, ts_val, ts_ecr) */
-/*	int *ts_present;
- *	u_int32_t *ts_val, *ts_ecr;
- */
 static void
 tcp_dooptions(struct tcpcb *tp, u_char *cp, int cnt, struct tcpiphdr *ti)
 {
@@ -1531,35 +1325,6 @@ tcp_dooptions(struct tcpcb *tp, u_char *cp, int cnt, struct tcpiphdr *ti)
 			NTOHS(mss);
 			(void) tcp_mss(tp, mss);	/* sets t_maxseg */
 			break;
-
-/*		case TCPOPT_WINDOW:
- *			if (optlen != TCPOLEN_WINDOW)
- *				continue;
- *			if (!(ti->ti_flags & TH_SYN))
- *				continue;
- *			tp->t_flags |= TF_RCVD_SCALE;
- *			tp->requested_s_scale = min(cp[2], TCP_MAX_WINSHIFT);
- *			break;
- */
-/*		case TCPOPT_TIMESTAMP:
- *			if (optlen != TCPOLEN_TIMESTAMP)
- *				continue;
- *			*ts_present = 1;
- *			memcpy((char *) ts_val, (char *)cp + 2, sizeof(*ts_val));
- *			NTOHL(*ts_val);
- *			memcpy((char *) ts_ecr, (char *)cp + 6, sizeof(*ts_ecr));
- *			NTOHL(*ts_ecr);
- *
- */			/*
- *			 * A timestamp received in a SYN makes
- *			 * it ok to send timestamp requests and replies.
- *			 */
-/*			if (ti->ti_flags & TH_SYN) {
- *				tp->t_flags |= TF_RCVD_TSTMP;
- *				tp->ts_recent = *ts_val;
- *				tp->ts_recent_age = tcp_now;
- *			}
- */			break;
 		}
 	}
 }
@@ -1617,7 +1382,6 @@ tcp_xmit_timer(register struct tcpcb *tp, int rtt)
 	DEBUG_ARG("tp = %lx", (long)tp);
 	DEBUG_ARG("rtt = %d", rtt);
 
-	STAT(tcpstat.tcps_rttupdated++);
 	if (tp->t_srtt != 0) {
 		/*
 		 * srtt is stored as fixed point with 3 bits after the
@@ -1697,9 +1461,7 @@ tcp_xmit_timer(register struct tcpcb *tp, int rtt)
  */
 
 int
-tcp_mss(tp, offer)
-        register struct tcpcb *tp;
-        u_int offer;
+tcp_mss(struct tcpcb *tp, u_int offer)
 {
 	struct socket *so = tp->t_socket;
 	int mss;

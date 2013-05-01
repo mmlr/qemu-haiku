@@ -33,10 +33,10 @@
 //#define DEBUG_APB
 
 #ifdef DEBUG_APB
-#define APB_DPRINTF(fmt, args...) \
-do { printf("APB: " fmt , ##args); } while (0)
+#define APB_DPRINTF(fmt, ...) \
+do { printf("APB: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define APB_DPRINTF(fmt, args...)
+#define APB_DPRINTF(fmt, ...)
 #endif
 
 typedef target_phys_addr_t pci_addr_t;
@@ -148,26 +148,26 @@ static CPUReadMemoryFunc *pci_apb_read[] = {
 static void pci_apb_iowriteb (void *opaque, target_phys_addr_t addr,
                                   uint32_t val)
 {
-    cpu_outb(NULL, addr & 0xffff, val);
+    cpu_outb(NULL, addr & IOPORTS_MASK, val);
 }
 
 static void pci_apb_iowritew (void *opaque, target_phys_addr_t addr,
                                   uint32_t val)
 {
-    cpu_outw(NULL, addr & 0xffff, val);
+    cpu_outw(NULL, addr & IOPORTS_MASK, val);
 }
 
 static void pci_apb_iowritel (void *opaque, target_phys_addr_t addr,
                                 uint32_t val)
 {
-    cpu_outl(NULL, addr & 0xffff, val);
+    cpu_outl(NULL, addr & IOPORTS_MASK, val);
 }
 
 static uint32_t pci_apb_ioreadb (void *opaque, target_phys_addr_t addr)
 {
     uint32_t val;
 
-    val = cpu_inb(NULL, addr & 0xffff);
+    val = cpu_inb(NULL, addr & IOPORTS_MASK);
     return val;
 }
 
@@ -175,7 +175,7 @@ static uint32_t pci_apb_ioreadw (void *opaque, target_phys_addr_t addr)
 {
     uint32_t val;
 
-    val = cpu_inw(NULL, addr & 0xffff);
+    val = cpu_inw(NULL, addr & IOPORTS_MASK);
     return val;
 }
 
@@ -183,7 +183,7 @@ static uint32_t pci_apb_ioreadl (void *opaque, target_phys_addr_t addr)
 {
     uint32_t val;
 
-    val = cpu_inl(NULL, addr & 0xffff);
+    val = cpu_inl(NULL, addr & IOPORTS_MASK);
     return val;
 }
 
@@ -231,15 +231,16 @@ PCIBus *pci_apb_init(target_phys_addr_t special_base,
 
     s = qemu_mallocz(sizeof(APBState));
     /* Ultrasparc PBM main bus */
-    s->bus = pci_register_bus(pci_apb_set_irq, pci_pbm_map_irq, pic, 0, 32);
+    s->bus = pci_register_bus(NULL, "pci",
+                              pci_apb_set_irq, pci_pbm_map_irq, pic, 0, 32);
 
-    pci_mem_config = cpu_register_io_memory(0, pci_apb_config_read,
+    pci_mem_config = cpu_register_io_memory(pci_apb_config_read,
                                             pci_apb_config_write, s);
-    apb_config = cpu_register_io_memory(0, apb_config_read,
+    apb_config = cpu_register_io_memory(apb_config_read,
                                         apb_config_write, s);
-    pci_mem_data = cpu_register_io_memory(0, pci_apb_read,
+    pci_mem_data = cpu_register_io_memory(pci_apb_read,
                                           pci_apb_write, s);
-    pci_ioport = cpu_register_io_memory(0, pci_apb_ioread,
+    pci_ioport = cpu_register_io_memory(pci_apb_ioread,
                                           pci_apb_iowrite, s);
 
     cpu_register_physical_memory(special_base + 0x2000ULL, 0x40, apb_config);
@@ -262,7 +263,7 @@ PCIBus *pci_apb_init(target_phys_addr_t special_base,
     d->config[0x09] = 0x00; // programming i/f
     pci_config_set_class(d->config, PCI_CLASS_BRIDGE_HOST);
     d->config[0x0D] = 0x10; // latency_timer
-    d->config[0x0E] = 0x00; // header_type
+    d->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
 
     /* APB secondary busses */
     *bus2 = pci_bridge_init(s->bus, 8, PCI_VENDOR_ID_SUN,

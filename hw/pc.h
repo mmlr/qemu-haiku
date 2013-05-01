@@ -1,5 +1,8 @@
 #ifndef HW_PC_H
 #define HW_PC_H
+
+#include "qemu-common.h"
+
 /* PC-style peripherals (also used by other machines).  */
 
 /* serial.c */
@@ -34,12 +37,15 @@ void pic_set_alt_irq_func(PicState2 *s, SetIRQFunc *alt_irq_func,
 int pic_read_irq(PicState2 *s);
 void pic_update_irq(PicState2 *s);
 uint32_t pic_intack_read(PicState2 *s);
-void pic_info(void);
-void irq_info(void);
+void pic_info(Monitor *mon);
+void irq_info(Monitor *mon);
 
 /* APIC */
 typedef struct IOAPICState IOAPICState;
-
+void apic_deliver_irq(uint8_t dest, uint8_t dest_mode,
+                             uint8_t delivery_mode,
+                             uint8_t vector_num, uint8_t polarity,
+                             uint8_t trigger_mode);
 int apic_init(CPUState *env);
 int apic_accept_pic_intr(CPUState *env);
 void apic_deliver_pic_intr(CPUState *env, int level);
@@ -84,6 +90,7 @@ void i8042_mm_init(qemu_irq kbd_irq, qemu_irq mouse_irq,
 typedef struct RTCState RTCState;
 
 RTCState *rtc_init(int base, qemu_irq irq, int base_year);
+RTCState *rtc_init_sqw(int base, qemu_irq irq, qemu_irq sqw_irq, int base_year);
 RTCState *rtc_mm_init(target_phys_addr_t base, int it_shift, qemu_irq irq,
                       int base_year);
 void rtc_set_memory(RTCState *s, int addr, int val);
@@ -98,18 +105,24 @@ int ioport_get_a20(void);
 
 /* acpi.c */
 extern int acpi_enabled;
+extern char *acpi_tables;
+extern size_t acpi_tables_len;
+
+void acpi_bios_init(void);
+int acpi_table_add(const char *table_desc);
+
+/* acpi_piix.c */
 i2c_bus *piix4_pm_init(PCIBus *bus, int devfn, uint32_t smb_io_base,
                        qemu_irq sci_irq);
 void piix4_smbus_register_device(SMBusDevice *dev, uint8_t addr);
-void acpi_bios_init(void);
-int acpi_table_add(const char *table_desc);
+void piix4_acpi_system_hot_add_init(void);
 
 /* hpet.c */
 extern int no_hpet;
 
 /* pcspk.c */
 void pcspk_init(PITState *);
-int pcspk_audio_init(AudioState *, qemu_irq *pic);
+int pcspk_audio_init(qemu_irq *pic);
 
 /* piix_pci.c */
 PCIBus *i440fx_init(PCIDevice **pi440fx_state, qemu_irq *pic);
@@ -128,27 +141,15 @@ enum vga_retrace_method {
 
 extern enum vga_retrace_method vga_retrace_method;
 
-#if !defined(TARGET_SPARC) || defined(TARGET_SPARC64)
-#define VGA_RAM_SIZE (8192 * 1024)
-#else
-#define VGA_RAM_SIZE (9 * 1024 * 1024)
-#endif
-
-int isa_vga_init(uint8_t *vga_ram_base,
-                 unsigned long vga_ram_offset, int vga_ram_size);
-int pci_vga_init(PCIBus *bus, uint8_t *vga_ram_base,
-                 unsigned long vga_ram_offset, int vga_ram_size,
+int isa_vga_init(void);
+int pci_vga_init(PCIBus *bus,
                  unsigned long vga_bios_offset, int vga_bios_size);
-int isa_vga_mm_init(uint8_t *vga_ram_base,
-                    unsigned long vga_ram_offset, int vga_ram_size,
-                    target_phys_addr_t vram_base, target_phys_addr_t ctrl_base,
-                    int it_shift);
+int isa_vga_mm_init(target_phys_addr_t vram_base,
+                    target_phys_addr_t ctrl_base, int it_shift);
 
 /* cirrus_vga.c */
-void pci_cirrus_vga_init(PCIBus *bus, uint8_t *vga_ram_base,
-                         ram_addr_t vga_ram_offset, int vga_ram_size);
-void isa_cirrus_vga_init(uint8_t *vga_ram_base,
-                         ram_addr_t vga_ram_offset, int vga_ram_size);
+void pci_cirrus_vga_init(PCIBus *bus);
+void isa_cirrus_vga_init(void);
 
 /* ide.c */
 void isa_ide_init(int iobase, int iobase2, qemu_irq irq,
@@ -164,4 +165,5 @@ void pci_piix4_ide_init(PCIBus *bus, BlockDriverState **hd_table, int devfn,
 
 void isa_ne2000_init(int base, qemu_irq irq, NICInfo *nd);
 
+int cpu_is_bsp(CPUState *env);
 #endif

@@ -1,19 +1,24 @@
 # Makefile for QEMU.
 
+ifneq ($(wildcard config-host.mak),)
+# Put the all: rule here so that config-host.mak can contain dependencies.
+all: build-all
 include config-host.mak
 include $(SRC_PATH)/rules.mak
+else
+config-host.mak:
+	@echo "Please call configure before running make!"
+	@exit 1
+endif
 
 .PHONY: all clean cscope distclean dvi html info install install-doc \
 	recurse-all speed tar tarbin test
 
 VPATH=$(SRC_PATH):$(SRC_PATH)/hw
 
-
-CFLAGS += $(OS_CFLAGS) $(ARCH_CFLAGS)
-LDFLAGS += $(OS_LDFLAGS) $(ARCH_LDFLAGS)
-
 CPPFLAGS += -I. -I$(SRC_PATH) -MMD -MP -MT $@
 CPPFLAGS += -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
+CPPFLAGS += -U_FORTIFY_SOURCE
 LIBS=
 ifdef CONFIG_STATIC
 LDFLAGS += -static
@@ -24,7 +29,8 @@ else
 DOCS=
 endif
 
-LIBS+=$(AIOLIBS)
+LIBS+=$(PTHREADLIBS)
+LIBS+=$(CLOCKLIBS)
 
 ifdef CONFIG_SOLARIS
 LIBS+=-lsocket -lnsl -lresolv
@@ -34,35 +40,55 @@ ifdef CONFIG_WIN32
 LIBS+=-lwinmm -lws2_32 -liphlpapi
 endif
 
-all: $(TOOLS) $(DOCS) recurse-all
+build-all: $(TOOLS) $(DOCS) recurse-all
 
+config-host.mak: configure
+ifneq ($(wildcard config-host.mak),)
+	@echo $@ is out-of-date, running configure
+	@sed -n "/.*Configured with/s/[^:]*: //p" $@ | sh
+endif
+
+SUBDIR_MAKEFLAGS=$(if $(V),,--no-print-directory)
 SUBDIR_RULES=$(patsubst %,subdir-%, $(TARGET_DIRS))
 
 subdir-%:
-	$(call quiet-command,$(MAKE) -C $* V="$(V)" TARGET_DIR="$*/" all,)
+	$(call quiet-command,$(MAKE) $(SUBDIR_MAKEFLAGS) -C $* V="$(V)" TARGET_DIR="$*/" all,)
 
 $(filter %-softmmu,$(SUBDIR_RULES)): libqemu_common.a
 $(filter %-user,$(SUBDIR_RULES)): libqemu_user.a
 
-recurse-all: $(SUBDIR_RULES)
+
+ROMSUBDIR_RULES=$(patsubst %,romsubdir-%, $(ROMS))
+romsubdir-%:
+	$(call quiet-command,$(MAKE) $(SUBDIR_MAKEFLAGS) -C pc-bios/$* V="$(V)" TARGET_DIR="$*/",)
+
+ALL_SUBDIRS=$(TARGET_DIRS) $(patsubst %,pc-bios/%, $(ROMS))
+
+recurse-all: $(SUBDIR_RULES) $(ROMSUBDIR_RULES)
 
 #######################################################################
-# BLOCK_OBJS is code used by both qemu system emulation and qemu-img
+# block-obj-y is code used by both qemu system emulation and qemu-img
 
-BLOCK_OBJS=cutils.o qemu-malloc.o
-BLOCK_OBJS+=block-cow.o block-qcow.o aes.o block-vmdk.o block-cloop.o
-BLOCK_OBJS+=block-dmg.o block-bochs.o block-vpc.o block-vvfat.o
-BLOCK_OBJS+=block-qcow2.o block-parallels.o block-nbd.o
-BLOCK_OBJS+=nbd.o block.o aio.o
+block-obj-y = cutils.o cache-utils.o qemu-malloc.o qemu-option.o module.o
+block-obj-y += nbd.o block.o aio.o aes.o
+
+block-nested-y += cow.o qcow.o vmdk.o cloop.o dmg.o bochs.o vpc.o vvfat.o
+block-nested-y += qcow2.o qcow2-refcount.o qcow2-cluster.o qcow2-snapshot.o
+block-nested-y += parallels.o nbd.o
+
 
 ifdef CONFIG_WIN32
-BLOCK_OBJS += block-raw-win32.o
+block-nested-y += raw-win32.o
 else
 ifdef CONFIG_AIO
-BLOCK_OBJS += posix-aio-compat.o
+block-obj-y += posix-aio-compat.o
 endif
-BLOCK_OBJS += block-raw-posix.o
+block-nested-y += raw-posix.o
 endif
+
+block-nested-$(CONFIG_CURL) += curl.o
+
+block-obj-y +=  $(addprefix block/, $(block-nested-y))
 
 ######################################################################
 # libqemu_common.a: Target independent part of system emulation. The
@@ -70,87 +96,77 @@ endif
 # system emulation, i.e. a single QEMU executable should support all
 # CPUs and machines.
 
-OBJS=$(BLOCK_OBJS)
-OBJS+=readline.o console.o
+obj-y = $(block-obj-y)
+obj-y += readline.o console.o
 
-OBJS+=irq.o
-OBJS+=i2c.o smbus.o smbus_eeprom.o max7310.o max111x.o wm8750.o
-OBJS+=ssd0303.o ssd0323.o ads7846.o stellaris_input.o twl92230.o
-OBJS+=tmp105.o lm832x.o
-OBJS+=scsi-disk.o cdrom.o
-OBJS+=scsi-generic.o
-OBJS+=usb.o usb-hub.o usb-$(HOST_USB).o usb-hid.o usb-msd.o usb-wacom.o
-OBJS+=usb-serial.o usb-net.o
-OBJS+=sd.o ssi-sd.o
-OBJS+=bt.o bt-host.o bt-vhci.o bt-l2cap.o bt-sdp.o bt-hci.o bt-hid.o usb-bt.o
-OBJS+=buffered_file.o migration.o migration-tcp.o net.o qemu-sockets.o
-OBJS+=qemu-char.o aio.o net-checksum.o savevm.o cache-utils.o
+obj-y += irq.o ptimer.o
+obj-y += i2c.o smbus.o smbus_eeprom.o max7310.o max111x.o wm8750.o
+obj-y += ssd0303.o ssd0323.o ads7846.o stellaris_input.o twl92230.o
+obj-y += tmp105.o lm832x.o eeprom93xx.o tsc2005.o
+obj-y += scsi-disk.o cdrom.o
+obj-y += scsi-generic.o
+obj-y += usb.o usb-hub.o usb-$(HOST_USB).o usb-hid.o usb-msd.o usb-wacom.o
+obj-y += usb-serial.o usb-net.o
+obj-y += sd.o ssi-sd.o
+obj-y += bt.o bt-host.o bt-vhci.o bt-l2cap.o bt-sdp.o bt-hci.o bt-hid.o usb-bt.o
+obj-y += bt-hci-csr.o
+obj-y += buffered_file.o migration.o migration-tcp.o net.o qemu-sockets.o
+obj-y += qemu-char.o aio.o net-checksum.o savevm.o
+obj-y += msmouse.o ps2.o
+obj-y += qdev.o qdev-properties.o ssi.o
+
+obj-$(CONFIG_BRLAPI) += baum.o
 
 ifdef CONFIG_BRLAPI
-OBJS+= baum.o
 LIBS+=-lbrlapi
 endif
 
 ifdef CONFIG_WIN32
-OBJS+=tap-win32.o
+obj-y += tap-win32.o
 else
-OBJS+=migration-exec.o
+obj-y += migration-exec.o
 endif
 
-AUDIO_OBJS = audio.o noaudio.o wavaudio.o mixeng.o
-ifdef CONFIG_SDL
-AUDIO_OBJS += sdlaudio.o
-endif
-ifdef CONFIG_OSS
-AUDIO_OBJS += ossaudio.o
-endif
 ifdef CONFIG_COREAUDIO
-AUDIO_OBJS += coreaudio.o
-AUDIO_PT = yes
-endif
-ifdef CONFIG_HAIKU
-AUDIO_OBJS += haikuaudio.o
-endif
-ifdef CONFIG_ALSA
-AUDIO_OBJS += alsaaudio.o
-endif
-ifdef CONFIG_DSOUND
-AUDIO_OBJS += dsoundaudio.o
+AUDIO_PT = y
 endif
 ifdef CONFIG_FMOD
-AUDIO_OBJS += fmodaudio.o
 audio/audio.o audio/fmodaudio.o: CPPFLAGS := -I$(CONFIG_FMOD_INC) $(CPPFLAGS)
 endif
 ifdef CONFIG_ESD
-AUDIO_PT = yes
-AUDIO_PT_INT = yes
-AUDIO_OBJS += esdaudio.o
+AUDIO_PT = y
+AUDIO_PT_INT = y
 endif
 ifdef CONFIG_PA
-AUDIO_PT = yes
-AUDIO_PT_INT = yes
-AUDIO_OBJS += paaudio.o
+AUDIO_PT = y
+AUDIO_PT_INT = y
 endif
 ifdef AUDIO_PT
 LDFLAGS += -pthread
 endif
-ifdef AUDIO_PT_INT
-AUDIO_OBJS += audio_pt_int.o
-endif
-AUDIO_OBJS+= wavcapture.o
-OBJS+=$(addprefix audio/, $(AUDIO_OBJS))
 
-ifdef CONFIG_SDL
-OBJS+=sdl.o x_keymap.o
-endif
-ifdef CONFIG_CURSES
-OBJS+=curses.o
-endif
-OBJS+=vnc.o d3des.o
+audio-obj-y = audio.o noaudio.o wavaudio.o mixeng.o
+audio-obj-$(CONFIG_SDL) += sdlaudio.o
+audio-obj-$(CONFIG_OSS) += ossaudio.o
+audio-obj-$(CONFIG_COREAUDIO) += coreaudio.o
+audio-obj-$(CONFIG_HAIKU) += haikuaudio.o
+audio-obj-$(CONFIG_ALSA) += alsaaudio.o
+audio-obj-$(CONFIG_DSOUND) += dsoundaudio.o
+audio-obj-$(CONFIG_FMOD) += fmodaudio.o
+audio-obj-$(CONFIG_ESD) += esdaudio.o
+audio-obj-$(CONFIG_PA) += paaudio.o
+audio-obj-$(AUDIO_PT_INT) += audio_pt_int.o
+audio-obj-y += wavcapture.o
+obj-y += $(addprefix audio/, $(audio-obj-y))
 
-ifdef CONFIG_COCOA
-OBJS+=cocoa.o
-endif
+obj-y += keymaps.o
+obj-$(CONFIG_SDL) += sdl.o sdl_zoom.o x_keymap.o
+obj-$(CONFIG_CURSES) += curses.o
+obj-y += vnc.o acl.o d3des.o
+obj-$(CONFIG_VNC_TLS) += vnc-tls.o vnc-auth-vencrypt.o
+obj-$(CONFIG_VNC_SASL) += vnc-auth-sasl.o
+obj-$(CONFIG_COCOA) += cocoa.o
+obj-$(CONFIG_IOTHREAD) += qemu-thread.o
 
 ifdef CONFIG_HAIKU
 OBJS+=haiku.o
@@ -158,58 +174,87 @@ endif
 
 ifdef CONFIG_SLIRP
 CPPFLAGS+=-I$(SRC_PATH)/slirp
-SLIRP_OBJS=cksum.o if.o ip_icmp.o ip_input.o ip_output.o \
-slirp.o mbuf.o misc.o sbuf.o socket.o tcp_input.o tcp_output.o \
-tcp_subr.o tcp_timer.o udp.o bootp.o debug.o tftp.o
-OBJS+=$(addprefix slirp/, $(SLIRP_OBJS))
 endif
+
+slirp-obj-y = cksum.o if.o ip_icmp.o ip_input.o ip_output.o
+slirp-obj-y += slirp.o mbuf.o misc.o sbuf.o socket.o tcp_input.o tcp_output.o
+slirp-obj-y += tcp_subr.o tcp_timer.o udp.o bootp.o tftp.o
+obj-$(CONFIG_SLIRP) += $(addprefix slirp/, $(slirp-obj-y))
 
 LIBS+=$(VDE_LIBS)
 
+# xen backend driver support
+obj-$(CONFIG_XEN) += xen_backend.o xen_devconfig.o
+obj-$(CONFIG_XEN) += xen_console.o xenfb.o xen_disk.o xen_nic.o
+
+LIBS+=$(CURL_LIBS)
+
 cocoa.o: cocoa.m
 
-sdl.o: sdl.c keymaps.c sdl_keysym.h
+keymaps.o: keymaps.c keymaps.h
 
-sdl.o audio/sdlaudio.o: CFLAGS += $(SDL_CFLAGS)
+sdl_zoom.o: sdl_zoom.c sdl_zoom.h sdl_zoom_template.h
 
-vnc.o: vnc.c keymaps.c sdl_keysym.h vnchextile.h d3des.c d3des.h
+sdl.o: sdl.c keymaps.h sdl_keysym.h sdl_zoom.h
+
+sdl.o audio/sdlaudio.o sdl_zoom.o baum.o: CFLAGS += $(SDL_CFLAGS)
+
+acl.o: acl.h acl.c
+
+vnc.h: vnc-tls.h vnc-auth-vencrypt.h vnc-auth-sasl.h keymaps.h
+
+vnc.o: vnc.c vnc.h vnc_keysym.h vnchextile.h d3des.c d3des.h acl.h
 
 vnc.o: CFLAGS += $(CONFIG_VNC_TLS_CFLAGS)
 
-curses.o: curses.c keymaps.c curses_keys.h
+vnc-tls.o: vnc-tls.c vnc.h
+
+vnc-auth-vencrypt.o: vnc-auth-vencrypt.c vnc.h
+
+vnc-auth-sasl.o: vnc-auth-sasl.c vnc.h
+
+curses.o: curses.c keymaps.h curses_keys.h
 
 bt-host.o: CFLAGS += $(CONFIG_BLUEZ_CFLAGS)
 
-libqemu_common.a: $(OBJS)
+libqemu_common.a: $(obj-y)
 
 #######################################################################
-# USER_OBJS is code used by qemu userspace emulation
-USER_OBJS=cutils.o  cache-utils.o
+# user-obj-y is code used by qemu userspace emulation
+user-obj-y = cutils.o cache-utils.o
 
-libqemu_user.a: $(USER_OBJS)
+libqemu_user.a: $(user-obj-y)
 
 ######################################################################
 
-qemu-img$(EXESUF): qemu-img.o qemu-tool.o osdep.o $(BLOCK_OBJS)
+qemu-img.o: qemu-img-cmds.h
 
-qemu-nbd$(EXESUF):  qemu-nbd.o qemu-tool.o osdep.o $(BLOCK_OBJS)
+qemu-img$(EXESUF): qemu-img.o qemu-tool.o tool-osdep.o $(block-obj-y)
 
-qemu-img$(EXESUF) qemu-nbd$(EXESUF): LIBS += -lz
+qemu-nbd$(EXESUF):  qemu-nbd.o qemu-tool.o tool-osdep.o $(block-obj-y)
+
+qemu-io$(EXESUF):  qemu-io.o qemu-tool.o tool-osdep.o cmd.o $(block-obj-y)
+
+qemu-img$(EXESUF) qemu-nbd$(EXESUF) qemu-io$(EXESUF): LIBS += -lz
+
+qemu-img-cmds.h: $(SRC_PATH)/qemu-img-cmds.hx
+	$(call quiet-command,sh $(SRC_PATH)/hxtool -h < $< > $@,"  GEN   $@")
 
 clean:
 # avoid old build problems by removing potentially incorrect old files
 	rm -f config.mak config.h op-i386.h opc-i386.h gen-op-i386.h op-arm.h opc-arm.h gen-op-arm.h
 	rm -f *.o *.d *.a $(TOOLS) TAGS cscope.* *.pod *~ */*~
-	rm -f slirp/*.o slirp/*.d audio/*.o audio/*.d
+	rm -f slirp/*.o slirp/*.d audio/*.o audio/*.d block/*.o block/*.d
+	rm -f qemu-img-cmds.h
 	$(MAKE) -C tests clean
-	for d in $(TARGET_DIRS); do \
+	for d in $(ALL_SUBDIRS) libhw32 libhw64; do \
 	$(MAKE) -C $$d $@ || exit 1 ; \
         done
 
 distclean: clean
-	rm -f config-host.mak config-host.h $(DOCS)
+	rm -f config-host.mak config-host.h $(DOCS) qemu-options.texi qemu-img-cmds.texi
 	rm -f qemu-{doc,tech}.{info,aux,cp,dvi,fn,info,ky,log,pg,toc,tp,vr}
-	for d in $(TARGET_DIRS); do \
+	for d in $(TARGET_DIRS) libhw32 libhw64; do \
 	rm -rf $$d || exit 1 ; \
         done
 
@@ -221,40 +266,37 @@ ifdef INSTALL_BLOBS
 BLOBS=bios.bin vgabios.bin vgabios-cirrus.bin ppc_rom.bin \
 video.x openbios-sparc32 openbios-sparc64 openbios-ppc \
 pxe-ne2k_pci.bin pxe-rtl8139.bin pxe-pcnet.bin pxe-e1000.bin \
-bamboo.dtb
+bamboo.dtb petalogix-s3adsp1800.dtb \
+multiboot.bin
 else
 BLOBS=
 endif
 
 install-doc: $(DOCS)
-	mkdir -p "$(DESTDIR)$(docdir)"
-	$(INSTALL) -m 644 qemu-doc.html  qemu-tech.html "$(DESTDIR)$(docdir)"
+	$(INSTALL_DIR) "$(DESTDIR)$(docdir)"
+	$(INSTALL_DATA) qemu-doc.html  qemu-tech.html "$(DESTDIR)$(docdir)"
 ifndef CONFIG_WIN32
-	mkdir -p "$(DESTDIR)$(mandir)/man1"
-	$(INSTALL) -m 644 qemu.1 qemu-img.1 "$(DESTDIR)$(mandir)/man1"
-	mkdir -p "$(DESTDIR)$(mandir)/man8"
-	$(INSTALL) -m 644 qemu-nbd.8 "$(DESTDIR)$(mandir)/man8"
+	$(INSTALL_DIR) "$(DESTDIR)$(mandir)/man1"
+	$(INSTALL_DATA) qemu.1 qemu-img.1 "$(DESTDIR)$(mandir)/man1"
+	$(INSTALL_DIR) "$(DESTDIR)$(mandir)/man8"
+	$(INSTALL_DATA) qemu-nbd.8 "$(DESTDIR)$(mandir)/man8"
 endif
 
 install: all $(if $(BUILD_DOCS),install-doc)
-	mkdir -p "$(DESTDIR)$(bindir)"
+	$(INSTALL_DIR) "$(DESTDIR)$(bindir)"
 ifneq ($(TOOLS),)
-	$(INSTALL) -m 755 -s $(TOOLS) "$(DESTDIR)$(bindir)"
+	$(INSTALL_PROG) $(STRIP_OPT) $(TOOLS) "$(DESTDIR)$(bindir)"
 endif
 ifneq ($(BLOBS),)
-	mkdir -p "$(DESTDIR)$(datadir)"
+	$(INSTALL_DIR) "$(DESTDIR)$(datadir)"
 	set -e; for x in $(BLOBS); do \
-		$(INSTALL) -m 644 $(SRC_PATH)/pc-bios/$$x "$(DESTDIR)$(datadir)"; \
+		$(INSTALL_DATA) $(SRC_PATH)/pc-bios/$$x "$(DESTDIR)$(datadir)"; \
 	done
 endif
-ifndef CONFIG_HAIKU
-ifndef CONFIG_WIN32
-	mkdir -p "$(DESTDIR)$(datadir)/keymaps"
+	$(INSTALL_DIR) "$(DESTDIR)$(datadir)/keymaps"
 	set -e; for x in $(KEYMAPS); do \
-		$(INSTALL) -m 644 $(SRC_PATH)/keymaps/$$x "$(DESTDIR)$(datadir)/keymaps"; \
+		$(INSTALL_DATA) $(SRC_PATH)/pc-bios/keymaps/$$x "$(DESTDIR)$(datadir)/keymaps"; \
 	done
-endif
-endif
 	for d in $(TARGET_DIRS); do \
 	$(MAKE) -C $$d $@ || exit 1 ; \
         done
@@ -264,7 +306,7 @@ test speed: all
 	$(MAKE) -C tests $@
 
 TAGS:
-	etags *.[ch] tests/*.[ch]
+	etags *.[ch] tests/*.[ch] block/*.[ch] hw/*.[ch]
 
 cscope:
 	rm -f ./cscope.*
@@ -273,25 +315,40 @@ cscope:
 
 # documentation
 %.html: %.texi
-	texi2html -monolithic -number $<
+	$(call quiet-command,texi2html -I=. -monolithic -number $<,"  GEN   $@")
 
 %.info: %.texi
-	makeinfo $< -o $@
+	$(call quiet-command,makeinfo -I . $< -o $@,"  GEN   $@")
 
 %.dvi: %.texi
-	texi2dvi $<
+	$(call quiet-command,texi2dvi -I . $<,"  GEN   $@")
 
-qemu.1: qemu-doc.texi
-	$(SRC_PATH)/texi2pod.pl $< qemu.pod
-	pod2man --section=1 --center=" " --release=" " qemu.pod > $@
+qemu-options.texi: $(SRC_PATH)/qemu-options.hx
+	$(call quiet-command,sh $(SRC_PATH)/hxtool -t < $< > $@,"  GEN   $@")
 
-qemu-img.1: qemu-img.texi
-	$(SRC_PATH)/texi2pod.pl $< qemu-img.pod
-	pod2man --section=1 --center=" " --release=" " qemu-img.pod > $@
+qemu-monitor.texi: $(SRC_PATH)/qemu-monitor.hx
+	$(call quiet-command,sh $(SRC_PATH)/hxtool -t < $< > $@,"  GEN   $@")
+
+qemu-img-cmds.texi: $(SRC_PATH)/qemu-img-cmds.hx
+	$(call quiet-command,sh $(SRC_PATH)/hxtool -t < $< > $@,"  GEN   $@")
+
+qemu.1: qemu-doc.texi qemu-options.texi qemu-monitor.texi
+	$(call quiet-command, \
+	  perl -Ww -- $(SRC_PATH)/texi2pod.pl $< qemu.pod && \
+	  pod2man --section=1 --center=" " --release=" " qemu.pod > $@, \
+	  "  GEN   $@")
+
+qemu-img.1: qemu-img.texi qemu-img-cmds.texi
+	$(call quiet-command, \
+	  perl -Ww -- $(SRC_PATH)/texi2pod.pl $< qemu-img.pod && \
+	  pod2man --section=1 --center=" " --release=" " qemu-img.pod > $@, \
+	  "  GEN   $@")
 
 qemu-nbd.8: qemu-nbd.texi
-	$(SRC_PATH)/texi2pod.pl $< qemu-nbd.pod
-	pod2man --section=8 --center=" " --release=" " qemu-nbd.pod > $@
+	$(call quiet-command, \
+	  perl -Ww -- $(SRC_PATH)/texi2pod.pl $< qemu-nbd.pod && \
+	  pod2man --section=8 --center=" " --release=" " qemu-nbd.pod > $@, \
+	  "  GEN   $@")
 
 info: qemu-doc.info qemu-tech.info
 
@@ -299,7 +356,7 @@ dvi: qemu-doc.dvi qemu-tech.dvi
 
 html: qemu-doc.html qemu-tech.html
 
-qemu-doc.dvi qemu-doc.html qemu-doc.info: qemu-img.texi qemu-nbd.texi
+qemu-doc.dvi qemu-doc.html qemu-doc.info: qemu-img.texi qemu-nbd.texi qemu-options.texi qemu-monitor.texi qemu-img-cmds.texi
 
 VERSION ?= $(shell cat VERSION)
 FILE = qemu-$(VERSION)
@@ -367,4 +424,4 @@ tarbin:
 	$(mandir)/man8/qemu-nbd.8
 
 # Include automatically generated dependency files
--include $(wildcard *.d audio/*.d slirp/*.d)
+-include $(wildcard *.d audio/*.d slirp/*.d block/*.d)

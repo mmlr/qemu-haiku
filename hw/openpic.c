@@ -40,11 +40,10 @@
 //#define DEBUG_OPENPIC
 
 #ifdef DEBUG_OPENPIC
-#define DPRINTF(fmt, args...) do { printf(fmt , ##args); } while (0)
+#define DPRINTF(fmt, ...) do { printf(fmt , ## __VA_ARGS__); } while (0)
 #else
-#define DPRINTF(fmt, args...) do { } while (0)
+#define DPRINTF(fmt, ...) do { } while (0)
 #endif
-#define ERROR(fmr, args...) do { printf("ERROR: " fmr , ##args); } while (0)
 
 #define USE_MPCxxx /* Intel model is broken, for now */
 
@@ -593,7 +592,7 @@ static void openpic_gbl_write (void *opaque, target_phys_addr_t addr, uint32_t v
     IRQ_dst_t *dst;
     int idx;
 
-    DPRINTF("%s: addr %08x <= %08x\n", __func__, addr, val);
+    DPRINTF("%s: addr " TARGET_FMT_plx " <= %08x\n", __func__, addr, val);
     if (addr & 0xF)
         return;
 #if defined TARGET_WORDS_BIGENDIAN
@@ -652,7 +651,7 @@ static uint32_t openpic_gbl_read (void *opaque, target_phys_addr_t addr)
     openpic_t *opp = opaque;
     uint32_t retval;
 
-    DPRINTF("%s: addr %08x\n", __func__, addr);
+    DPRINTF("%s: addr " TARGET_FMT_plx "\n", __func__, addr);
     retval = 0xFFFFFFFF;
     if (addr & 0xF)
         return retval;
@@ -825,7 +824,7 @@ static void openpic_cpu_write (void *opaque, target_phys_addr_t addr, uint32_t v
     IRQ_dst_t *dst;
     int idx, s_IRQ, n_IRQ;
 
-    DPRINTF("%s: addr %08x <= %08x\n", __func__, addr, val);
+    DPRINTF("%s: addr " TARGET_FMT_plx " <= %08x\n", __func__, addr, val);
     if (addr & 0xF)
         return;
 #if defined TARGET_WORDS_BIGENDIAN
@@ -887,7 +886,7 @@ static uint32_t openpic_cpu_read (void *opaque, target_phys_addr_t addr)
     uint32_t retval;
     int idx, n_IRQ;
 
-    DPRINTF("%s: addr %08x\n", __func__, addr);
+    DPRINTF("%s: addr " TARGET_FMT_plx "\n", __func__, addr);
     retval = 0xFFFFFFFF;
     if (addr & 0xF)
         return retval;
@@ -1047,7 +1046,7 @@ static void openpic_map(PCIDevice *pci_dev, int region_num,
             addr + 0x20000, addr + 0x20000 + 0x1000 * MAX_CPU);
     cpu_register_physical_memory(addr, 0x40000, opp->mem_index);
 #if 0 // Don't implement ISU for now
-    opp_io_memory = cpu_register_io_memory(0, openpic_src_read,
+    opp_io_memory = cpu_register_io_memory(openpic_src_read,
                                            openpic_src_write);
     cpu_register_physical_memory(isu_base, 0x20 * (EXT_IRQ + 2),
                                  opp_io_memory);
@@ -1209,16 +1208,16 @@ qemu_irq *openpic_init (PCIBus *bus, int *pmem_index, int nb_cpus,
         pci_config_set_vendor_id(pci_conf, PCI_VENDOR_ID_IBM);
         pci_config_set_device_id(pci_conf, PCI_DEVICE_ID_IBM_OPENPIC2);
         pci_config_set_class(pci_conf, PCI_CLASS_SYSTEM_OTHER); // FIXME?
-        pci_conf[0x0e] = 0x00; // header_type
+        pci_conf[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
         pci_conf[0x3d] = 0x00; // no interrupt pin
 
         /* Register I/O spaces */
-        pci_register_io_region((PCIDevice *)opp, 0, 0x40000,
+        pci_register_bar((PCIDevice *)opp, 0, 0x40000,
                                PCI_ADDRESS_SPACE_MEM, &openpic_map);
     } else {
         opp = qemu_mallocz(sizeof(openpic_t));
     }
-    opp->mem_index = cpu_register_io_memory(0, openpic_read,
+    opp->mem_index = cpu_register_io_memory(openpic_read,
                                             openpic_write, opp);
 
     //    isu_base &= 0xFFFC0000;
@@ -1265,8 +1264,7 @@ qemu_irq *openpic_init (PCIBus *bus, int *pmem_index, int nb_cpus,
 static void mpic_irq_raise(openpic_t *mpp, int n_CPU, IRQ_src_t *src)
 {
     int n_ci = IDR_CI0 - n_CPU;
-    DPRINTF("%s: cpu:%d irq:%d (testbit idr:%x ci:%d)\n", __func__,
-                    n_CPU, n_IRQ, mpp->src[n_IRQ].ide, n_ci);
+
     if(test_bit(&src->ide, n_ci)) {
         qemu_irq_raise(mpp->dst[n_CPU].irqs[OPENPIC_OUTPUT_CINT]);
     }
@@ -1314,7 +1312,7 @@ static void mpic_timer_write (void *opaque, target_phys_addr_t addr, uint32_t va
     openpic_t *mpp = opaque;
     int idx, cpu;
 
-    DPRINTF("%s: addr %08x <= %08x\n", __func__, addr, val);
+    DPRINTF("%s: addr " TARGET_FMT_plx " <= %08x\n", __func__, addr, val);
     if (addr & 0xF)
         return;
     addr &= 0xFFFF;
@@ -1348,7 +1346,7 @@ static uint32_t mpic_timer_read (void *opaque, target_phys_addr_t addr)
     uint32_t retval;
     int idx, cpu;
 
-    DPRINTF("%s: addr %08x\n", __func__, addr);
+    DPRINTF("%s: addr " TARGET_FMT_plx "\n", __func__, addr);
     retval = 0xFFFFFFFF;
     if (addr & 0xF)
         return retval;
@@ -1383,7 +1381,7 @@ static void mpic_src_ext_write (void *opaque, target_phys_addr_t addr,
     openpic_t *mpp = opaque;
     int idx = MPIC_EXT_IRQ;
 
-    DPRINTF("%s: addr %08x <= %08x\n", __func__, addr, val);
+    DPRINTF("%s: addr " TARGET_FMT_plx " <= %08x\n", __func__, addr, val);
     if (addr & 0xF)
         return;
 
@@ -1406,7 +1404,7 @@ static uint32_t mpic_src_ext_read (void *opaque, target_phys_addr_t addr)
     uint32_t retval;
     int idx = MPIC_EXT_IRQ;
 
-    DPRINTF("%s: addr %08x\n", __func__, addr);
+    DPRINTF("%s: addr " TARGET_FMT_plx "\n", __func__, addr);
     retval = 0xFFFFFFFF;
     if (addr & 0xF)
         return retval;
@@ -1433,7 +1431,7 @@ static void mpic_src_int_write (void *opaque, target_phys_addr_t addr,
     openpic_t *mpp = opaque;
     int idx = MPIC_INT_IRQ;
 
-    DPRINTF("%s: addr %08x <= %08x\n", __func__, addr, val);
+    DPRINTF("%s: addr " TARGET_FMT_plx " <= %08x\n", __func__, addr, val);
     if (addr & 0xF)
         return;
 
@@ -1456,7 +1454,7 @@ static uint32_t mpic_src_int_read (void *opaque, target_phys_addr_t addr)
     uint32_t retval;
     int idx = MPIC_INT_IRQ;
 
-    DPRINTF("%s: addr %08x\n", __func__, addr);
+    DPRINTF("%s: addr " TARGET_FMT_plx "\n", __func__, addr);
     retval = 0xFFFFFFFF;
     if (addr & 0xF)
         return retval;
@@ -1483,7 +1481,7 @@ static void mpic_src_msg_write (void *opaque, target_phys_addr_t addr,
     openpic_t *mpp = opaque;
     int idx = MPIC_MSG_IRQ;
 
-    DPRINTF("%s: addr %08x <= %08x\n", __func__, addr, val);
+    DPRINTF("%s: addr " TARGET_FMT_plx " <= %08x\n", __func__, addr, val);
     if (addr & 0xF)
         return;
 
@@ -1506,7 +1504,7 @@ static uint32_t mpic_src_msg_read (void *opaque, target_phys_addr_t addr)
     uint32_t retval;
     int idx = MPIC_MSG_IRQ;
 
-    DPRINTF("%s: addr %08x\n", __func__, addr);
+    DPRINTF("%s: addr " TARGET_FMT_plx "\n", __func__, addr);
     retval = 0xFFFFFFFF;
     if (addr & 0xF)
         return retval;
@@ -1533,7 +1531,7 @@ static void mpic_src_msi_write (void *opaque, target_phys_addr_t addr,
     openpic_t *mpp = opaque;
     int idx = MPIC_MSI_IRQ;
 
-    DPRINTF("%s: addr %08x <= %08x\n", __func__, addr, val);
+    DPRINTF("%s: addr " TARGET_FMT_plx " <= %08x\n", __func__, addr, val);
     if (addr & 0xF)
         return;
 
@@ -1555,7 +1553,7 @@ static uint32_t mpic_src_msi_read (void *opaque, target_phys_addr_t addr)
     uint32_t retval;
     int idx = MPIC_MSI_IRQ;
 
-    DPRINTF("%s: addr %08x\n", __func__, addr);
+    DPRINTF("%s: addr " TARGET_FMT_plx "\n", __func__, addr);
     retval = 0xFFFFFFFF;
     if (addr & 0xF)
         return retval;
@@ -1688,7 +1686,7 @@ qemu_irq *mpic_init (target_phys_addr_t base, int nb_cpus,
     for (i = 0; i < sizeof(list)/sizeof(list[0]); i++) {
         int mem_index;
 
-        mem_index = cpu_register_io_memory(0, list[i].read, list[i].write, mpp);
+        mem_index = cpu_register_io_memory(list[i].read, list[i].write, mpp);
         if (mem_index < 0) {
             goto free;
         }

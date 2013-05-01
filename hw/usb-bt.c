@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "qemu-common.h"
@@ -612,9 +611,9 @@ static void usb_bt_handle_destroy(USBDevice *dev)
 {
     struct USBBtState *s = (struct USBBtState *) dev->opaque;
 
-    s->hci->opaque = 0;
-    s->hci->evt_recv = 0;
-    s->hci->acl_recv = 0;
+    s->hci->opaque = NULL;
+    s->hci->evt_recv = NULL;
+    s->hci->acl_recv = NULL;
     qemu_free(s);
 }
 

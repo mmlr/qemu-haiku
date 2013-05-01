@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "config.h"
 #include "dyngen-exec.h"
@@ -37,14 +36,19 @@ static inline void regs_to_env(void)
 {
 }
 
+static inline int cpu_has_work(CPUState *env)
+{
+    return (env->interrupt_request &
+            (CPU_INTERRUPT_FIQ | CPU_INTERRUPT_HARD | CPU_INTERRUPT_EXITTB));
+}
+
 static inline int cpu_halted(CPUState *env) {
     if (!env->halted)
         return 0;
     /* An interrupt wakes the CPU even if the I and F CPSR bits are
        set.  We use EXITTB to silently wake CPU without causing an
        actual interrupt.  */
-    if (env->interrupt_request &
-        (CPU_INTERRUPT_FIQ | CPU_INTERRUPT_HARD | CPU_INTERRUPT_EXITTB)) {
+    if (cpu_has_work(env)) {
         env->halted = 0;
         return 0;
     }

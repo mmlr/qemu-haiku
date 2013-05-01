@@ -3,6 +3,14 @@
 #define QEMU_HW_H
 
 #include "qemu-common.h"
+
+#if defined(TARGET_PHYS_ADDR_BITS) && !defined(NEED_CPU_H)
+#include "targphys.h"
+#include "poison.h"
+#include "cpu-common.h"
+#endif
+
+#include "ioport.h"
 #include "irq.h"
 
 /* VM Load/Save */
@@ -29,14 +37,22 @@ typedef int (QEMUFileCloseFunc)(void *opaque);
  */
 typedef int (QEMUFileRateLimit)(void *opaque);
 
+/* Called to change the current bandwidth allocation. This function must return
+ * the new actual bandwidth. It should be new_rate if everything goes ok, and
+ * the old rate otherwise
+ */
+typedef size_t (QEMUFileSetRateLimit)(void *opaque, size_t new_rate);
+
 QEMUFile *qemu_fopen_ops(void *opaque, QEMUFilePutBufferFunc *put_buffer,
                          QEMUFileGetBufferFunc *get_buffer,
                          QEMUFileCloseFunc *close,
-                         QEMUFileRateLimit *rate_limit);
+                         QEMUFileRateLimit *rate_limit,
+                         QEMUFileSetRateLimit *set_rate_limit);
 QEMUFile *qemu_fopen(const char *filename, const char *mode);
 QEMUFile *qemu_fopen_socket(int fd);
 QEMUFile *qemu_popen(FILE *popen_file, const char *mode);
 QEMUFile *qemu_popen_cmd(const char *command, const char *mode);
+int qemu_popen_fd(QEMUFile *f);
 void qemu_fflush(QEMUFile *f);
 int qemu_fclose(QEMUFile *f);
 void qemu_put_buffer(QEMUFile *f, const uint8_t *buf, int size);
@@ -66,6 +82,7 @@ unsigned int qemu_get_be16(QEMUFile *f);
 unsigned int qemu_get_be32(QEMUFile *f);
 uint64_t qemu_get_be64(QEMUFile *f);
 int qemu_file_rate_limit(QEMUFile *f);
+size_t qemu_file_set_rate_limit(QEMUFile *f, size_t new_rate);
 int qemu_file_has_error(QEMUFile *f);
 void qemu_file_set_error(QEMUFile *f);
 
@@ -244,14 +261,12 @@ void unregister_savevm(const char *idstr, void *opaque);
 typedef void QEMUResetHandler(void *opaque);
 
 void qemu_register_reset(QEMUResetHandler *func, void *opaque);
+void qemu_unregister_reset(QEMUResetHandler *func, void *opaque);
 
-/* handler to set the boot_device for a specific type of QEMUMachine */
+/* handler to set the boot_device order for a specific type of QEMUMachine */
 /* return 0 if success */
-typedef int QEMUBootSetHandler(void *opaque, const char *boot_device);
+typedef int QEMUBootSetHandler(void *opaque, const char *boot_devices);
 void qemu_register_boot_set(QEMUBootSetHandler *func, void *opaque);
-
-/* These should really be in isa.h, but are here to make pc.h happy.  */
-typedef void (IOPortWriteFunc)(void *opaque, uint32_t address, uint32_t data);
-typedef uint32_t (IOPortReadFunc)(void *opaque, uint32_t address);
+int qemu_boot_set(const char *boot_devices);
 
 #endif

@@ -23,6 +23,7 @@
  */
 #include "qemu-common.h"
 #include "net.h"
+#include "monitor.h"
 #include "console.h"
 #include "sysemu.h"
 #include "qemu-timer.h"
@@ -60,12 +61,16 @@
 #include <dirent.h>
 #include <netdb.h>
 #include <sys/select.h>
-#ifdef _BSD
+#ifdef HOST_BSD
 #include <sys/stat.h>
 #ifdef __FreeBSD__
 #include <libutil.h>
 #include <dev/ppbus/ppi.h>
 #include <dev/ppbus/ppbconf.h>
+#elif defined(__DragonFly__)
+#include <libutil.h>
+#include <dev/misc/ppi/ppi.h>
+#include <bus/ppbus/ppbconf.h>
 #else
 #include <util.h>
 #endif
@@ -163,6 +168,11 @@ void qemu_chr_read(CharDriverState *s, uint8_t *buf, int len)
     s->chr_read(s->handler_opaque, buf, len);
 }
 
+int qemu_chr_get_msgfd(CharDriverState *s)
+{
+    return s->get_msgfd ? s->get_msgfd(s) : -1;
+}
+
 void qemu_chr_accept_input(CharDriverState *s)
 {
     if (s->chr_accept_input)
@@ -214,8 +224,6 @@ static CharDriverState *qemu_chr_open_null(void)
 }
 
 /* MUX driver for serial I/O splitting */
-static int term_timestamps;
-static int64_t term_timestamps_start;
 #define MAX_MUX 4
 #define MUX_BUFFER_SIZE 32	/* Must be a power of 2.  */
 #define MUX_BUFFER_MASK (MUX_BUFFER_SIZE - 1)
@@ -234,6 +242,9 @@ typedef struct {
     unsigned char buffer[MAX_MUX][MUX_BUFFER_SIZE];
     int prod[MAX_MUX];
     int cons[MAX_MUX];
+    int timestamps;
+    int linestart;
+    int64_t timestamps_start;
 } MuxDriver;
 
 
@@ -241,23 +252,22 @@ static int mux_chr_write(CharDriverState *chr, const uint8_t *buf, int len)
 {
     MuxDriver *d = chr->opaque;
     int ret;
-    if (!term_timestamps) {
+    if (!d->timestamps) {
         ret = d->drv->chr_write(d->drv, buf, len);
     } else {
         int i;
 
         ret = 0;
-        for(i = 0; i < len; i++) {
-            ret += d->drv->chr_write(d->drv, buf+i, 1);
-            if (buf[i] == '\n') {
+        for (i = 0; i < len; i++) {
+            if (d->linestart) {
                 char buf1[64];
                 int64_t ti;
                 int secs;
 
                 ti = qemu_get_clock(rt_clock);
-                if (term_timestamps_start == -1)
-                    term_timestamps_start = ti;
-                ti -= term_timestamps_start;
+                if (d->timestamps_start == -1)
+                    d->timestamps_start = ti;
+                ti -= d->timestamps_start;
                 secs = ti / 1000;
                 snprintf(buf1, sizeof(buf1),
                          "[%02d:%02d:%02d.%03d] ",
@@ -266,6 +276,11 @@ static int mux_chr_write(CharDriverState *chr, const uint8_t *buf, int len)
                          secs % 60,
                          (int)(ti % 1000));
                 d->drv->chr_write(d->drv, (uint8_t *)buf1, strlen(buf1));
+                d->linestart = 0;
+            }
+            ret += d->drv->chr_write(d->drv, buf+i, 1);
+            if (buf[i] == '\n') {
+                d->linestart = 1;
             }
         }
     }
@@ -309,6 +324,12 @@ static void mux_print_help(CharDriverState *chr)
     }
 }
 
+static void mux_chr_send_event(MuxDriver *d, int mux_nr, int event)
+{
+    if (d->chr_event[mux_nr])
+        d->chr_event[mux_nr](d->ext_opaque[mux_nr], event);
+}
+
 static int mux_proc_byte(CharDriverState *chr, MuxDriver *d, int ch)
 {
     if (d->term_got_escape) {
@@ -340,14 +361,17 @@ static int mux_proc_byte(CharDriverState *chr, MuxDriver *d, int ch)
             break;
         case 'c':
             /* Switch to the next registered device */
+            mux_chr_send_event(d, chr->focus, CHR_EVENT_MUX_OUT);
             chr->focus++;
             if (chr->focus >= d->mux_cnt)
                 chr->focus = 0;
+            mux_chr_send_event(d, chr->focus, CHR_EVENT_MUX_IN);
             break;
-       case 't':
-           term_timestamps = !term_timestamps;
-           term_timestamps_start = -1;
-           break;
+        case 't':
+            d->timestamps = !d->timestamps;
+            d->timestamps_start = -1;
+            d->linestart = 0;
+            break;
         }
     } else if (ch == term_escape_char) {
         d->term_got_escape = 1;
@@ -412,8 +436,7 @@ static void mux_chr_event(void *opaque, int event)
 
     /* Send the event to all registered listeners */
     for (i = 0; i < d->mux_cnt; i++)
-        if (d->chr_event[i])
-            d->chr_event[i](d->ext_opaque[i], event);
+        mux_chr_send_event(d, i, event);
 }
 
 static void mux_chr_update_read_handler(CharDriverState *chr)
@@ -559,7 +582,7 @@ static void fd_chr_update_read_handler(CharDriverState *chr)
     FDCharDriver *s = chr->opaque;
 
     if (s->fd_in >= 0) {
-        if (nographic && s->fd_in == 0) {
+        if (display_type == DT_NOGRAPHIC && s->fd_in == 0) {
         } else {
             qemu_set_fd_handler2(s->fd_in, fd_chr_read_poll,
                                  fd_chr_read, NULL, chr);
@@ -572,7 +595,7 @@ static void fd_chr_close(struct CharDriverState *chr)
     FDCharDriver *s = chr->opaque;
 
     if (s->fd_in >= 0) {
-        if (nographic && s->fd_in == 0) {
+        if (display_type == DT_NOGRAPHIC && s->fd_in == 0) {
         } else {
             qemu_set_fd_handler2(s->fd_in, NULL, NULL, NULL, NULL);
         }
@@ -702,7 +725,7 @@ static void term_init(void)
     tty.c_oflag |= OPOST;
     tty.c_lflag &= ~(ECHO|ECHONL|ICANON|IEXTEN);
     /* if graphical mode, we allow Ctrl-C handling */
-    if (nographic)
+    if (display_type == DT_NOGRAPHIC)
         tty.c_lflag &= ~ISIG;
     tty.c_cflag &= ~(CSIZE|PARENB);
     tty.c_cflag |= CS8;
@@ -742,8 +765,8 @@ static CharDriverState *qemu_chr_open_stdio(void)
 
 #ifdef __sun__
 /* Once Solaris has openpty(), this is going to be removed. */
-int openpty(int *amaster, int *aslave, char *name,
-            struct termios *termp, struct winsize *winp)
+static int openpty(int *amaster, int *aslave, char *name,
+                   struct termios *termp, struct winsize *winp)
 {
         const char *slave;
         int mfd = -1, sfd = -1;
@@ -783,7 +806,7 @@ err:
         return -1;
 }
 
-void cfmakeraw (struct termios *termios_p)
+static void cfmakeraw (struct termios *termios_p)
 {
         termios_p->c_iflag &=
                 ~(IGNBRK|BRKINT|PARMRK|ISTRIP|INLCR|IGNCR|ICRNL|IXON);
@@ -798,7 +821,7 @@ void cfmakeraw (struct termios *termios_p)
 #endif
 
 #if defined(__linux__) || defined(__sun__) || defined(__FreeBSD__) \
-    || defined(__NetBSD__) || defined(__OpenBSD__)
+    || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
 
 typedef struct {
     int fd;
@@ -928,7 +951,7 @@ static CharDriverState *qemu_chr_open_pty(void)
     PtyCharDriver *s;
     struct termios tty;
     int slave_fd, len;
-#if defined(__OpenBSD__)
+#if defined(__OpenBSD__) || defined(__DragonFly__)
     char pty_name[PATH_MAX];
 #define q_ptsname(x) pty_name
 #else
@@ -1274,7 +1297,7 @@ static CharDriverState *qemu_chr_open_pp(const char *filename)
 }
 #endif /* __linux__ */
 
-#if defined(__FreeBSD__)
+#if defined(__FreeBSD__) || defined(__DragonFly__)
 static int pp_ioctl(CharDriverState *chr, int cmd, void *arg)
 {
     int fd = (int)chr->opaque;
@@ -1696,7 +1719,7 @@ static int udp_chr_write(CharDriverState *chr, const uint8_t *buf, int len)
 {
     NetCharDriver *s = chr->opaque;
 
-    return sendto(s->fd, buf, len, 0,
+    return sendto(s->fd, (const void *)buf, len, 0,
                   (struct sockaddr *)&s->daddr, sizeof(struct sockaddr_in));
 }
 
@@ -1725,7 +1748,7 @@ static void udp_chr_read(void *opaque)
 
     if (s->max_size == 0)
         return;
-    s->bufcnt = recv(s->fd, s->buf, sizeof(s->buf), 0);
+    s->bufcnt = recv(s->fd, (void *)s->buf, sizeof(s->buf), 0);
     s->bufptr = s->bufcnt;
     if (s->bufcnt <= 0)
         return;
@@ -1814,6 +1837,7 @@ typedef struct {
     int do_telnetopt;
     int do_nodelay;
     int is_unix;
+    int msgfd;
 } TCPCharDriver;
 
 static void tcp_chr_accept(void *opaque);
@@ -1889,6 +1913,70 @@ static void tcp_chr_process_IAC_bytes(CharDriverState *chr,
     *size = j;
 }
 
+static int tcp_get_msgfd(CharDriverState *chr)
+{
+    TCPCharDriver *s = chr->opaque;
+
+    return s->msgfd;
+}
+
+#ifndef WIN32
+static void unix_process_msgfd(CharDriverState *chr, struct msghdr *msg)
+{
+    TCPCharDriver *s = chr->opaque;
+    struct cmsghdr *cmsg;
+
+    for (cmsg = CMSG_FIRSTHDR(msg); cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
+        int fd;
+
+        if (cmsg->cmsg_len != CMSG_LEN(sizeof(int)) ||
+            cmsg->cmsg_level != SOL_SOCKET ||
+            cmsg->cmsg_type != SCM_RIGHTS)
+            continue;
+
+        fd = *((int *)CMSG_DATA(cmsg));
+        if (fd < 0)
+            continue;
+
+        if (s->msgfd != -1)
+            close(s->msgfd);
+        s->msgfd = fd;
+    }
+}
+
+static ssize_t tcp_chr_recv(CharDriverState *chr, char *buf, size_t len)
+{
+    TCPCharDriver *s = chr->opaque;
+    struct msghdr msg = { NULL, };
+    struct iovec iov[1];
+    union {
+        struct cmsghdr cmsg;
+        char control[CMSG_SPACE(sizeof(int))];
+    } msg_control;
+    ssize_t ret;
+
+    iov[0].iov_base = buf;
+    iov[0].iov_len = len;
+
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = &msg_control;
+    msg.msg_controllen = sizeof(msg_control);
+
+    ret = recvmsg(s->fd, &msg, 0);
+    if (ret > 0 && s->is_unix)
+        unix_process_msgfd(chr, &msg);
+
+    return ret;
+}
+#else
+static ssize_t tcp_chr_recv(CharDriverState *chr, char *buf, size_t len)
+{
+    TCPCharDriver *s = chr->opaque;
+    return recv(s->fd, buf, len, 0);
+}
+#endif
+
 static void tcp_chr_read(void *opaque)
 {
     CharDriverState *chr = opaque;
@@ -1901,7 +1989,7 @@ static void tcp_chr_read(void *opaque)
     len = sizeof(buf);
     if (len > s->max_size)
         len = s->max_size;
-    size = recv(s->fd, buf, len, 0);
+    size = tcp_chr_recv(chr, (void *)buf, len);
     if (size == 0) {
         /* connection closed */
         s->connected = 0;
@@ -1916,6 +2004,10 @@ static void tcp_chr_read(void *opaque)
             tcp_chr_process_IAC_bytes(chr, s, buf, &size);
         if (size > 0)
             qemu_chr_read(chr, buf, size);
+        if (s->msgfd != -1) {
+            close(s->msgfd);
+            s->msgfd = -1;
+        }
     }
 }
 
@@ -2077,12 +2169,14 @@ static CharDriverState *qemu_chr_open_tcp(const char *host_str,
     s->connected = 0;
     s->fd = -1;
     s->listen_fd = -1;
+    s->msgfd = -1;
     s->is_unix = is_unix;
     s->do_nodelay = do_nodelay && !is_unix;
 
     chr->opaque = s;
     chr->chr_write = tcp_chr_write;
     chr->chr_close = tcp_chr_close;
+    chr->get_msgfd = tcp_get_msgfd;
 
     if (is_listen) {
         s->listen_fd = fd;
@@ -2118,7 +2212,7 @@ CharDriverState *qemu_chr_open(const char *label, const char *filename, void (*i
     CharDriverState *chr;
 
     if (!strcmp(filename, "vc")) {
-        chr = text_console_init(0);
+        chr = text_console_init(NULL);
     } else
     if (strstart(filename, "vc:", &p)) {
         chr = text_console_init(p);
@@ -2139,7 +2233,7 @@ CharDriverState *qemu_chr_open(const char *label, const char *filename, void (*i
         chr = qemu_chr_open(label, p, NULL);
         if (chr) {
             chr = qemu_chr_open_mux(chr);
-            monitor_init(chr, !nographic);
+            monitor_init(chr, MONITOR_USE_READLINE);
         } else {
             printf("Unable to open driver: %s\n", p);
         }
@@ -2162,13 +2256,13 @@ CharDriverState *qemu_chr_open(const char *label, const char *filename, void (*i
     if (strstart(filename, "/dev/parport", NULL)) {
         chr = qemu_chr_open_pp(filename);
     } else
-#elif defined(__FreeBSD__)
+#elif defined(__FreeBSD__) || defined(__DragonFly__)
     if (strstart(filename, "/dev/ppi", NULL)) {
         chr = qemu_chr_open_pp(filename);
     } else
 #endif
 #if defined(__linux__) || defined(__sun__) || defined(__FreeBSD__) \
-    || defined(__NetBSD__) || defined(__OpenBSD__)
+    || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
     if (strstart(filename, "/dev/", NULL)) {
         chr = qemu_chr_open_tty(filename);
     } else
@@ -2216,11 +2310,11 @@ void qemu_chr_close(CharDriverState *chr)
     qemu_free(chr);
 }
 
-void qemu_chr_info(void)
+void qemu_chr_info(Monitor *mon)
 {
     CharDriverState *chr;
 
     TAILQ_FOREACH(chr, &chardevs, next) {
-        term_printf("%s: filename=%s\n", chr->label, chr->filename);
+        monitor_printf(mon, "%s: filename=%s\n", chr->label, chr->filename);
     }
 }

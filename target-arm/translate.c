@@ -16,8 +16,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdarg.h>
 #include <stdlib.h>
@@ -207,7 +206,6 @@ static void store_reg(DisasContext *s, int reg, TCGv var)
 #define gen_op_subl_T0_T1_cc() gen_helper_sub_cc(cpu_T[0], cpu_T[0], cpu_T[1])
 #define gen_op_sbcl_T0_T1_cc() gen_helper_sbc_cc(cpu_T[0], cpu_T[0], cpu_T[1])
 #define gen_op_rsbl_T0_T1_cc() gen_helper_sub_cc(cpu_T[0], cpu_T[1], cpu_T[0])
-#define gen_op_rscl_T0_T1_cc() gen_helper_sbc_cc(cpu_T[0], cpu_T[1], cpu_T[0])
 
 #define gen_op_andl_T0_T1() tcg_gen_and_i32(cpu_T[0], cpu_T[0], cpu_T[1])
 #define gen_op_xorl_T0_T1() tcg_gen_xor_i32(cpu_T[0], cpu_T[0], cpu_T[1])
@@ -433,6 +431,16 @@ static void gen_adc_T0_T1(void)
     gen_op_addl_T0_T1();
     tmp = load_cpu_field(CF);
     tcg_gen_add_i32(cpu_T[0], cpu_T[0], tmp);
+    dead_tmp(tmp);
+}
+
+/* dest = T0 + T1 + CF. */
+static void gen_add_carry(TCGv dest, TCGv t0, TCGv t1)
+{
+    TCGv tmp;
+    tcg_gen_add_i32(dest, t0, t1);
+    tmp = load_cpu_field(CF);
+    tcg_gen_add_i32(dest, dest, tmp);
     dead_tmp(tmp);
 }
 
@@ -803,12 +811,17 @@ static inline void gen_bx(DisasContext *s, TCGv var)
     store_cpu_field(var, regs[15]);
 }
 
-/* TODO: This should be removed.  Use gen_bx instead.  */
-static inline void gen_bx_T0(DisasContext *s)
+/* Variant of store_reg which uses branch&exchange logic when storing
+   to r15 in ARM architecture v7 and above. The source must be a temporary
+   and will be marked as dead. */
+static inline void store_reg_bx(CPUState *env, DisasContext *s,
+                                int reg, TCGv var)
 {
-    TCGv tmp = new_tmp();
-    tcg_gen_mov_i32(tmp, cpu_T[0]);
-    gen_bx(s, tmp);
+    if (reg == 15 && ENABLE_ARCH_7) {
+        gen_bx(s, var);
+    } else {
+        store_reg(s, reg, var);
+    }
 }
 
 static inline TCGv gen_ld8s(TCGv addr, int index)
@@ -2783,10 +2796,12 @@ static int disas_vfp_insn(CPUState * env, DisasContext *s, uint32_t insn)
                         } else if (size == 1) {
                             gen_neon_dup_low16(tmp);
                         }
-                        tmp2 = new_tmp();
-                        tcg_gen_mov_i32(tmp2, tmp);
-                        neon_store_reg(rn, 0, tmp2);
-                        neon_store_reg(rn, 1, tmp);
+                        for (n = 0; n <= pass * 2; n++) {
+                            tmp2 = new_tmp();
+                            tcg_gen_mov_i32(tmp2, tmp);
+                            neon_store_reg(rn, n, tmp2);
+                        }
+                        neon_store_reg(rn, n, tmp);
                     } else {
                         /* VMOV */
                         switch (size) {
@@ -3444,11 +3459,11 @@ static int gen_set_psr_T0(DisasContext *s, uint32_t mask, int spsr)
     return 0;
 }
 
-/* Generate an old-style exception return.  */
-static void gen_exception_return(DisasContext *s)
+/* Generate an old-style exception return. Marks pc as dead. */
+static void gen_exception_return(DisasContext *s, TCGv pc)
 {
     TCGv tmp;
-    gen_movl_reg_T0(s, 15);
+    store_reg(s, 15, pc);
     tmp = load_cpu_field(spsr);
     gen_set_cpsr(tmp, 0xffffffff);
     dead_tmp(tmp);
@@ -5162,7 +5177,7 @@ static int disas_neon_data_insn(CPUState * env, DisasContext *s, uint32_t insn)
                         NEON_GET_REG(T0, rm, pass * 2);
                         NEON_GET_REG(T1, rm, pass * 2 + 1);
                         switch (size) {
-                        case 0: tcg_gen_bswap_i32(cpu_T[0], cpu_T[0]); break;
+                        case 0: tcg_gen_bswap32_i32(cpu_T[0], cpu_T[0]); break;
                         case 1: gen_swap_half(cpu_T[0]); break;
                         case 2: /* no-op */ break;
                         default: abort();
@@ -5173,7 +5188,7 @@ static int disas_neon_data_insn(CPUState * env, DisasContext *s, uint32_t insn)
                         } else {
                             gen_op_movl_T0_T1();
                             switch (size) {
-                            case 0: tcg_gen_bswap_i32(cpu_T[0], cpu_T[0]); break;
+                            case 0: tcg_gen_bswap32_i32(cpu_T[0], cpu_T[0]); break;
                             case 1: gen_swap_half(cpu_T[0]); break;
                             default: abort();
                             }
@@ -5315,7 +5330,7 @@ static int disas_neon_data_insn(CPUState * env, DisasContext *s, uint32_t insn)
                         switch (op) {
                         case 1: /* VREV32 */
                             switch (size) {
-                            case 0: tcg_gen_bswap_i32(cpu_T[0], cpu_T[0]); break;
+                            case 0: tcg_gen_bswap32_i32(cpu_T[0], cpu_T[0]); break;
                             case 1: gen_swap_half(cpu_T[0]); break;
                             default: return 1;
                             }
@@ -6085,147 +6100,172 @@ static void disas_arm_insn(CPUState * env, DisasContext *s)
             /* immediate operand */
             val = insn & 0xff;
             shift = ((insn >> 8) & 0xf) * 2;
-            if (shift)
+            if (shift) {
                 val = (val >> shift) | (val << (32 - shift));
-            gen_op_movl_T1_im(val);
-            if (logic_cc && shift)
-                gen_set_CF_bit31(cpu_T[1]);
+            }
+            tmp2 = new_tmp();
+            tcg_gen_movi_i32(tmp2, val);
+            if (logic_cc && shift) {
+                gen_set_CF_bit31(tmp2);
+            }
         } else {
             /* register */
             rm = (insn) & 0xf;
-            gen_movl_T1_reg(s, rm);
+            tmp2 = load_reg(s, rm);
             shiftop = (insn >> 5) & 3;
             if (!(insn & (1 << 4))) {
                 shift = (insn >> 7) & 0x1f;
-                gen_arm_shift_im(cpu_T[1], shiftop, shift, logic_cc);
+                gen_arm_shift_im(tmp2, shiftop, shift, logic_cc);
             } else {
                 rs = (insn >> 8) & 0xf;
                 tmp = load_reg(s, rs);
-                gen_arm_shift_reg(cpu_T[1], shiftop, tmp, logic_cc);
+                gen_arm_shift_reg(tmp2, shiftop, tmp, logic_cc);
             }
         }
         if (op1 != 0x0f && op1 != 0x0d) {
             rn = (insn >> 16) & 0xf;
-            gen_movl_T0_reg(s, rn);
+            tmp = load_reg(s, rn);
+        } else {
+            TCGV_UNUSED(tmp);
         }
         rd = (insn >> 12) & 0xf;
         switch(op1) {
         case 0x00:
-            gen_op_andl_T0_T1();
-            gen_movl_reg_T0(s, rd);
-            if (logic_cc)
-                gen_op_logic_T0_cc();
+            tcg_gen_and_i32(tmp, tmp, tmp2);
+            if (logic_cc) {
+                gen_logic_CC(tmp);
+            }
+            store_reg_bx(env, s, rd, tmp);
             break;
         case 0x01:
-            gen_op_xorl_T0_T1();
-            gen_movl_reg_T0(s, rd);
-            if (logic_cc)
-                gen_op_logic_T0_cc();
+            tcg_gen_xor_i32(tmp, tmp, tmp2);
+            if (logic_cc) {
+                gen_logic_CC(tmp);
+            }
+            store_reg_bx(env, s, rd, tmp);
             break;
         case 0x02:
             if (set_cc && rd == 15) {
                 /* SUBS r15, ... is used for exception return.  */
-                if (IS_USER(s))
+                if (IS_USER(s)) {
                     goto illegal_op;
-                gen_op_subl_T0_T1_cc();
-                gen_exception_return(s);
+                }
+                gen_helper_sub_cc(tmp, tmp, tmp2);
+                gen_exception_return(s, tmp);
             } else {
-                if (set_cc)
-                    gen_op_subl_T0_T1_cc();
-                else
-                    gen_op_subl_T0_T1();
-                gen_movl_reg_T0(s, rd);
+                if (set_cc) {
+                    gen_helper_sub_cc(tmp, tmp, tmp2);
+                } else {
+                    tcg_gen_sub_i32(tmp, tmp, tmp2);
+                }
+                store_reg_bx(env, s, rd, tmp);
             }
             break;
         case 0x03:
-            if (set_cc)
-                gen_op_rsbl_T0_T1_cc();
-            else
-                gen_op_rsbl_T0_T1();
-            gen_movl_reg_T0(s, rd);
+            if (set_cc) {
+                gen_helper_sub_cc(tmp, tmp2, tmp);
+            } else {
+                tcg_gen_sub_i32(tmp, tmp2, tmp);
+            }
+            store_reg_bx(env, s, rd, tmp);
             break;
         case 0x04:
-            if (set_cc)
-                gen_op_addl_T0_T1_cc();
-            else
-                gen_op_addl_T0_T1();
-            gen_movl_reg_T0(s, rd);
+            if (set_cc) {
+                gen_helper_add_cc(tmp, tmp, tmp2);
+            } else {
+                tcg_gen_add_i32(tmp, tmp, tmp2);
+            }
+            store_reg_bx(env, s, rd, tmp);
             break;
         case 0x05:
-            if (set_cc)
-                gen_op_adcl_T0_T1_cc();
-            else
-                gen_adc_T0_T1();
-            gen_movl_reg_T0(s, rd);
+            if (set_cc) {
+                gen_helper_adc_cc(tmp, tmp, tmp2);
+            } else {
+                gen_add_carry(tmp, tmp, tmp2);
+            }
+            store_reg_bx(env, s, rd, tmp);
             break;
         case 0x06:
-            if (set_cc)
-                gen_op_sbcl_T0_T1_cc();
-            else
-                gen_sbc_T0_T1();
-            gen_movl_reg_T0(s, rd);
+            if (set_cc) {
+                gen_helper_sbc_cc(tmp, tmp, tmp2);
+            } else {
+                gen_sub_carry(tmp, tmp, tmp2);
+            }
+            store_reg_bx(env, s, rd, tmp);
             break;
         case 0x07:
-            if (set_cc)
-                gen_op_rscl_T0_T1_cc();
-            else
-                gen_rsc_T0_T1();
-            gen_movl_reg_T0(s, rd);
+            if (set_cc) {
+                gen_helper_sbc_cc(tmp, tmp2, tmp);
+            } else {
+                gen_sub_carry(tmp, tmp2, tmp);
+            }
+            store_reg_bx(env, s, rd, tmp);
             break;
         case 0x08:
             if (set_cc) {
-                gen_op_andl_T0_T1();
-                gen_op_logic_T0_cc();
+                tcg_gen_and_i32(tmp, tmp, tmp2);
+                gen_logic_CC(tmp);
             }
+            dead_tmp(tmp);
             break;
         case 0x09:
             if (set_cc) {
-                gen_op_xorl_T0_T1();
-                gen_op_logic_T0_cc();
+                tcg_gen_xor_i32(tmp, tmp, tmp2);
+                gen_logic_CC(tmp);
             }
+            dead_tmp(tmp);
             break;
         case 0x0a:
             if (set_cc) {
-                gen_op_subl_T0_T1_cc();
+                gen_helper_sub_cc(tmp, tmp, tmp2);
             }
+            dead_tmp(tmp);
             break;
         case 0x0b:
             if (set_cc) {
-                gen_op_addl_T0_T1_cc();
+                gen_helper_add_cc(tmp, tmp, tmp2);
             }
+            dead_tmp(tmp);
             break;
         case 0x0c:
-            gen_op_orl_T0_T1();
-            gen_movl_reg_T0(s, rd);
-            if (logic_cc)
-                gen_op_logic_T0_cc();
+            tcg_gen_or_i32(tmp, tmp, tmp2);
+            if (logic_cc) {
+                gen_logic_CC(tmp);
+            }
+            store_reg_bx(env, s, rd, tmp);
             break;
         case 0x0d:
             if (logic_cc && rd == 15) {
                 /* MOVS r15, ... is used for exception return.  */
-                if (IS_USER(s))
+                if (IS_USER(s)) {
                     goto illegal_op;
-                gen_op_movl_T0_T1();
-                gen_exception_return(s);
+                }
+                gen_exception_return(s, tmp2);
             } else {
-                gen_movl_reg_T1(s, rd);
-                if (logic_cc)
-                    gen_op_logic_T1_cc();
+                if (logic_cc) {
+                    gen_logic_CC(tmp2);
+                }
+                store_reg_bx(env, s, rd, tmp2);
             }
             break;
         case 0x0e:
-            gen_op_bicl_T0_T1();
-            gen_movl_reg_T0(s, rd);
-            if (logic_cc)
-                gen_op_logic_T0_cc();
+            tcg_gen_bic_i32(tmp, tmp, tmp2);
+            if (logic_cc) {
+                gen_logic_CC(tmp);
+            }
+            store_reg_bx(env, s, rd, tmp);
             break;
         default:
         case 0x0f:
-            gen_op_notl_T1();
-            gen_movl_reg_T1(s, rd);
-            if (logic_cc)
-                gen_op_logic_T1_cc();
+            tcg_gen_not_i32(tmp2, tmp2);
+            if (logic_cc) {
+                gen_logic_CC(tmp2);
+            }
+            store_reg_bx(env, s, rd, tmp2);
             break;
+        }
+        if (op1 != 0x0f && op1 != 0x0d) {
+            dead_tmp(tmp2);
         }
     } else {
         /* other instructions */
@@ -6568,7 +6608,7 @@ static void disas_arm_insn(CPUState * env, DisasContext *s)
                             if (insn & (1 << 7))
                                 gen_rev16(tmp);
                             else
-                                tcg_gen_bswap_i32(tmp, tmp);
+                                tcg_gen_bswap32_i32(tmp, tmp);
                         }
                         store_reg(s, rd, tmp);
                     } else {
@@ -7323,7 +7363,7 @@ static int disas_thumb2_insn(CPUState *env, DisasContext *s, uint16_t insn_hw1)
             gen_arm_shift_reg(tmp, op, tmp2, logic_cc);
             if (logic_cc)
                 gen_logic_CC(tmp);
-            store_reg(s, rd, tmp);
+            store_reg_bx(env, s, rd, tmp);
             break;
         case 1: /* Sign/zero extend.  */
             tmp = load_reg(s, rm);
@@ -7384,7 +7424,7 @@ static int disas_thumb2_insn(CPUState *env, DisasContext *s, uint16_t insn_hw1)
                     gen_helper_rbit(tmp, tmp);
                     break;
                 case 0x08: /* rev */
-                    tcg_gen_bswap_i32(tmp, tmp);
+                    tcg_gen_bswap32_i32(tmp, tmp);
                     break;
                 case 0x09: /* rev16 */
                     gen_rev16(tmp);
@@ -8518,7 +8558,7 @@ static void disas_thumb_insn(CPUState *env, DisasContext *s)
             rd = insn & 0x7;
             tmp = load_reg(s, rn);
             switch ((insn >> 6) & 3) {
-            case 0: tcg_gen_bswap_i32(tmp, tmp); break;
+            case 0: tcg_gen_bswap32_i32(tmp, tmp); break;
             case 1: gen_rev16(tmp); break;
             case 3: gen_revsh(tmp); break;
             default: goto illegal_op;
@@ -8789,6 +8829,7 @@ static inline void gen_intermediate_code_internal(CPUState *env,
         num_insns ++;
     } while (!dc->is_jmp && gen_opc_ptr < gen_opc_end &&
              !env->singlestep_enabled &&
+             !singlestep &&
              dc->pc < next_page_start &&
              num_insns < max_insns);
 

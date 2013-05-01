@@ -28,6 +28,7 @@
 /* SMP is not enabled, for now */
 #define MAX_CPUS 1
 
+#define BIOS_SIZE     (1024 * 1024)
 #define BIOS_FILENAME "ppc_rom.bin"
 #define VGABIOS_FILENAME "video.x"
 #define NVRAM_SIZE        0x2000
@@ -35,6 +36,7 @@
 #define PROM_ADDR         0xfff00000
 
 #define KERNEL_LOAD_ADDR 0x01000000
+#define CMDLINE_ADDR     0x017ff000
 #define INITRD_LOAD_ADDR 0x01800000
 
 #define ESCC_CLOCK 3686400

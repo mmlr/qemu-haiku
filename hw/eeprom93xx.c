@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /* Emulation for serial EEPROMs:
@@ -36,7 +35,6 @@
  * - No emulation of EEPROM timings.
  */
 
-#include <assert.h>
 #include "hw.h"
 #include "eeprom93xx.h"
 
@@ -44,13 +42,14 @@
 //~ #define DEBUG_EEPROM
 
 #ifdef DEBUG_EEPROM
-#define logout(fmt, args...) fprintf(stderr, "EEPROM\t%-24s" fmt, __func__, ##args)
+#define logout(fmt, ...) fprintf(stderr, "EEPROM\t%-24s" fmt, __func__, ## __VA_ARGS__)
 #else
-#define logout(fmt, args...) ((void)0)
+#define logout(fmt, ...) ((void)0)
 #endif
 
-static int eeprom_instance = 0;
-static const int eeprom_version = 20061112;
+#define EEPROM_INSTANCE  0
+#define OLD_EEPROM_VERSION 20061112
+#define EEPROM_VERSION (OLD_EEPROM_VERSION + 1)
 
 #if 0
 typedef enum {
@@ -83,7 +82,7 @@ struct _eeprom_t {
     uint8_t eedo;
 
     uint8_t  addrbits;
-    uint8_t  size;
+    uint16_t size;
     uint16_t data;
     uint16_t contents[0];
 };
@@ -95,7 +94,18 @@ static void eeprom_save(QEMUFile *f, void *opaque)
     /* Save EEPROM data. */
     unsigned address;
     eeprom_t *eeprom = (eeprom_t *)opaque;
-    qemu_put_buffer(f, (uint8_t *)eeprom, sizeof(*eeprom) - 2);
+
+    qemu_put_byte(f, eeprom->tick);
+    qemu_put_byte(f, eeprom->address);
+    qemu_put_byte(f, eeprom->command);
+    qemu_put_byte(f, eeprom->writeable);
+
+    qemu_put_byte(f, eeprom->eecs);
+    qemu_put_byte(f, eeprom->eesk);
+    qemu_put_byte(f, eeprom->eedo);
+
+    qemu_put_byte(f, eeprom->addrbits);
+    qemu_put_be16(f, eeprom->size);
     qemu_put_be16(f, eeprom->data);
     for (address = 0; address < eeprom->size; address++) {
         qemu_put_be16(f, eeprom->contents[address]);
@@ -108,10 +118,27 @@ static int eeprom_load(QEMUFile *f, void *opaque, int version_id)
        of data and current EEPROM are identical. */
     eeprom_t *eeprom = (eeprom_t *)opaque;
     int result = -EINVAL;
-    if (version_id == eeprom_version) {
+    if (version_id >= OLD_EEPROM_VERSION) {
         unsigned address;
-        uint8_t size = eeprom->size;
-        qemu_get_buffer(f, (uint8_t *)eeprom, sizeof(*eeprom) - 2);
+        int size = eeprom->size;
+
+        eeprom->tick = qemu_get_byte(f);
+        eeprom->address = qemu_get_byte(f);
+        eeprom->command = qemu_get_byte(f);
+        eeprom->writeable = qemu_get_byte(f);
+
+        eeprom->eecs = qemu_get_byte(f);
+        eeprom->eesk = qemu_get_byte(f);
+        eeprom->eedo = qemu_get_byte(f);
+
+        eeprom->addrbits = qemu_get_byte(f);
+        if (version_id == OLD_EEPROM_VERSION) {
+            eeprom->size = qemu_get_byte(f);
+            qemu_get_byte(f);
+        } else {
+            eeprom->size = qemu_get_be16(f);
+        }
+
         if (eeprom->size == size) {
             eeprom->data = qemu_get_be16(f);
             for (address = 0; address < eeprom->size; address++) {
@@ -292,7 +319,7 @@ eeprom_t *eeprom93xx_new(uint16_t nwords)
     /* Output DO is tristate, read results in 1. */
     eeprom->eedo = 1;
     logout("eeprom = 0x%p, nwords = %u\n", eeprom, nwords);
-    register_savevm("eeprom", eeprom_instance, eeprom_version,
+    register_savevm("eeprom", EEPROM_INSTANCE, EEPROM_VERSION,
                     eeprom_save, eeprom_load, eeprom);
     return eeprom;
 }
@@ -301,6 +328,7 @@ void eeprom93xx_free(eeprom_t *eeprom)
 {
     /* Destroy EEPROM. */
     logout("eeprom = 0x%p\n", eeprom);
+    unregister_savevm("eeprom", eeprom);
     qemu_free(eeprom);
 }
 

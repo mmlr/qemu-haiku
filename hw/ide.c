@@ -359,6 +359,7 @@
 #define ASC_INCOMPATIBLE_FORMAT              0x30
 #define ASC_MEDIUM_NOT_PRESENT               0x3a
 #define ASC_SAVING_PARAMETERS_NOT_SUPPORTED  0x39
+#define ASC_MEDIA_REMOVAL_PREVENTED          0x53
 
 #define CFA_NO_ERROR            0x00
 #define CFA_MISC_ERROR          0x09
@@ -417,6 +418,7 @@ typedef struct IDEState {
     /* ATAPI specific */
     uint8_t sense_key;
     uint8_t asc;
+    uint8_t cdrom_changed;
     int packet_transfer_size;
     int elementary_transfer_size;
     int io_buffer_index;
@@ -496,8 +498,11 @@ typedef struct BMDMAState {
     IDEState *ide_if;
     BlockDriverCompletionFunc *dma_cb;
     BlockDriverAIOCB *aiocb;
+    struct iovec iov;
+    QEMUIOVector qiov;
     int64_t sector_num;
     uint32_t nsector;
+    QEMUBH *bh;
 } BMDMAState;
 
 typedef struct PCIIDEState {
@@ -1106,17 +1111,32 @@ static void ide_sector_write(IDEState *s)
     }
 }
 
-static void ide_dma_restart_cb(void *opaque, int running, int reason)
+static void ide_dma_restart_bh(void *opaque)
 {
     BMDMAState *bm = opaque;
-    if (!running)
-        return;
+
+    qemu_bh_delete(bm->bh);
+    bm->bh = NULL;
+
     if (bm->status & BM_STATUS_DMA_RETRY) {
         bm->status &= ~BM_STATUS_DMA_RETRY;
         ide_dma_restart(bm->ide_if);
     } else if (bm->status & BM_STATUS_PIO_RETRY) {
         bm->status &= ~BM_STATUS_PIO_RETRY;
         ide_sector_write(bm->ide_if);
+    }
+}
+
+static void ide_dma_restart_cb(void *opaque, int running, int reason)
+{
+    BMDMAState *bm = opaque;
+
+    if (!running)
+        return;
+
+    if (!bm->bh) {
+        bm->bh = qemu_bh_new(ide_dma_restart_bh, bm);
+        qemu_bh_schedule(bm->bh);
     }
 }
 
@@ -1210,7 +1230,7 @@ static void ide_atapi_cmd_check_status(IDEState *s)
 static inline void cpu_to_ube16(uint8_t *buf, int val)
 {
     buf[0] = val >> 8;
-    buf[1] = val;
+    buf[1] = val & 0xff;
 }
 
 static inline void cpu_to_ube32(uint8_t *buf, unsigned int val)
@@ -1218,7 +1238,7 @@ static inline void cpu_to_ube32(uint8_t *buf, unsigned int val)
     buf[0] = val >> 24;
     buf[1] = val >> 16;
     buf[2] = val >> 8;
-    buf[3] = val;
+    buf[3] = val & 0xff;
 }
 
 static inline int ube16_to_cpu(const uint8_t *buf)
@@ -1467,9 +1487,11 @@ static void ide_atapi_cmd_read_dma_cb(void *opaque, int ret)
 #ifdef DEBUG_AIO
     printf("aio_read_cd: lba=%u n=%d\n", s->lba, n);
 #endif
-    bm->aiocb = bdrv_aio_read(s->bs, (int64_t)s->lba << 2,
-                              s->io_buffer + data_offset, n * 4,
-                              ide_atapi_cmd_read_dma_cb, bm);
+    bm->iov.iov_base = (void *)(s->io_buffer + data_offset);
+    bm->iov.iov_len = n * 4 * 512;
+    qemu_iovec_init_external(&bm->qiov, &bm->iov, 1);
+    bm->aiocb = bdrv_aio_readv(s->bs, (int64_t)s->lba << 2, &bm->qiov,
+                               n * 4, ide_atapi_cmd_read_dma_cb, bm);
     if (!bm->aiocb) {
         /* Note: media not present is the most likely case */
         ide_atapi_cmd_error(s, SENSE_NOT_READY,
@@ -1639,9 +1661,10 @@ static void ide_atapi_cmd(IDEState *s)
     }
     switch(s->io_buffer[0]) {
     case GPCMD_TEST_UNIT_READY:
-        if (bdrv_is_inserted(s->bs)) {
+        if (bdrv_is_inserted(s->bs) && !s->cdrom_changed) {
             ide_atapi_cmd_ok(s);
         } else {
+            s->cdrom_changed = 0;
             ide_atapi_cmd_error(s, SENSE_NOT_READY,
                                 ASC_MEDIUM_NOT_PRESENT);
         }
@@ -1818,18 +1841,27 @@ static void ide_atapi_cmd(IDEState *s)
         break;
     case GPCMD_START_STOP_UNIT:
         {
-            int start, eject;
+            int start, eject, err = 0;
             start = packet[4] & 1;
             eject = (packet[4] >> 1) & 1;
 
-            if (eject && !start) {
-                /* eject the disk */
-                bdrv_eject(s->bs, 1);
-            } else if (eject && start) {
-                /* close the tray */
-                bdrv_eject(s->bs, 0);
+            if (eject) {
+                err = bdrv_eject(s->bs, !start);
             }
-            ide_atapi_cmd_ok(s);
+
+            switch (err) {
+            case 0:
+                ide_atapi_cmd_ok(s);
+                break;
+            case -EBUSY:
+                ide_atapi_cmd_error(s, SENSE_NOT_READY,
+                                    ASC_MEDIA_REMOVAL_PREVENTED);
+                break;
+            default:
+                ide_atapi_cmd_error(s, SENSE_NOT_READY,
+                                    ASC_MEDIUM_NOT_PRESENT);
+                break;
+            }
         }
         break;
     case GPCMD_MECHANISM_STATUS:
@@ -2092,7 +2124,7 @@ static void cdrom_change_cb(void *opaque)
 
     s->sense_key = SENSE_UNIT_ATTENTION;
     s->asc = ASC_MEDIUM_MAY_HAVE_CHANGED;
-
+    s->cdrom_changed = 1;
     ide_set_irq(s);
 }
 
@@ -2784,11 +2816,11 @@ static void ide_init2(IDEState *ide_state,
 
     for(i = 0; i < 2; i++) {
         s = ide_state + i;
-        s->io_buffer = qemu_memalign(512, IDE_DMA_BUF_SECTORS*512 + 4);
         if (i == 0)
             s->bs = hd0;
         else
             s->bs = hd1;
+        s->io_buffer = qemu_blockalign(s->bs, IDE_DMA_BUF_SECTORS*512 + 4);
         if (s->bs) {
             bdrv_get_geometry(s->bs, &nb_sectors);
             bdrv_guess_geometry(s->bs, &cylinders, &heads, &secs);
@@ -2856,11 +2888,12 @@ static void ide_save(QEMUFile* f, IDEState *s)
 
     qemu_put_8s(f, &s->sense_key);
     qemu_put_8s(f, &s->asc);
+    qemu_put_8s(f, &s->cdrom_changed);
     /* XXX: if a transfer is pending, we do not save it yet */
 }
 
 /* load per IDE drive data */
-static void ide_load(QEMUFile* f, IDEState *s)
+static void ide_load(QEMUFile* f, IDEState *s, int version_id)
 {
     s->mult_sectors=qemu_get_be32(f);
     s->identify_set=qemu_get_be32(f);
@@ -2884,6 +2917,13 @@ static void ide_load(QEMUFile* f, IDEState *s)
 
     qemu_get_8s(f, &s->sense_key);
     qemu_get_8s(f, &s->asc);
+    if (version_id == 3) {
+        qemu_get_8s(f, &s->cdrom_changed);
+    } else {
+        if (s->sense_key == SENSE_UNIT_ATTENTION &&
+                       s->asc == ASC_MEDIUM_MAY_HAVE_CHANGED)
+            s->cdrom_changed = 1;
+    }
     /* XXX: if a transfer is pending, we do not save it yet */
 }
 
@@ -3205,7 +3245,7 @@ static int pci_ide_load(QEMUFile* f, void *opaque, int version_id)
     PCIIDEState *d = opaque;
     int ret, i;
 
-    if (version_id != 2)
+    if (version_id != 2 && version_id != 3)
         return -EINVAL;
     ret = pci_device_load(&d->dev, f);
     if (ret < 0)
@@ -3235,7 +3275,7 @@ static int pci_ide_load(QEMUFile* f, void *opaque, int version_id)
 
     /* per IDE drive data */
     for(i = 0; i < 4; i++) {
-        ide_load(f, &d->ide_if[i]);
+        ide_load(f, &d->ide_if[i], version_id);
     }
     return 0;
 }
@@ -3297,7 +3337,7 @@ void pci_cmd646_ide_init(PCIBus *bus, BlockDriverState **hd_table,
     pci_conf[0x09] = 0x8f;
 
     pci_config_set_class(pci_conf, PCI_CLASS_STORAGE_IDE);
-    pci_conf[0x0e] = 0x00; // header_type
+    pci_conf[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
 
     pci_conf[0x51] = 0x04; // enable IDE0
     if (secondary_ide_enabled) {
@@ -3305,15 +3345,15 @@ void pci_cmd646_ide_init(PCIBus *bus, BlockDriverState **hd_table,
         pci_conf[0x51] |= 0x08; /* enable IDE1 */
     }
 
-    pci_register_io_region((PCIDevice *)d, 0, 0x8,
+    pci_register_bar((PCIDevice *)d, 0, 0x8,
                            PCI_ADDRESS_SPACE_IO, ide_map);
-    pci_register_io_region((PCIDevice *)d, 1, 0x4,
+    pci_register_bar((PCIDevice *)d, 1, 0x4,
                            PCI_ADDRESS_SPACE_IO, ide_map);
-    pci_register_io_region((PCIDevice *)d, 2, 0x8,
+    pci_register_bar((PCIDevice *)d, 2, 0x8,
                            PCI_ADDRESS_SPACE_IO, ide_map);
-    pci_register_io_region((PCIDevice *)d, 3, 0x4,
+    pci_register_bar((PCIDevice *)d, 3, 0x4,
                            PCI_ADDRESS_SPACE_IO, ide_map);
-    pci_register_io_region((PCIDevice *)d, 4, 0x10,
+    pci_register_bar((PCIDevice *)d, 4, 0x10,
                            PCI_ADDRESS_SPACE_IO, bmdma_map);
 
     pci_conf[0x3d] = 0x01; // interrupt on pin 1
@@ -3325,7 +3365,7 @@ void pci_cmd646_ide_init(PCIBus *bus, BlockDriverState **hd_table,
     ide_init2(&d->ide_if[0], hd_table[0], hd_table[1], irq[0]);
     ide_init2(&d->ide_if[2], hd_table[2], hd_table[3], irq[1]);
 
-    register_savevm("ide", 0, 2, pci_ide_save, pci_ide_load, d);
+    register_savevm("ide", 0, 3, pci_ide_save, pci_ide_load, d);
     qemu_register_reset(cmd646_reset, d);
     cmd646_reset(d);
 }
@@ -3367,12 +3407,12 @@ void pci_piix3_ide_init(PCIBus *bus, BlockDriverState **hd_table, int devfn,
     pci_config_set_device_id(pci_conf, PCI_DEVICE_ID_INTEL_82371SB_1);
     pci_conf[0x09] = 0x80; // legacy ATA mode
     pci_config_set_class(pci_conf, PCI_CLASS_STORAGE_IDE);
-    pci_conf[0x0e] = 0x00; // header_type
+    pci_conf[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
 
     qemu_register_reset(piix3_reset, d);
     piix3_reset(d);
 
-    pci_register_io_region((PCIDevice *)d, 4, 0x10,
+    pci_register_bar((PCIDevice *)d, 4, 0x10,
                            PCI_ADDRESS_SPACE_IO, bmdma_map);
 
     ide_init2(&d->ide_if[0], hd_table[0], hd_table[1], pic[14]);
@@ -3384,7 +3424,7 @@ void pci_piix3_ide_init(PCIBus *bus, BlockDriverState **hd_table, int devfn,
         if (hd_table[i])
             hd_table[i]->private = &d->dev;
 
-    register_savevm("ide", 0, 2, pci_ide_save, pci_ide_load, d);
+    register_savevm("ide", 0, 3, pci_ide_save, pci_ide_load, d);
 }
 
 /* hd_table must contain 4 block drivers */
@@ -3407,12 +3447,12 @@ void pci_piix4_ide_init(PCIBus *bus, BlockDriverState **hd_table, int devfn,
     pci_config_set_device_id(pci_conf, PCI_DEVICE_ID_INTEL_82371AB);
     pci_conf[0x09] = 0x80; // legacy ATA mode
     pci_config_set_class(pci_conf, PCI_CLASS_STORAGE_IDE);
-    pci_conf[0x0e] = 0x00; // header_type
+    pci_conf[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
 
     qemu_register_reset(piix3_reset, d);
     piix3_reset(d);
 
-    pci_register_io_region((PCIDevice *)d, 4, 0x10,
+    pci_register_bar((PCIDevice *)d, 4, 0x10,
                            PCI_ADDRESS_SPACE_IO, bmdma_map);
 
     ide_init2(&d->ide_if[0], hd_table[0], hd_table[1], pic[14]);
@@ -3420,7 +3460,7 @@ void pci_piix4_ide_init(PCIBus *bus, BlockDriverState **hd_table, int devfn,
     ide_init_ioport(&d->ide_if[0], 0x1f0, 0x3f6);
     ide_init_ioport(&d->ide_if[2], 0x170, 0x376);
 
-    register_savevm("ide", 0, 2, pci_ide_save, pci_ide_load, d);
+    register_savevm("ide", 0, 3, pci_ide_save, pci_ide_load, d);
 }
 
 #if defined(TARGET_PPC)
@@ -3708,7 +3748,7 @@ static int pmac_ide_load(QEMUFile *f, void *opaque, int version_id)
     uint8_t drive1_selected;
     unsigned int i;
 
-    if (version_id != 1)
+    if (version_id != 1 && version_id != 3)
         return -EINVAL;
 
     /* per IDE interface data */
@@ -3718,7 +3758,7 @@ static int pmac_ide_load(QEMUFile *f, void *opaque, int version_id)
 
     /* per IDE drive data */
     for(i = 0; i < 2; i++) {
-        ide_load(f, &s[i]);
+        ide_load(f, &s[i], version_id);
     }
     return 0;
 }
@@ -3747,9 +3787,9 @@ int pmac_ide_init (BlockDriverState **hd_table, qemu_irq irq,
     if (dbdma)
         DBDMA_register_channel(dbdma, channel, dma_irq, pmac_ide_transfer, pmac_ide_flush, d);
 
-    pmac_ide_memory = cpu_register_io_memory(0, pmac_ide_read,
+    pmac_ide_memory = cpu_register_io_memory(pmac_ide_read,
                                              pmac_ide_write, d);
-    register_savevm("ide", 0, 1, pmac_ide_save, pmac_ide_load, d);
+    register_savevm("ide", 0, 3, pmac_ide_save, pmac_ide_load, d);
     qemu_register_reset(pmac_ide_reset, d);
     pmac_ide_reset(d);
 
@@ -3843,8 +3883,8 @@ void mmio_ide_init (target_phys_addr_t membase, target_phys_addr_t membase2,
     s->dev = ide;
     s->shift = shift;
 
-    mem1 = cpu_register_io_memory(0, mmio_ide_reads, mmio_ide_writes, s);
-    mem2 = cpu_register_io_memory(0, mmio_ide_status, mmio_ide_cmd, s);
+    mem1 = cpu_register_io_memory(mmio_ide_reads, mmio_ide_writes, s);
+    mem2 = cpu_register_io_memory(mmio_ide_status, mmio_ide_cmd, s);
     cpu_register_physical_memory(membase, 16 << shift, mem1);
     cpu_register_physical_memory(membase2, 2 << shift, mem2);
 }
@@ -3855,9 +3895,9 @@ void mmio_ide_init (target_phys_addr_t membase, target_phys_addr_t membase2,
 #define METADATA_SIZE	0x20
 
 /* DSCM-1XXXX Microdrive hard disk with CF+ II / PCMCIA interface.  */
-struct md_s {
+typedef struct {
     IDEState ide[2];
-    struct pcmcia_card_s card;
+    PCMCIACardState card;
     uint32_t attr_base;
     uint32_t io_base;
 
@@ -3869,7 +3909,7 @@ struct md_s {
     uint8_t ctrl;
     uint16_t io;
     int cycle;
-};
+} MicroDriveState;
 
 /* Register bitfields */
 enum md_opt {
@@ -3898,7 +3938,7 @@ enum md_ctrl {
     CTRL_SRST		= 0x04,
 };
 
-static inline void md_interrupt_update(struct md_s *s)
+static inline void md_interrupt_update(MicroDriveState *s)
 {
     if (!s->card.slot)
         return;
@@ -3911,7 +3951,7 @@ static inline void md_interrupt_update(struct md_s *s)
 
 static void md_set_irq(void *opaque, int irq, int level)
 {
-    struct md_s *s = (struct md_s *) opaque;
+    MicroDriveState *s = (MicroDriveState *) opaque;
     if (level)
         s->stat |= STAT_INT;
     else
@@ -3920,7 +3960,7 @@ static void md_set_irq(void *opaque, int irq, int level)
     md_interrupt_update(s);
 }
 
-static void md_reset(struct md_s *s)
+static void md_reset(MicroDriveState *s)
 {
     s->opt = OPT_MODE_MMAP;
     s->stat = 0;
@@ -3932,7 +3972,7 @@ static void md_reset(struct md_s *s)
 
 static uint8_t md_attr_read(void *opaque, uint32_t at)
 {
-    struct md_s *s = (struct md_s *) opaque;
+    MicroDriveState *s = (MicroDriveState *) opaque;
     if (at < s->attr_base) {
         if (at < s->card.cis_len)
             return s->card.cis[at];
@@ -3965,7 +4005,7 @@ static uint8_t md_attr_read(void *opaque, uint32_t at)
 
 static void md_attr_write(void *opaque, uint32_t at, uint8_t value)
 {
-    struct md_s *s = (struct md_s *) opaque;
+    MicroDriveState *s = (MicroDriveState *) opaque;
     at -= s->attr_base;
 
     switch (at) {
@@ -3996,7 +4036,7 @@ static void md_attr_write(void *opaque, uint32_t at, uint8_t value)
 
 static uint16_t md_common_read(void *opaque, uint32_t at)
 {
-    struct md_s *s = (struct md_s *) opaque;
+    MicroDriveState *s = (MicroDriveState *) opaque;
     uint16_t ret;
     at -= s->io_base;
 
@@ -4055,7 +4095,7 @@ static uint16_t md_common_read(void *opaque, uint32_t at)
 
 static void md_common_write(void *opaque, uint32_t at, uint16_t value)
 {
-    struct md_s *s = (struct md_s *) opaque;
+    MicroDriveState *s = (MicroDriveState *) opaque;
     at -= s->io_base;
 
     switch (s->opt & OPT_MODE) {
@@ -4116,7 +4156,7 @@ static void md_common_write(void *opaque, uint32_t at, uint16_t value)
 
 static void md_save(QEMUFile *f, void *opaque)
 {
-    struct md_s *s = (struct md_s *) opaque;
+    MicroDriveState *s = (MicroDriveState *) opaque;
     int i;
     uint8_t drive1_selected;
 
@@ -4138,9 +4178,12 @@ static void md_save(QEMUFile *f, void *opaque)
 
 static int md_load(QEMUFile *f, void *opaque, int version_id)
 {
-    struct md_s *s = (struct md_s *) opaque;
+    MicroDriveState *s = (MicroDriveState *) opaque;
     int i;
     uint8_t drive1_selected;
+
+    if (version_id != 0 && version_id != 3)
+        return -EINVAL;
 
     qemu_get_8s(f, &s->opt);
     qemu_get_8s(f, &s->stat);
@@ -4155,7 +4198,7 @@ static int md_load(QEMUFile *f, void *opaque, int version_id)
     s->ide->cur_drive = &s->ide[(drive1_selected != 0)];
 
     for (i = 0; i < 2; i ++)
-        ide_load(f, &s->ide[i]);
+        ide_load(f, &s->ide[i], version_id);
 
     return 0;
 }
@@ -4347,7 +4390,7 @@ static const uint8_t dscm1xxxx_cis[0x14a] = {
 
 static int dscm1xxxx_attach(void *opaque)
 {
-    struct md_s *md = (struct md_s *) opaque;
+    MicroDriveState *md = (MicroDriveState *) opaque;
     md->card.attr_read = md_attr_read;
     md->card.attr_write = md_attr_write;
     md->card.common_read = md_common_read;
@@ -4367,26 +4410,26 @@ static int dscm1xxxx_attach(void *opaque)
 
 static int dscm1xxxx_detach(void *opaque)
 {
-    struct md_s *md = (struct md_s *) opaque;
+    MicroDriveState *md = (MicroDriveState *) opaque;
     md_reset(md);
     return 0;
 }
 
-struct pcmcia_card_s *dscm1xxxx_init(BlockDriverState *bdrv)
+PCMCIACardState *dscm1xxxx_init(BlockDriverState *bdrv)
 {
-    struct md_s *md = (struct md_s *) qemu_mallocz(sizeof(struct md_s));
+    MicroDriveState *md = (MicroDriveState *) qemu_mallocz(sizeof(MicroDriveState));
     md->card.state = md;
     md->card.attach = dscm1xxxx_attach;
     md->card.detach = dscm1xxxx_detach;
     md->card.cis = dscm1xxxx_cis;
     md->card.cis_len = sizeof(dscm1xxxx_cis);
 
-    ide_init2(md->ide, bdrv, 0, qemu_allocate_irqs(md_set_irq, md, 1)[0]);
+    ide_init2(md->ide, bdrv, NULL, qemu_allocate_irqs(md_set_irq, md, 1)[0]);
     md->ide->is_cf = 1;
     md->ide->mdata_size = METADATA_SIZE;
     md->ide->mdata_storage = (uint8_t *) qemu_mallocz(METADATA_SIZE);
 
-    register_savevm("microdrive", -1, 0, md_save, md_load, md);
+    register_savevm("microdrive", -1, 3, md_save, md_load, md);
 
     return &md->card;
 }

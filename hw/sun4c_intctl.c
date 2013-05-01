@@ -23,15 +23,15 @@
  */
 #include "hw.h"
 #include "sun4m.h"
-#include "console.h"
+#include "monitor.h"
 //#define DEBUG_IRQ_COUNT
 //#define DEBUG_IRQ
 
 #ifdef DEBUG_IRQ
-#define DPRINTF(fmt, args...) \
-do { printf("IRQ: " fmt , ##args); } while (0)
+#define DPRINTF(fmt, ...)                                       \
+    do { printf("IRQ: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define DPRINTF(fmt, args...)
+#define DPRINTF(fmt, ...)
 #endif
 
 /*
@@ -90,26 +90,26 @@ static CPUWriteMemoryFunc *sun4c_intctl_mem_write[3] = {
     NULL,
 };
 
-void sun4c_pic_info(void *opaque)
+void sun4c_pic_info(Monitor *mon, void *opaque)
 {
     Sun4c_INTCTLState *s = opaque;
 
-    term_printf("master: pending 0x%2.2x, enabled 0x%2.2x\n", s->pending,
-                s->reg);
+    monitor_printf(mon, "master: pending 0x%2.2x, enabled 0x%2.2x\n",
+                   s->pending, s->reg);
 }
 
-void sun4c_irq_info(void *opaque)
+void sun4c_irq_info(Monitor *mon, void *opaque)
 {
 #ifndef DEBUG_IRQ_COUNT
-    term_printf("irq statistic code not compiled.\n");
+    monitor_printf(mon, "irq statistic code not compiled.\n");
 #else
     Sun4c_INTCTLState *s = opaque;
     int64_t count;
 
-    term_printf("IRQ statistics:\n");
-    count = s->irq_count[i];
+    monitor_printf(mon, "IRQ statistics:\n");
+    count = s->irq_count;
     if (count > 0)
-        term_printf("%2d: %" PRId64 "\n", i, count);
+        monitor_printf(mon, " %" PRId64 "\n", count);
 #endif
 }
 
@@ -121,7 +121,6 @@ static void sun4c_check_interrupts(void *opaque)
     uint32_t pil_pending;
     unsigned int i;
 
-    DPRINTF("pending %x disabled %x\n", pending, s->intregm_disabled);
     pil_pending = 0;
     if (s->pending && !(s->reg & 0x80000000)) {
         for (i = 0; i < 8; i++) {
@@ -156,7 +155,7 @@ static void sun4c_set_irq(void *opaque, int irq, int level)
     if (pil > 0) {
         if (level) {
 #ifdef DEBUG_IRQ_COUNT
-            s->irq_count[pil]++;
+            s->irq_count++;
 #endif
             s->pending |= mask;
         } else {
@@ -183,7 +182,6 @@ static int sun4c_intctl_load(QEMUFile *f, void *opaque, int version_id)
 
     qemu_get_8s(f, &s->reg);
     qemu_get_8s(f, &s->pending);
-    sun4c_check_interrupts(s);
 
     return 0;
 }
@@ -194,7 +192,6 @@ static void sun4c_intctl_reset(void *opaque)
 
     s->reg = 1;
     s->pending = 0;
-    sun4c_check_interrupts(s);
 }
 
 void *sun4c_intctl_init(target_phys_addr_t addr, qemu_irq **irq,
@@ -205,7 +202,7 @@ void *sun4c_intctl_init(target_phys_addr_t addr, qemu_irq **irq,
 
     s = qemu_mallocz(sizeof(Sun4c_INTCTLState));
 
-    sun4c_intctl_io_memory = cpu_register_io_memory(0, sun4c_intctl_mem_read,
+    sun4c_intctl_io_memory = cpu_register_io_memory(sun4c_intctl_mem_read,
                                                     sun4c_intctl_mem_write, s);
     cpu_register_physical_memory(addr, INTCTL_SIZE, sun4c_intctl_io_memory);
     s->cpu_irqs = parent_irq;

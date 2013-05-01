@@ -29,7 +29,7 @@
 #ifndef _WIN32
 #ifdef __sun__
 #define _POSIX_PTHREAD_SEMANTICS 1
-#elif defined(__OpenBSD__) || defined(__FreeBSD__)
+#elif defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__DragonFly__)
 #include <pthread.h>
 #endif
 #include <signal.h>
@@ -201,7 +201,7 @@ static int sdl_open (SDL_AudioSpec *req, SDL_AudioSpec *obt)
     }
 
 #ifndef _WIN32
-    pthread_sigmask (SIG_SETMASK, &old, 0);
+    pthread_sigmask (SIG_SETMASK, &old, NULL);
 #endif
     return status;
 }

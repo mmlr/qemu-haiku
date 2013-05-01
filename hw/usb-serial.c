@@ -15,10 +15,10 @@
 //#define DEBUG_Serial
 
 #ifdef DEBUG_Serial
-#define DPRINTF(fmt, args...) \
-do { printf("usb-serial: " fmt , ##args); } while (0)
+#define DPRINTF(fmt, ...) \
+do { printf("usb-serial: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define DPRINTF(fmt, args...) do {} while(0)
+#define DPRINTF(fmt, ...) do {} while(0)
 #endif
 
 #define RECV_BUF 384
@@ -445,7 +445,15 @@ static int usb_serial_handle_data(USBDevice *dev, USBPacket *p)
         }
         *data++ = usb_get_modem_lines(s) | 1;
         /* We do not have the uart details */
-        *data++ = 0;
+        /* handle serial break */
+        if (s->event_trigger && s->event_trigger & FTDI_BI) {
+            s->event_trigger &= ~FTDI_BI;
+            *data++ = FTDI_BI;
+            ret = 2;
+            break;
+        } else {
+            *data++ = 0;
+        }
         len -= 2;
         if (len > s->recv_used)
             len = s->recv_used;
@@ -505,7 +513,7 @@ static void usb_serial_event(void *opaque, int event)
 
     switch (event) {
         case CHR_EVENT_BREAK:
-            /* TODO: Send Break to USB */
+            s->event_trigger |= FTDI_BI;
             break;
         case CHR_EVENT_FOCUS:
             break;

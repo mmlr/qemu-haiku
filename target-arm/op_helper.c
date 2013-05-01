@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "exec.h"
 #include "helpers.h"
@@ -307,7 +306,7 @@ void HELPER(set_user_reg)(uint32_t regno, uint32_t val)
 uint32_t HELPER (add_cc)(uint32_t a, uint32_t b)
 {
     uint32_t result;
-    result = T0 + T1;
+    result = a + b;
     env->NF = env->ZF = result;
     env->CF = result < a;
     env->VF = (a ^ b ^ -1) & (a ^ result);

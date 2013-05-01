@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef hw_omap_h
 # define hw_omap_h		"omap.h"
@@ -490,7 +489,7 @@ struct omap_dma_lcd_channel_s {
     int dual;
 
     int current_frame;
-    ram_addr_t phys_framebuffer[2];
+    target_phys_addr_t phys_framebuffer[2];
     qemu_irq irq;
     struct omap_mpu_state_s *mpu;
 } *omap_dma_get_lcdch(struct soc_dma_s *s);
@@ -681,7 +680,7 @@ struct omap_gpif_s *omap2_gpio_init(struct omap_target_agent_s *ta,
 qemu_irq *omap2_gpio_in_get(struct omap_gpif_s *s, int start);
 void omap2_gpio_out_set(struct omap_gpif_s *s, int line, qemu_irq handler);
 
-struct uwire_slave_s {
+struct uWireSlave {
     uint16_t (*receive)(void *opaque);
     void (*send)(void *opaque, uint16_t data);
     void *opaque;
@@ -690,7 +689,7 @@ struct omap_uwire_s;
 struct omap_uwire_s *omap_uwire_init(target_phys_addr_t base,
                 qemu_irq *irq, qemu_irq dma, omap_clk clk);
 void omap_uwire_attach(struct omap_uwire_s *s,
-                struct uwire_slave_s *slave, int chipselect);
+                uWireSlave *slave, int chipselect);
 
 struct omap_mcspi_s;
 struct omap_mcspi_s *omap_mcspi_init(struct omap_target_agent_s *ta, int chnum,
@@ -703,7 +702,7 @@ struct omap_rtc_s;
 struct omap_rtc_s *omap_rtc_init(target_phys_addr_t base,
                 qemu_irq *irq, omap_clk clk);
 
-struct i2s_codec_s {
+struct I2SCodec {
     void *opaque;
 
     /* The CPU can call this if it is generating the clock signal on the
@@ -730,7 +729,7 @@ struct i2s_codec_s {
 struct omap_mcbsp_s;
 struct omap_mcbsp_s *omap_mcbsp_init(target_phys_addr_t base,
                 qemu_irq *irq, qemu_irq *dma, omap_clk clk);
-void omap_mcbsp_i2s_attach(struct omap_mcbsp_s *s, struct i2s_codec_s *slave);
+void omap_mcbsp_i2s_attach(struct omap_mcbsp_s *s, I2SCodec *slave);
 
 struct omap_lpg_s;
 struct omap_lpg_s *omap_lpg_init(target_phys_addr_t base, omap_clk clk);
@@ -1116,7 +1115,7 @@ static void io_writew(void *opaque, target_phys_addr_t addr, uint32_t value)
 static CPUReadMemoryFunc *io_readfn[] = { io_readb, io_readh, io_readw, };
 static CPUWriteMemoryFunc *io_writefn[] = { io_writeb, io_writeh, io_writew, };
 
-inline static int debug_register_io_memory(int io_index,
+inline static int debug_register_io_memory(
                 CPUReadMemoryFunc **mem_read, CPUWriteMemoryFunc **mem_write,
                 void *opaque)
 {
@@ -1126,7 +1125,7 @@ inline static int debug_register_io_memory(int io_index,
     s->mem_write = mem_write;
     s->opaque = opaque;
     s->in = 0;
-    return cpu_register_io_memory(io_index, io_readfn, io_writefn, s);
+    return cpu_register_io_memory(io_readfn, io_writefn, s);
 }
 #  define cpu_register_io_memory	debug_register_io_memory
 # endif
@@ -1136,7 +1135,7 @@ inline static int debug_register_io_memory(int io_index,
 
 # ifdef L4_MUX_HACK
 #  undef l4_register_io_memory
-int l4_register_io_memory(int io_index, CPUReadMemoryFunc **mem_read,
+int l4_register_io_memory(CPUReadMemoryFunc **mem_read,
                 CPUWriteMemoryFunc **mem_write, void *opaque);
 # endif
 

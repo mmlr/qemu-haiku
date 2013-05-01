@@ -16,10 +16,10 @@
 //#define DEBUG_MSD
 
 #ifdef DEBUG_MSD
-#define DPRINTF(fmt, args...) \
-do { printf("usb-msd: " fmt , ##args); } while (0)
+#define DPRINTF(fmt, ...) \
+do { printf("usb-msd: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define DPRINTF(fmt, args...) do {} while(0)
+#define DPRINTF(fmt, ...) do {} while(0)
 #endif
 
 /* USB requests.  */
@@ -514,7 +514,7 @@ static void usb_msd_handle_destroy(USBDevice *dev)
     qemu_free(s);
 }
 
-USBDevice *usb_msd_init(const char *filename, BlockDriverState **pbs)
+USBDevice *usb_msd_init(const char *filename)
 {
     MSDState *s;
     BlockDriverState *bdrv;
@@ -554,7 +554,6 @@ USBDevice *usb_msd_init(const char *filename, BlockDriverState **pbs)
     if (bdrv_open2(bdrv, filename, 0, drv) < 0)
         goto fail;
     s->bs = bdrv;
-    *pbs = bdrv;
 
     s->dev.speed = USB_SPEED_FULL;
     s->dev.handle_packet = usb_generic_handle_packet;
@@ -573,4 +572,11 @@ USBDevice *usb_msd_init(const char *filename, BlockDriverState **pbs)
  fail:
     qemu_free(s);
     return NULL;
+}
+
+BlockDriverState *usb_msd_get_bdrv(USBDevice *dev)
+{
+    MSDState *s = (MSDState *)dev;
+
+    return s->bs;
 }
