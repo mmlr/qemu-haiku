@@ -1,0 +1,701 @@
+<HTML>
+<HEAD>
+<!-- Created by texi2html 1.56k from kqemu-tech.texi on 30 May 2008 -->
+
+<TITLE>QEMU Accelerator Technical Documentation</TITLE>
+</HEAD>
+<BODY>
+<H1>QEMU Accelerator Technical Documentation</H1>
+<P>
+<P><HR><P>
+<H1>Table of Contents</H1>
+<UL>
+<LI><A NAME="TOC1" HREF="kqemu-tech.html#SEC1">1. Introduction</A>
+<LI><A NAME="TOC2" HREF="kqemu-tech.html#SEC2">2. API definition</A>
+<UL>
+<LI><A NAME="TOC3" HREF="kqemu-tech.html#SEC3">2.1 RAM, Physical and Virtual addresses</A>
+<LI><A NAME="TOC4" HREF="kqemu-tech.html#SEC4">2.2 RAM page dirtiness</A>
+<LI><A NAME="TOC5" HREF="kqemu-tech.html#SEC5">2.3 <TT>`/dev/kqemu'</TT> device</A>
+<LI><A NAME="TOC6" HREF="kqemu-tech.html#SEC6">2.4 <CODE>KQEMU_GET_VERSION</CODE> ioctl</A>
+<LI><A NAME="TOC7" HREF="kqemu-tech.html#SEC7">2.5 <CODE>KQEMU_INIT</CODE> ioctl</A>
+<LI><A NAME="TOC8" HREF="kqemu-tech.html#SEC8">2.6 <CODE>KQEMU_SET_PHYS_MEM</CODE> ioctl</A>
+<LI><A NAME="TOC9" HREF="kqemu-tech.html#SEC9">2.7 <CODE>KQEMU_MODIFY_RAM_PAGE</CODE> ioctl</A>
+<LI><A NAME="TOC10" HREF="kqemu-tech.html#SEC10">2.8 <CODE>KQEMU_EXEC</CODE> ioctl</A>
+</UL>
+<LI><A NAME="TOC11" HREF="kqemu-tech.html#SEC11">3. KQEMU inner working and limitations</A>
+<UL>
+<LI><A NAME="TOC12" HREF="kqemu-tech.html#SEC12">3.1 Inner working</A>
+<LI><A NAME="TOC13" HREF="kqemu-tech.html#SEC13">3.2 General limitations</A>
+<LI><A NAME="TOC14" HREF="kqemu-tech.html#SEC14">3.3 Security</A>
+<LI><A NAME="TOC15" HREF="kqemu-tech.html#SEC15">3.4 Developments Ideas</A>
+</UL>
+</UL>
+<P><HR><P>
+
+<P>
+QEMU Accelerator Technical Documentation
+
+
+
+
+<H1><A NAME="SEC1" HREF="kqemu-tech.html#TOC1">1. Introduction</A></H1>
+
+<P>
+The QEMU Accelerator (KQEMU) is a driver allowing a user application
+to run x86 code in a Virtual Machine (VM). The code can be either user
+or kernel code, in 64, 32 or 16 bit protected mode. KQEMU is very
+similar in essence to the VM86 Linux syscall call, but it adds some
+new concepts to improve memory handling.
+
+
+<P>
+KQEMU is ported on many host OSes (currently Linux, Windows, FreeBSD,
+Solaris). It can execute code from many guest OSes (e.g. Linux,
+Windows 2000/XP) even if the host CPU does not support hardware
+virtualization.
+
+
+<P>
+In that document, we assume that the reader has good knowledge of the
+x86 processor and of the problems associated with the virtualization
+of x86 code.
+
+
+
+
+<H1><A NAME="SEC2" HREF="kqemu-tech.html#TOC2">2. API definition</A></H1>
+
+<P>
+We describe the version 1.3.0 of the Linux implementation. The
+implementations on other OSes use the same calls, so they can be
+understood by reading the Linux API specification.
+
+
+
+
+<H2><A NAME="SEC3" HREF="kqemu-tech.html#TOC3">2.1 RAM, Physical and Virtual addresses</A></H2>
+
+<P>
+KQEMU manipulates three kinds of addresses:
+
+
+
+<UL>
+
+<LI>RAM addresses are between 0 and the available VM RAM size minus one.
+
+They are currently stored on 32 bit words.
+
+<LI>Physical addresses are addresses after MMU translation.
+
+<LI>Virtual addresses are addresses before MMU translation.
+
+</UL>
+
+<P>
+KQEMU has a physical page table which is used to associate a RAM
+address or a device I/O address range to a given physical page. It
+also tells if a given RAM address is visible as read-only memory. The
+same RAM address can be mapped at several different physical
+addresses. Only 4 GB of physical address space is supported in the
+current KQEMU implementation. Hence the bits of order &#62;= 32 of the
+physical addresses are ignored.
+
+
+
+
+<H2><A NAME="SEC4" HREF="kqemu-tech.html#TOC4">2.2 RAM page dirtiness</A></H2>
+
+<P>
+It is very important for the VM to be able to tell if a given RAM page
+has been modified. It can be used to optimize VGA refreshes, to flush
+a dynamic translator cache (when used with QEMU), to handle live
+migration or to optimize MMU emulation.
+
+
+<P>
+In KQEMU, each RAM page has an associated <EM>dirty byte</EM> in the
+array <CODE>init_params.ram_dirty</CODE>. The dirty byte is set to
+<CODE>0xff</CODE> if the corresponding RAM page is modified. That way, at
+most 8 clients can manage a dirty bit in each page.
+
+
+<P>
+KQEMU reserves one dirty bit <CODE>0x04</CODE> for its internal use.
+
+
+<P>
+The client must notify KQEMU if some entries of the array
+<CODE>init_params.ram_dirty</CODE> were modified from <CODE>0xff</CODE> to a
+different value. The address of the corresponding RAM pages are stored
+by the client in the array <CODE>init_parms.ram_pages_to_update</CODE>.
+
+
+<P>
+The client must also notify KQEMU if a RAM page has been modified
+independently of the <CODE>init_params.ram_dirty</CODE> state. It is done
+with the <CODE>init_params.modified_ram_pages</CODE> array. 
+
+
+<P>
+Symmetrically, KQEMU notifies the client if a RAM page has been
+modified with the <CODE>init_params.modified_ram_pages</CODE> array. The
+client can use this information for example to invalidate a dynamic
+translation cache.
+
+
+
+
+<H2><A NAME="SEC5" HREF="kqemu-tech.html#TOC5">2.3 <TT>`/dev/kqemu'</TT> device</A></H2>
+
+<P>
+A user client wishing to create a new virtual machine must open the
+device <TT>`/dev/kqemu'</TT>. There is no hard limit on the number of
+virtual machines that can be created and run at the same time, except
+for the available memory.
+
+
+
+
+<H2><A NAME="SEC6" HREF="kqemu-tech.html#TOC6">2.4 <CODE>KQEMU_GET_VERSION</CODE> ioctl</A></H2>
+
+<P>
+It returns the KQEMU API version as an int. The client must use it to
+determine if it is compatible with the KQEMU driver.
+
+
+
+
+<H2><A NAME="SEC7" HREF="kqemu-tech.html#TOC7">2.5 <CODE>KQEMU_INIT</CODE> ioctl</A></H2>
+
+<P>
+Input parameter: <CODE>struct kqemu_init init_params</CODE>
+
+
+<P>
+It must be called once to initialize the VM. The following structure
+is used as input parameter:
+
+
+
+<PRE>
+struct kqemu_init {
+    uint8_t *ram_base;
+    uint64_t ram_size;
+    uint8_t *ram_dirty;
+    uint64_t *pages_to_flush;
+    uint64_t *ram_pages_to_update;
+    uint64_t *modified_ram_pages;
+};
+</PRE>
+
+<P>
+The pointers <CODE>ram_base</CODE>, <CODE>ram_dirty</CODE>,
+<CODE>phys_to_ram_map</CODE>, <CODE>pages_to_flush</CODE>,
+<CODE>ram_pages_to_update</CODE> and <CODE>modified_ram_pages</CODE> must be page
+aligned and must point to user allocated memory.
+
+
+<P>
+On Linux, due to a kernel bug related to memory swapping, the
+corresponding memory must be mmaped from a file. We plan to remove
+this restriction in a future implementation.
+
+
+<P>
+<CODE>ram_size</CODE> must be a multiple of 4K and is the quantity of RAM
+allocated to the VM.
+
+
+<P>
+<CODE>ram_base</CODE> is a pointer to the VM RAM. It must contain at least
+<CODE>ram_size</CODE> bytes.
+
+
+<P>
+<CODE>ram_dirty</CODE> is a pointer to a byte array of length
+<CODE>ramsize/4096</CODE>. Each byte indicates if the corresponding VM RAM
+page has been modified (see section <A HREF="kqemu-tech.html#SEC4">2.2 RAM page dirtiness</A>)
+
+
+<P>
+<CODE>pages_to_flush</CODE> is a pointer to an array of
+<CODE>KQEMU_MAX_PAGES_TO_FLUSH</CODE> longs. It is used to indicate which
+TLB must be flushed before executing code in the VM.
+
+
+<P>
+<CODE>ram_pages_to_update</CODE> is a pointer to an array of
+<CODE>KQEMU_MAX_RAM_PAGES_TO_UPDATE</CODE> longs. It is used to notify the VM that
+some RAM pages have been dirtied.
+
+
+<P>
+<CODE>modified_ram_pages</CODE> is a pointer to an array of
+<CODE>KQEMU_MAX_MODIFIED_RAM_PAGES</CODE> longs. It is used to notify the VM or the
+client that RAM pages have been modified.
+
+
+<P>
+The value 0 is return if the ioctl succeeded.
+
+
+
+
+<H2><A NAME="SEC8" HREF="kqemu-tech.html#TOC8">2.6 <CODE>KQEMU_SET_PHYS_MEM</CODE> ioctl</A></H2>
+
+<P>
+The following structure is used as input parameter:
+
+
+
+<PRE>
+struct kqemu_phys_mem {
+    uint64_t phys_addr;
+    uint64_t size;        
+    uint64_t ram_addr;
+    uint32_t io_index;
+    uint32_t padding1;
+};
+</PRE>
+
+<P>
+The ioctl modifies the internal KQEMU physical to ram mappings. After
+the ioctl is executed, the physical address range <CODE>[phys_addr;
+phys_addr + size[</CODE> is mapped to the RAM addresses <CODE>[ram_addr;
+ram_addr + size[</CODE> if <CODE>io_index</CODE> is <CODE>KQEMU_IO_MEM_RAM</CODE> or
+<CODE>KQEMU_IO_MEM_ROM</CODE>. If <CODE>KQEMU_IO_MEM_ROM</CODE> is used, the
+writes to the RAM are ignored. 
+
+
+<P>
+When <CODE>io_index</CODE> is <CODE>KQEMU_IO_MEM_UNASSIGNED</CODE>, it means the
+physical memory range corresponds to a device I/O region. When a
+memory access is done to it, <CODE>KQEMU_EXEC</CODE> returns with
+<CODE>cpu_state.retval</CODE> set to <CODE>KQEMU_RET_SOFTMMU</CODE>.
+
+
+
+
+<H2><A NAME="SEC9" HREF="kqemu-tech.html#TOC9">2.7 <CODE>KQEMU_MODIFY_RAM_PAGE</CODE> ioctl</A></H2>
+
+<P>
+Input parameter: <CODE>int nb_pages</CODE>
+
+
+<P>
+Notify the VM that <CODE>nb_pages</CODE> RAM pages were modified. The
+corresponding RAM page addresses are written by the client in the
+<CODE>init_state.modified_ram_pages</CODE> array given with the KQEMU_INIT ioctl.
+
+
+<P>
+Note: This ioctl does currently nothing, but the clients must use it
+for later compatibility.
+
+
+
+
+<H2><A NAME="SEC10" HREF="kqemu-tech.html#TOC10">2.8 <CODE>KQEMU_EXEC</CODE> ioctl</A></H2>
+
+<P>
+Input/Output parameter: <CODE>struct kqemu_cpu_state cpu_state</CODE>
+
+
+<P>
+Structure definitions:
+
+<PRE>
+struct kqemu_segment_cache {
+    uint16_t selector;
+    uint16_t padding1;
+    uint32_t flags;
+    uint64_t base;
+    uint32_t limit;
+    uint32_t padding2;
+};
+
+struct kqemu_cpu_state {
+    uint64_t regs[16];
+    uint64_t eip;
+    uint64_t eflags;
+
+    struct kqemu_segment_cache segs[6]; /* selector values */
+    struct kqemu_segment_cache ldt;
+    struct kqemu_segment_cache tr;
+    struct kqemu_segment_cache gdt; /* only base and limit are used */
+    struct kqemu_segment_cache idt; /* only base and limit are used */
+
+    uint64_t cr0;
+    uint64_t cr2;
+    uint64_t cr3;
+    uint64_t cr4;
+    uint64_t a20_mask;
+
+    /* sysenter registers */
+    uint64_t sysenter_cs;
+    uint64_t sysenter_esp;
+    uint64_t sysenter_eip;
+    uint64_t efer;
+    uint64_t star;
+    
+    uint64_t lstar;
+    uint64_t cstar;
+    uint64_t fmask;
+    uint64_t kernelgsbase;
+
+    uint64_t tsc_offset;
+
+    uint64_t dr0;
+    uint64_t dr1;
+    uint64_t dr2;
+    uint64_t dr3;
+    uint64_t dr6;
+    uint64_t dr7;
+
+    uint8_t cpl;
+    uint8_t user_only;
+    uint16_t padding1;
+
+    uint32_t error_code; /* error_code when exiting with an exception */
+    uint64_t next_eip; /* next eip value when exiting with an interrupt */
+    uint32_t nb_pages_to_flush;
+    int32_t retval;
+
+    uint32_t nb_ram_pages_to_update; 
+
+    uint32_t nb_modified_ram_pages;
+};
+</PRE>
+
+<P>
+Execute x86 instructions in the VM context. The full x86 CPU state is
+defined in this structure. It contains in particular the value of the
+8 (or 16 for x86_64) general purpose registers, the contents of the
+segment caches, the RIP and EFLAGS values, etc...
+
+
+<P>
+If <CODE>cpu_state.user_only</CODE> is 1, a user only emulation is
+done. <CODE>cpu_state.cpl</CODE> must be 3 in that case.
+
+
+<P>
+<CODE>KQEMU_EXEC</CODE> does the following:
+
+
+
+<OL>
+
+<LI>Update the internal dirty state of the
+
+<CODE>cpu_state.nb_ram_pages_to_update</CODE> RAM pages from the array
+<CODE>init_params.ram_pages_to_update</CODE>. If
+<CODE>cpu_state.nb_ram_pages_to_update</CODE> has the value
+<CODE>KQEMU_RAM_PAGES_UPDATE_ALL</CODE>, it means that all the RAM pages may
+have been dirtied. The array <CODE>init_params.ram_pages_to_update</CODE> is
+ignored in that case.
+
+<LI>Update the internal KQEMU state by taking into account that the
+
+<CODE>cpu_state.nb_modified_ram_pages</CODE> RAM pages from the array
+<CODE>init_params.modified_ram_pages</CODE> where modified by the client.
+
+<LI>Flush virtual CPU TLBs corresponding to the virtual address from
+
+the array <CODE>init_params.pages_to_flush</CODE> of length
+<CODE>cpu_state.nb_pages_to_flush</CODE>. If
+<CODE>cpu_state.nb_pages_to_flush</CODE> is <CODE>KQEMU_FLUSH_ALL</CODE>, all the
+TLBs are flushed. The array <CODE>init_params.pages_to_flush</CODE> is
+ignored in that case.
+
+<LI>Load the virtual CPU state from <CODE>cpu_state</CODE>.
+
+<LI>Execute some code in the VM context.
+
+<LI>Save the virtual CPU state into <CODE>cpu_state</CODE>.
+
+<LI>Indicate the reason for which the execution was stopped in
+
+<CODE>cpu_state.retval</CODE>.
+
+<LI>Update <CODE>cpu_state.nb_pages_to_flush</CODE> and
+
+<CODE>init_params.pages_to_flush</CODE> to notify the client that some
+virtual CPU TLBs were flushed. The client can use this notification to
+synchronize its own virtual TLBs with KQEMU.
+
+<LI>Set <CODE>cpu_state.nb_ram_pages_to_update</CODE> to 1 if some
+
+RAM dirty bytes were transitionned from dirty (0xff) to a non dirty
+value. Otherwise, <CODE>cpu_state.nb_ram_pages_to_update</CODE> is set to 0.
+
+<LI>Update <CODE>cpu_state.nb_modified_ram_pages</CODE> and
+
+<CODE>init_params.modified_ram_pages</CODE> to notify the client that some
+RAM pages were modified. 
+
+</OL>
+
+<P>
+<CODE>cpu_state.retval</CODE> indicate the reason why the execution was
+stopped:
+
+
+<DL COMPACT>
+
+<DT><CODE>KQEMU_RET_EXCEPTION | n</CODE>
+<DD>
+The virtual CPU raised an exception and KQEMU cannot handle it. The
+exception number <VAR>n</VAR> is stored in the 8 low order bits. The field
+<CODE>cpu_state.error_code</CODE> contains the exception error code if it is
+needed. It should be noted that in <EM>user only</EM> emulation, KQEMU
+handles no exceptions by itself.
+
+<DT><CODE>KQEMU_RET_INT | n</CODE>
+<DD>
+(<EM>user only</EM> emulation) The virtual CPU generated a software
+interrupt (INT instruction for example). The exception number <VAR>n</VAR>
+is stored in the 8 low order bits. The field <CODE>cpu_state.next_eip</CODE>
+contains value of RIP after the instruction raising the
+interrupt. <CODE>cpu_state.eip</CODE> contains the value of RIP at the
+intruction raising the interrupt.
+
+<DT><CODE>KQEMU_RET_SOFTMMU</CODE>
+<DD>
+The virtual CPU could not handle the current instruction. This is not
+a fatal error. Usually the client just needs to interpret it. It can
+happen because of the following reasons:
+
+
+<UL>
+<LI>memory access to an unassigned address or unknown device type ;
+
+<LI>an instruction cannot be accurately executed by KQEMU
+
+(e.g. SYSENTER, HLT, ...) ;
+
+<LI>more than KQEMU_MAX_MODIFIED_RAM_PAGES were modified ;
+
+<LI>some unsupported bits were modified in CR0 or CR4 ;
+
+<LI>GDT.base or LDT.base are not a multiple of 8 ;
+
+<LI>the GDT or LDT tables were modified while CPL = 3 ;
+
+<LI>EFLAGS.VM was set.
+
+</UL>
+
+<DT><CODE>KQEMU_RET_INTR</CODE>
+<DD>
+A signal from the OS interrupted KQEMU.
+
+<DT><CODE>KQEMU_RET_SYSCALL</CODE>
+<DD>
+(<EM>user only</EM> emulation) The SYSCALL instruction was executed. The
+field <CODE>cpu_state.next_eip</CODE> contains value of RIP after the
+instruction. <CODE>cpu_state.eip</CODE> contains the RIP of the intruction.
+
+<DT><CODE>KQEMU_RET_ABORT</CODE>
+<DD>
+An unrecoverable error was detected. This is usually due to a bug in
+KQEMU, so it should never happen !
+
+</DL>
+
+
+
+<H1><A NAME="SEC11" HREF="kqemu-tech.html#TOC11">3. KQEMU inner working and limitations</A></H1>
+
+
+
+<H2><A NAME="SEC12" HREF="kqemu-tech.html#TOC12">3.1 Inner working</A></H2>
+
+<P>
+The main priority when implementing KQEMU was simplicity and
+security. Unlike other virtualization systems, it does not do any
+dynamic translation nor code patching. 
+
+
+
+<UL>
+
+<LI>KQEMU always executes the target code at CPL = 3 on the host
+
+processor. It means that KQEMU can use the page protections to ensure
+that the VM cannot modify the host OS nor the KQEMU monitor. Moreover,
+it means that KQEMU does not need to modify the segment limits to
+ensure memory protection. Another advantage is that this methods works
+with 64 bit code too.
+
+<LI>KQEMU maintains a shadow page table simulating the TLBs of the
+
+virtual CPU.  The shadow page table persists between calls to
+KQEMU_EXEC.
+
+<LI>When the target CPL is 3, the target GDT and LDT are copied to
+
+the host GDT and LDT so that the LAR and LSL instructions return
+a meaningful value. This is important for 16 bit code.
+
+<LI>When the target CPL is different to 3, the host GDT and LDT
+
+are cleared so that any segment loading causes a General Protection
+Fault. That way, KQEMU can intercept every segment loading.
+
+<LI>All the code running with EFLAGS.IF = 0 is interpreted so that
+
+EFLAGS.IF can be accurately reset in the VM. Fortunately, moderns OSes
+tend to execute very little code with interrupt disabled.
+
+<LI>KQEMU maintains dirty bits for every RAM pages so that modified
+
+RAM pages can be tracked. It it useful to know if the GDT and LDT are
+modified in user mode, and will be useful later to optimize shadow
+page tables switching. It is also useful to maintain the coherency of
+the user space QEMU translation cache.
+
+</UL>
+
+
+
+<H2><A NAME="SEC13" HREF="kqemu-tech.html#TOC13">3.2 General limitations</A></H2>
+
+<P>
+Note 1: KQEMU does not currently use the hardware virtualization
+features of newer x86 CPUs. We expect that the limitations would be
+different in that case.
+
+
+<P>
+Note 2: KQEMU supports both x86 and x86_64 CPUs.
+
+
+<P>
+Before entering the VM, the following conditions must be satisfied :
+
+
+
+<OL>
+
+<LI>CR0.PE = 1 (protected mode must be enabled)
+
+<LI>CR0.MP = 1 (native math support)
+
+<LI>CR0.WP = 1 (write protection for user pages)
+
+<LI>EFLAGS.VM = 0 (no VM86 support)
+
+<LI>At least 8 consecutive GDT descriptors must be available
+
+(currently at a fixed location in the GDT).
+
+<LI>At least 32 MB of virtual address must be free (currently at a
+
+fixed location).
+
+<LI>All the pages containing the LDT and GDT must be RAM pages.
+
+</OL>
+
+<P>
+If EFLAGS.IF is set, the following assumptions are made on the
+executing code:
+
+
+
+<OL>
+<LI>If EFLAGS.IOPL = 3, EFLAGS.IOPL = 0 is returned in EFLAGS.
+
+<LI>POPF cannot be used to clear EFLAGS.IF
+
+<LI>RDTSC returns host cycles (could be improved if needed).
+
+<LI>The values returned by SGDT, SIDT, SLDT are invalid.
+
+<LI>Reading CS.rpl and SS.rpl always returns 3 regardless of the CPL.
+
+<LI>in 64 bit mode with CPL != 3, reading SS.sel does not give 0
+
+if the OS stored 0 in it.
+
+<LI>LAR, LSL, VERR, VERW return invalid results if CPL != 3.
+
+<LI>The CS and SS segment cache must be consistent with the descriptor
+
+tables.
+
+<LI>The DS, ES, FS, and GS segment cache must be consistent with the
+
+descriptor tables for CPL = 3.
+
+<LI>Some rarely used intructions trap to the user space client
+
+(performance issue).
+
+</OL>
+
+<P>
+If eflags.IF if reset the code is interpreted, so the VM code can be
+accurately executed. Some intructions trap to the user space emulator
+because the interpreter does not handle them. A limitation of the
+interpreter is that currently segment limits are not always tested.
+
+
+
+
+<H2><A NAME="SEC14" HREF="kqemu-tech.html#TOC14">3.3 Security</A></H2>
+
+<P>
+The VM code is always run with CPL = 3 on the host, so <EM>the VM
+code has no more priviliedge than regular user code</EM>.
+
+
+<P>
+The MMU is used to protect the memory used by the KQEMU monitor. That
+way, no segment limit patching is necessary. Moreover, the guest OS is
+free to use any virtual address, in particular the ones near the start
+or the end of the virtual address space. The price to pay is that CR3
+must be modified at every emulated system call because different page
+tables are needed for user and kernel modes.
+
+
+
+
+<H2><A NAME="SEC15" HREF="kqemu-tech.html#TOC15">3.4 Developments Ideas</A></H2>
+
+
+<UL>
+
+<LI>Instead of interpreting the code when IF=0, compile it dynamically.
+
+The dynamic compiler itself can be implemented in user space, so the
+kernel module would be simplified.
+
+<LI>Use APIs closer to KVM.
+
+<LI>Optimization of the page table shadowing. A shadow page table cache
+
+could be implemented by tracking the modification of the guest page
+tables. The exact performance gains are difficult to estimate because
+the tracking itself would introduce some performance loss.
+
+<LI>Support of guest SMP. There is no particular problem except
+
+when a RAM page must be unlocked because the host has not enough
+memory. This particular case needs specific Inter Processor Interrupts
+(IPI).
+
+<LI>Dynamic relocation of the monitor code so that a 32 MB hole
+
+in the guest address space is found automatically without making
+assumptions on the guest OS.
+
+</UL>
+
+<P><HR><P>
+This document was generated on 30 May 2008 using
+<A HREF="http://wwwinfo.cern.ch/dis/texi2html/">texi2html</A>&nbsp;1.56k.
+</BODY>
+</HTML>
