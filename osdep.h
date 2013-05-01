@@ -94,19 +94,4 @@ typedef struct timeval qemu_timeval;
 #define qemu_gettimeofday(tp) gettimeofday(tp, NULL);
 #endif /* !_WIN32 */
 
-#ifdef __HAIKU__
-// until Haiku has proper ipv6 support
-#ifndef INET6_ADDRSTRLEN
-#define INET6_ADDRSTRLEN 46
-#endif
-
-void *checked_malloc(size_t size);
-void *checked_realloc(void *original, size_t newSize);
-void checked_free(void *pointer);
-
-#define malloc(x)		checked_malloc(x)
-#define realloc(x, y)	checked_realloc(x, y)
-#define free(x)			checked_free(x)
-#endif
-
 #endif
