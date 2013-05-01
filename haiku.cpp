@@ -542,7 +542,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 			uint8 keycode = haiku_to_pc_key[(uint8)key];
 
 			int32 mask = (B_COMMAND_KEY | B_CONTROL_KEY);
-			if (!keyDown && sGrabInput && modifiers & mask
+			if (!keyDown && sGrabInput && (modifiers & mask)
 				&& (key == 0x5d || key == 0x5c)) {
 					EndGrab(sGrabInput, modifiers);
 					return B_SKIP_MESSAGE;
