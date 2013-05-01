@@ -569,7 +569,7 @@ QEMUView::Update(BPoint point, int width, int height)
 	fBitmap->ImportBits(fFrameBuffer, fFrameBufferSize, fBytesPerRow,
 		fColorSpace, point, point, width, height);
 
-	Draw(BRect(point.x, point.y, point.x + width, point.y + height));
+	Invalidate(BRect(point.x, point.y, point.x + width, point.y + height));
 	UnlockLooper();
 }
 
