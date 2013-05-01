@@ -527,9 +527,9 @@ for opt do
 done
 
 # default flags for all hosts
-CFLAGS="$CFLAGS -g -fno-strict-aliasing"
+CFLAGS="$CFLAGS -g -fno-strict-aliasing -fno-tree-vrp"
 if test "$debug" = "no" ; then
-  CFLAGS="$CFLAGS -O2"
+  CFLAGS="$CFLAGS -O1"
 fi
 CFLAGS="$CFLAGS -Wall -Wundef -Wendif-labels -Wwrite-strings -Wmissing-prototypes -Wstrict-prototypes -Wredundant-decls"
 LDFLAGS="$LDFLAGS -g"
