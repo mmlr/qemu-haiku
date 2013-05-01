@@ -1,15 +1,15 @@
 /*
  * Arm PrimeCell PL110 Color LCD Controller
  *
- * Copyright (c) 2005-2006 CodeSourcery.
+ * Copyright (c) 2005-2009 CodeSourcery.
  * Written by Paul Brook
  *
  * This code is licenced under the GNU LGPL
  */
 
-#include "hw.h"
-#include "primecell.h"
+#include "sysbus.h"
 #include "console.h"
+#include "framebuffer.h"
 
 #define PL110_CR_EN   0x001
 #define PL110_CR_BGR  0x100
@@ -28,6 +28,7 @@ enum pl110_bppmode
 };
 
 typedef struct {
+    SysBusDevice busdev;
     DisplayState *ds;
 
     /* The Versatile/PB uses a slightly modified PL110 controller.  */
@@ -59,32 +60,7 @@ static const unsigned char pl110_versatile_id[] =
 #define pl110_versatile_id pl110_id
 #endif
 
-static inline uint32_t rgb_to_pixel8(unsigned int r, unsigned int g, unsigned b)
-{
-    return ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6);
-}
-
-static inline uint32_t rgb_to_pixel15(unsigned int r, unsigned int g, unsigned b)
-{
-    return ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
-}
-
-static inline uint32_t rgb_to_pixel16(unsigned int r, unsigned int g, unsigned b)
-{
-    return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
-}
-
-static inline uint32_t rgb_to_pixel24(unsigned int r, unsigned int g, unsigned b)
-{
-    return (r << 16) | (g << 8) | b;
-}
-
-static inline uint32_t rgb_to_pixel32(unsigned int r, unsigned int g, unsigned b)
-{
-    return (r << 16) | (g << 8) | b;
-}
-
-typedef void (*drawfn)(uint32_t *, uint8_t *, const uint8_t *, int);
+#include "pixel_ops.h"
 
 #define BITS 8
 #include "pl110_template.h"
@@ -107,17 +83,11 @@ static void pl110_update_display(void *opaque)
     pl110_state *s = (pl110_state *)opaque;
     drawfn* fntable;
     drawfn fn;
-    uint32_t *pallette;
-    uint32_t addr;
-    uint32_t base;
     int dest_width;
     int src_width;
-    uint8_t *dest;
-    uint8_t *src;
-    int first, last = 0;
-    int dirty, new_dirty;
-    int i;
     int bpp_offset;
+    int first;
+    int last;
 
     if (!pl110_enabled(s))
         return;
@@ -182,53 +152,26 @@ static void pl110_update_display(void *opaque)
         break;
     }
     dest_width *= s->cols;
-    pallette = s->pallette;
-    base = s->upbase;
-    /* HACK: Arm aliases physical memory at 0x80000000.  */
-    if (base > 0x80000000)
-        base -= 0x80000000;
-    src = phys_ram_base + base;
-    dest = ds_get_data(s->ds);
-    first = -1;
-    addr = base;
-
-    dirty = cpu_physical_memory_get_dirty(addr, VGA_DIRTY_FLAG);
-    new_dirty = dirty;
-    for (i = 0; i < s->rows; i++) {
-        if ((addr & ~TARGET_PAGE_MASK) + src_width >= TARGET_PAGE_SIZE) {
-            uint32_t tmp;
-            new_dirty = 0;
-            for (tmp = 0; tmp < src_width; tmp += TARGET_PAGE_SIZE) {
-                new_dirty |= cpu_physical_memory_get_dirty(addr + tmp,
-                                                           VGA_DIRTY_FLAG);
-            }
-        }
-
-        if (dirty || new_dirty || s->invalidate) {
-            fn(pallette, dest, src, s->cols);
-            if (first == -1)
-                first = i;
-            last = i;
-        }
-        dirty = new_dirty;
-        addr += src_width;
-        dest += dest_width;
-        src += src_width;
+    first = 0;
+    framebuffer_update_display(s->ds,
+                               s->upbase, s->cols, s->rows,
+                               src_width, dest_width, 0,
+                               s->invalidate,
+                               fn, s->pallette,
+                               &first, &last);
+    if (first >= 0) {
+        dpy_update(s->ds, 0, first, s->cols, last - first + 1);
     }
-    if (first < 0)
-      return;
-
     s->invalidate = 0;
-    cpu_physical_memory_reset_dirty(base + first * src_width,
-                                    base + (last + 1) * src_width,
-                                    VGA_DIRTY_FLAG);
-    dpy_update(s->ds, 0, first, s->cols, last - first + 1);
 }
 
 static void pl110_invalidate_display(void * opaque)
 {
     pl110_state *s = (pl110_state *)opaque;
     s->invalidate = 1;
+    if (pl110_enabled(s)) {
+        qemu_console_resize(s->ds, s->cols, s->rows);
+    }
 }
 
 static void pl110_update_pallette(pl110_state *s, int n)
@@ -327,7 +270,7 @@ static uint32_t pl110_read(void *opaque, target_phys_addr_t offset)
     case 12: /* LCDLPCURR */
         return s->lpbase;
     default:
-        cpu_abort (cpu_single_env, "pl110_read: Bad offset %x\n", (int)offset);
+        hw_error("pl110_read: Bad offset %x\n", (int)offset);
         return 0;
     }
 }
@@ -393,7 +336,7 @@ static void pl110_write(void *opaque, target_phys_addr_t offset,
         pl110_update(s);
         break;
     default:
-        cpu_abort (cpu_single_env, "pl110_write: Bad offset %x\n", (int)offset);
+        hw_error("pl110_write: Bad offset %x\n", (int)offset);
     }
 }
 
@@ -409,20 +352,33 @@ static CPUWriteMemoryFunc *pl110_writefn[] = {
    pl110_write
 };
 
-void *pl110_init(uint32_t base, qemu_irq irq, int versatile)
+static void pl110_init(SysBusDevice *dev)
 {
-    pl110_state *s;
+    pl110_state *s = FROM_SYSBUS(pl110_state, dev);
     int iomemtype;
 
-    s = (pl110_state *)qemu_mallocz(sizeof(pl110_state));
-    iomemtype = cpu_register_io_memory(0, pl110_readfn,
+    iomemtype = cpu_register_io_memory(pl110_readfn,
                                        pl110_writefn, s);
-    cpu_register_physical_memory(base, 0x00001000, iomemtype);
-    s->versatile = versatile;
-    s->irq = irq;
+    sysbus_init_mmio(dev, 0x1000, iomemtype);
+    sysbus_init_irq(dev, &s->irq);
     s->ds = graphic_console_init(pl110_update_display,
                                  pl110_invalidate_display,
                                  NULL, NULL, s);
     /* ??? Save/restore.  */
-    return s;
 }
+
+static void pl110_versatile_init(SysBusDevice *dev)
+{
+    pl110_state *s = FROM_SYSBUS(pl110_state, dev);
+    s->versatile = 1;
+    pl110_init(dev);
+}
+
+static void pl110_register_devices(void)
+{
+    sysbus_register_dev("pl110", sizeof(pl110_state), pl110_init);
+    sysbus_register_dev("pl110_versatile", sizeof(pl110_state),
+                        pl110_versatile_init);
+}
+
+device_init(pl110_register_devices)

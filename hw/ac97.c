@@ -278,12 +278,12 @@ static void update_sr (AC97LinkState *s, AC97BusMasterRegs *r, uint32_t new_sr)
     if (level) {
         s->glob_sta |= masks[r - s->bm_regs];
         dolog ("set irq level=1\n");
-        qemu_set_irq(s->pci_dev->irq[0], 1);
+        qemu_set_irq (s->pci_dev->irq[0], 1);
     }
     else {
         s->glob_sta &= ~masks[r - s->bm_regs];
         dolog ("set irq level=0\n");
-        qemu_set_irq(s->pci_dev->irq[0], 0);
+        qemu_set_irq (s->pci_dev->irq[0], 0);
     }
 }
 
@@ -1308,36 +1308,15 @@ static void ac97_on_reset (void *opaque)
     mixer_reset (s);
 }
 
-int ac97_init (PCIBus *bus, AudioState *audio)
+static void ac97_initfn (PCIDevice *dev)
 {
-    PCIAC97LinkState *d;
-    AC97LinkState *s;
-    uint8_t *c;
+    PCIAC97LinkState *d = DO_UPCAST (PCIAC97LinkState, dev, dev);
+    AC97LinkState *s = &d->ac97;
+    uint8_t *c = d->dev.config;
 
-    if (!bus) {
-        AUD_log ("ac97", "No PCI bus\n");
-        return -1;
-    }
-
-    if (!audio) {
-        AUD_log ("ac97", "No audio state\n");
-        return -1;
-    }
-
-    d = (PCIAC97LinkState *) pci_register_device (bus, "AC97",
-                                                  sizeof (PCIAC97LinkState),
-                                                  -1, NULL, NULL);
-
-    if (!d) {
-        AUD_log ("ac97", "Failed to register PCI device\n");
-        return -1;
-    }
-
-    s = &d->ac97;
     s->pci_dev = &d->dev;
-    c = d->dev.config;
-    pci_config_set_vendor_id(c, PCI_VENDOR_ID_INTEL); /* ro */
-    pci_config_set_device_id(c, PCI_DEVICE_ID_INTEL_82801AA_5); /* ro */
+    pci_config_set_vendor_id (c, PCI_VENDOR_ID_INTEL); /* ro */
+    pci_config_set_device_id (c, PCI_DEVICE_ID_INTEL_82801AA_5); /* ro */
 
     c[0x04] = 0x00;      /* pcicmd pci command rw, ro */
     c[0x05] = 0x00;
@@ -1347,8 +1326,8 @@ int ac97_init (PCIBus *bus, AudioState *audio)
 
     c[0x08] = 0x01;      /* rid revision ro */
     c[0x09] = 0x00;      /* pi programming interface ro */
-    pci_config_set_class(c, PCI_CLASS_MULTIMEDIA_AUDIO); /* ro */
-    c[0x0e] = 0x00;      /* headtyp header type ro */
+    pci_config_set_class (c, PCI_CLASS_MULTIMEDIA_AUDIO); /* ro */
+    c[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; /* headtyp header type ro */
 
     c[0x10] = 0x01;      /* nabmar native audio mixer base
                             address rw */
@@ -1371,11 +1350,30 @@ int ac97_init (PCIBus *bus, AudioState *audio)
     c[0x3c] = 0x00;      /* intr_ln interrupt line rw */
     c[0x3d] = 0x01;      /* intr_pn interrupt pin ro */
 
-    pci_register_io_region (&d->dev, 0, 256 * 4, PCI_ADDRESS_SPACE_IO, ac97_map);
-    pci_register_io_region (&d->dev, 1, 64 * 4, PCI_ADDRESS_SPACE_IO, ac97_map);
+    pci_register_bar (&d->dev, 0, 256 * 4, PCI_ADDRESS_SPACE_IO, ac97_map);
+    pci_register_bar (&d->dev, 1, 64 * 4, PCI_ADDRESS_SPACE_IO, ac97_map);
     register_savevm ("ac97", 0, 2, ac97_save, ac97_load, s);
     qemu_register_reset (ac97_on_reset, s);
-    AUD_register_card (audio, "ac97", &s->card);
+    AUD_register_card ("ac97", &s->card);
     ac97_on_reset (s);
+}
+
+int ac97_init (PCIBus *bus)
+{
+    pci_create_simple (bus, -1, "AC97");
     return 0;
 }
+
+static PCIDeviceInfo ac97_info = {
+    .qdev.name    = "AC97",
+    .qdev.desc    = "Intel 82801AA AC97 Audio",
+    .qdev.size    = sizeof (PCIAC97LinkState),
+    .init         = ac97_initfn,
+};
+
+static void ac97_register (void)
+{
+    pci_qdev_register (&ac97_info);
+}
+device_init (ac97_register);
+

@@ -14,7 +14,7 @@
 
 /* Board init.  */
 
-static void dummy_m68k_init(ram_addr_t ram_size, int vga_ram_size,
+static void dummy_m68k_init(ram_addr_t ram_size,
                      const char *boot_device,
                      const char *kernel_filename, const char *kernel_cmdline,
                      const char *initrd_filename, const char *cpu_model)
@@ -47,8 +47,9 @@ static void dummy_m68k_init(ram_addr_t ram_size, int vga_ram_size,
             kernel_size = load_uimage(kernel_filename, &entry, NULL, NULL);
         }
         if (kernel_size < 0) {
-            kernel_size = load_image(kernel_filename,
-                                     phys_ram_base + KERNEL_LOAD_ADDR);
+            kernel_size = load_image_targphys(kernel_filename,
+                                              KERNEL_LOAD_ADDR,
+                                              ram_size - KERNEL_LOAD_ADDR);
             entry = KERNEL_LOAD_ADDR;
         }
         if (kernel_size < 0) {
@@ -62,8 +63,15 @@ static void dummy_m68k_init(ram_addr_t ram_size, int vga_ram_size,
     env->pc = entry;
 }
 
-QEMUMachine dummy_m68k_machine = {
+static QEMUMachine dummy_m68k_machine = {
     .name = "dummy",
     .desc = "Dummy board",
     .init = dummy_m68k_init,
 };
+
+static void dummy_m68k_machine_init(void)
+{
+    qemu_register_machine(&dummy_m68k_machine);
+}
+
+machine_init(dummy_m68k_machine_init);

@@ -31,10 +31,10 @@
 //#define DEBUG_GRACKLE
 
 #ifdef DEBUG_GRACKLE
-#define GRACKLE_DPRINTF(fmt, args...) \
-do { printf("GRACKLE: " fmt , ##args); } while (0)
+#define GRACKLE_DPRINTF(fmt, ...)                               \
+    do { printf("GRACKLE: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define GRACKLE_DPRINTF(fmt, args...)
+#define GRACKLE_DPRINTF(fmt, ...)
 #endif
 
 typedef target_phys_addr_t pci_addr_t;
@@ -133,12 +133,13 @@ PCIBus *pci_grackle_init(uint32_t base, qemu_irq *pic)
     int pci_mem_config, pci_mem_data;
 
     s = qemu_mallocz(sizeof(GrackleState));
-    s->bus = pci_register_bus(pci_grackle_set_irq, pci_grackle_map_irq,
+    s->bus = pci_register_bus(NULL, "pci",
+                              pci_grackle_set_irq, pci_grackle_map_irq,
                               pic, 0, 4);
 
-    pci_mem_config = cpu_register_io_memory(0, pci_grackle_config_read,
+    pci_mem_config = cpu_register_io_memory(pci_grackle_config_read,
                                             pci_grackle_config_write, s);
-    pci_mem_data = cpu_register_io_memory(0, pci_grackle_read,
+    pci_mem_data = cpu_register_io_memory(pci_grackle_read,
                                           pci_grackle_write, s);
     cpu_register_physical_memory(base, 0x1000, pci_mem_config);
     cpu_register_physical_memory(base + 0x00200000, 0x1000, pci_mem_data);
@@ -149,7 +150,7 @@ PCIBus *pci_grackle_init(uint32_t base, qemu_irq *pic)
     d->config[0x08] = 0x00; // revision
     d->config[0x09] = 0x01;
     pci_config_set_class(d->config, PCI_CLASS_BRIDGE_HOST);
-    d->config[0x0e] = 0x00; // header_type
+    d->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
 
 #if 0
     /* PCI2PCI bridge same values as PearPC - check this */
@@ -157,7 +158,7 @@ PCIBus *pci_grackle_init(uint32_t base, qemu_irq *pic)
     pci_config_set_device_id(d->config, PCI_DEVICE_ID_DEC_21154);
     d->config[0x08] = 0x02; // revision
     pci_config_set_class(d->config, PCI_CLASS_BRIDGE_PCI);
-    d->config[0x0e] = 0x01; // header_type
+    d->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_BRIDGE; // header_type
 
     d->config[0x18] = 0x0;  // primary_bus
     d->config[0x19] = 0x1;  // secondary_bus

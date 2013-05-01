@@ -94,7 +94,9 @@ static void virtio_balloon_handle_output(VirtIODevice *vdev, VirtQueue *vq)
             if ((addr & ~TARGET_PAGE_MASK) != IO_MEM_RAM)
                 continue;
 
-            balloon_page(phys_ram_base + addr, !!(vq == s->dvq));
+            /* Using qemu_get_ram_ptr is bending the rules a bit, but
+               should be OK because we only want a single page.  */
+            balloon_page(qemu_get_ram_ptr(addr), !!(vq == s->dvq));
         }
 
         virtqueue_push(vq, &elem, offset);
@@ -167,19 +169,13 @@ static int virtio_balloon_load(QEMUFile *f, void *opaque, int version_id)
     return 0;
 }
 
-void *virtio_balloon_init(PCIBus *bus)
+VirtIODevice *virtio_balloon_init(DeviceState *dev)
 {
     VirtIOBalloon *s;
 
-    s = (VirtIOBalloon *)virtio_init_pci(bus, "virtio-balloon",
-                                         PCI_VENDOR_ID_REDHAT_QUMRANET,
-                                         PCI_DEVICE_ID_VIRTIO_BALLOON,
-                                         PCI_VENDOR_ID_REDHAT_QUMRANET,
-                                         VIRTIO_ID_BALLOON,
-                                         PCI_CLASS_MEMORY_RAM, 0x00,
-                                         8, sizeof(VirtIOBalloon));
-    if (s == NULL)
-        return NULL;
+    s = (VirtIOBalloon *)virtio_common_init("virtio-balloon",
+                                            VIRTIO_ID_BALLOON,
+                                            8, sizeof(VirtIOBalloon));
 
     s->vdev.get_config = virtio_balloon_get_config;
     s->vdev.set_config = virtio_balloon_set_config;

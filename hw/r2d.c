@@ -176,7 +176,7 @@ static qemu_irq *r2d_fpga_init(target_phys_addr_t base, qemu_irq irl)
 
     s->irl = irl;
 
-    iomemtype = cpu_register_io_memory(0, r2d_fpga_readfn,
+    iomemtype = cpu_register_io_memory(r2d_fpga_readfn,
 				       r2d_fpga_writefn, s);
     cpu_register_physical_memory(base, 0x40, iomemtype);
     return qemu_allocate_irqs(r2d_fpga_irq_set, s, NR_IRQS);
@@ -193,14 +193,14 @@ static int r2d_pci_map_irq(PCIDevice *d, int irq_num)
     return intx[d->devfn >> 3];
 }
 
-static void r2d_init(ram_addr_t ram_size, int vga_ram_size,
+static void r2d_init(ram_addr_t ram_size,
               const char *boot_device,
 	      const char *kernel_filename, const char *kernel_cmdline,
 	      const char *initrd_filename, const char *cpu_model)
 {
     CPUState *env;
     struct SH7750State *s;
-    ram_addr_t sdram_addr, sm501_vga_ram_addr;
+    ram_addr_t sdram_addr;
     qemu_irq *irq;
     PCIBus *pci;
     int i;
@@ -222,9 +222,7 @@ static void r2d_init(ram_addr_t ram_size, int vga_ram_size,
     irq = r2d_fpga_init(0x04000000, sh7750_irl(s));
     pci = sh_pci_register_bus(r2d_pci_set_irq, r2d_pci_map_irq, irq, 0, 4);
 
-    sm501_vga_ram_addr = qemu_ram_alloc(SM501_VRAM_SIZE);
-    sm501_init(0x10000000, sm501_vga_ram_addr, SM501_VRAM_SIZE,
-	       serial_hds[2]);
+    sm501_init(0x10000000, SM501_VRAM_SIZE, irq[SM501], serial_hds[2]);
 
     /* onboard CF (True IDE mode, Master only). */
     if ((i = drive_get_index(IF_IDE, 0, 0)) != -1)
@@ -233,7 +231,7 @@ static void r2d_init(ram_addr_t ram_size, int vga_ram_size,
 
     /* NIC: rtl8139 on-board, and 2 slots. */
     for (i = 0; i < nb_nics; i++)
-        pci_nic_init(pci, &nd_table[i], (i==0)? 2<<3: -1, "rtl8139");
+        pci_nic_init(&nd_table[i], "rtl8139", i==0 ? "2" : NULL);
 
     /* Todo: register on board registers */
     if (kernel_filename) {
@@ -260,9 +258,15 @@ static void r2d_init(ram_addr_t ram_size, int vga_ram_size,
     }
 }
 
-QEMUMachine r2d_machine = {
+static QEMUMachine r2d_machine = {
     .name = "r2d",
     .desc = "r2d-plus board",
     .init = r2d_init,
-    .ram_require = (SDRAM_SIZE + SM501_VRAM_SIZE) | RAMSIZE_FIXED,
 };
+
+static void r2d_machine_init(void)
+{
+    qemu_register_machine(&r2d_machine);
+}
+
+machine_init(r2d_machine_init);

@@ -15,8 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  *
  * TODO:
  *  o Isochronous transfers
@@ -32,6 +31,7 @@
 #include "usb.h"
 #include "pci.h"
 #include "pxa.h"
+#include "devices.h"
 
 //#define DEBUG_OHCI
 /* Dump packet contents.  */
@@ -60,7 +60,8 @@ typedef struct OHCIPort {
 
 enum ohci_type {
     OHCI_TYPE_PCI,
-    OHCI_TYPE_PXA
+    OHCI_TYPE_PXA,
+    OHCI_TYPE_SM501,
 };
 
 typedef struct {
@@ -107,6 +108,9 @@ typedef struct {
     uint32_t hmask;
     uint32_t hreset;
     uint32_t htest;
+
+    /* SM501 local memory offset */
+    target_phys_addr_t localmem_base;
 
     /* Active packets.  */
     uint32_t old_ctl;
@@ -425,9 +429,12 @@ static void ohci_reset(void *opaque)
 }
 
 /* Get an array of dwords from main memory */
-static inline int get_dwords(uint32_t addr, uint32_t *buf, int num)
+static inline int get_dwords(OHCIState *ohci,
+                             uint32_t addr, uint32_t *buf, int num)
 {
     int i;
+
+    addr += ohci->localmem_base;
 
     for (i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
         cpu_physical_memory_rw(addr, (uint8_t *)buf, sizeof(*buf), 0);
@@ -438,9 +445,12 @@ static inline int get_dwords(uint32_t addr, uint32_t *buf, int num)
 }
 
 /* Put an array of dwords in to main memory */
-static inline int put_dwords(uint32_t addr, uint32_t *buf, int num)
+static inline int put_dwords(OHCIState *ohci,
+                             uint32_t addr, uint32_t *buf, int num)
 {
     int i;
+
+    addr += ohci->localmem_base;
 
     for (i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
         uint32_t tmp = cpu_to_le32(*buf);
@@ -451,9 +461,12 @@ static inline int put_dwords(uint32_t addr, uint32_t *buf, int num)
 }
 
 /* Get an array of words from main memory */
-static inline int get_words(uint32_t addr, uint16_t *buf, int num)
+static inline int get_words(OHCIState *ohci,
+                            uint32_t addr, uint16_t *buf, int num)
 {
     int i;
+
+    addr += ohci->localmem_base;
 
     for (i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
         cpu_physical_memory_rw(addr, (uint8_t *)buf, sizeof(*buf), 0);
@@ -464,9 +477,12 @@ static inline int get_words(uint32_t addr, uint16_t *buf, int num)
 }
 
 /* Put an array of words in to main memory */
-static inline int put_words(uint32_t addr, uint16_t *buf, int num)
+static inline int put_words(OHCIState *ohci,
+                            uint32_t addr, uint16_t *buf, int num)
 {
     int i;
+
+    addr += ohci->localmem_base;
 
     for (i = 0; i < num; i++, buf++, addr += sizeof(*buf)) {
         uint16_t tmp = cpu_to_le16(*buf);
@@ -476,40 +492,63 @@ static inline int put_words(uint32_t addr, uint16_t *buf, int num)
     return 1;
 }
 
-static inline int ohci_read_ed(uint32_t addr, struct ohci_ed *ed)
+static inline int ohci_read_ed(OHCIState *ohci,
+                               uint32_t addr, struct ohci_ed *ed)
 {
-    return get_dwords(addr, (uint32_t *)ed, sizeof(*ed) >> 2);
+    return get_dwords(ohci, addr, (uint32_t *)ed, sizeof(*ed) >> 2);
 }
 
-static inline int ohci_read_td(uint32_t addr, struct ohci_td *td)
+static inline int ohci_read_td(OHCIState *ohci,
+                               uint32_t addr, struct ohci_td *td)
 {
-    return get_dwords(addr, (uint32_t *)td, sizeof(*td) >> 2);
+    return get_dwords(ohci, addr, (uint32_t *)td, sizeof(*td) >> 2);
 }
 
-static inline int ohci_read_iso_td(uint32_t addr, struct ohci_iso_td *td)
+static inline int ohci_read_iso_td(OHCIState *ohci,
+                                   uint32_t addr, struct ohci_iso_td *td)
 {
-    return (get_dwords(addr, (uint32_t *)td, 4) &&
-            get_words(addr + 16, td->offset, 8));
+    return (get_dwords(ohci, addr, (uint32_t *)td, 4) &&
+            get_words(ohci, addr + 16, td->offset, 8));
 }
 
-static inline int ohci_put_ed(uint32_t addr, struct ohci_ed *ed)
+static inline int ohci_read_hcca(OHCIState *ohci,
+                                 uint32_t addr, struct ohci_hcca *hcca)
 {
-    return put_dwords(addr, (uint32_t *)ed, sizeof(*ed) >> 2);
+    cpu_physical_memory_rw(addr + ohci->localmem_base,
+                           (uint8_t *)hcca, sizeof(*hcca), 0);
+    return 1;
 }
 
-static inline int ohci_put_td(uint32_t addr, struct ohci_td *td)
+static inline int ohci_put_ed(OHCIState *ohci,
+                              uint32_t addr, struct ohci_ed *ed)
 {
-    return put_dwords(addr, (uint32_t *)td, sizeof(*td) >> 2);
+    return put_dwords(ohci, addr, (uint32_t *)ed, sizeof(*ed) >> 2);
 }
 
-static inline int ohci_put_iso_td(uint32_t addr, struct ohci_iso_td *td)
+static inline int ohci_put_td(OHCIState *ohci,
+                              uint32_t addr, struct ohci_td *td)
 {
-    return (put_dwords(addr, (uint32_t *)td, 4) &&
-            put_words(addr + 16, td->offset, 8));
+    return put_dwords(ohci, addr, (uint32_t *)td, sizeof(*td) >> 2);
+}
+
+static inline int ohci_put_iso_td(OHCIState *ohci,
+                                  uint32_t addr, struct ohci_iso_td *td)
+{
+    return (put_dwords(ohci, addr, (uint32_t *)td, 4) &&
+            put_words(ohci, addr + 16, td->offset, 8));
+}
+
+static inline int ohci_put_hcca(OHCIState *ohci,
+                                uint32_t addr, struct ohci_hcca *hcca)
+{
+    cpu_physical_memory_rw(addr + ohci->localmem_base,
+                           (uint8_t *)hcca, sizeof(*hcca), 1);
+    return 1;
 }
 
 /* Read/Write the contents of a TD from/to main memory.  */
-static void ohci_copy_td(struct ohci_td *td, uint8_t *buf, int len, int write)
+static void ohci_copy_td(OHCIState *ohci, struct ohci_td *td,
+                         uint8_t *buf, int len, int write)
 {
     uint32_t ptr;
     uint32_t n;
@@ -518,16 +557,17 @@ static void ohci_copy_td(struct ohci_td *td, uint8_t *buf, int len, int write)
     n = 0x1000 - (ptr & 0xfff);
     if (n > len)
         n = len;
-    cpu_physical_memory_rw(ptr, buf, n, write);
+    cpu_physical_memory_rw(ptr + ohci->localmem_base, buf, n, write);
     if (n == len)
         return;
     ptr = td->be & ~0xfffu;
     buf += n;
-    cpu_physical_memory_rw(ptr, buf, len - n, write);
+    cpu_physical_memory_rw(ptr + ohci->localmem_base, buf, len - n, write);
 }
 
 /* Read/Write the contents of an ISO TD from/to main memory.  */
-static void ohci_copy_iso_td(uint32_t start_addr, uint32_t end_addr,
+static void ohci_copy_iso_td(OHCIState *ohci,
+                             uint32_t start_addr, uint32_t end_addr,
                              uint8_t *buf, int len, int write)
 {
     uint32_t ptr;
@@ -537,12 +577,12 @@ static void ohci_copy_iso_td(uint32_t start_addr, uint32_t end_addr,
     n = 0x1000 - (ptr & 0xfff);
     if (n > len)
         n = len;
-    cpu_physical_memory_rw(ptr, buf, n, write);
+    cpu_physical_memory_rw(ptr + ohci->localmem_base, buf, n, write);
     if (n == len)
         return;
     ptr = end_addr & ~0xfffu;
     buf += n;
-    cpu_physical_memory_rw(ptr, buf, len - n, write);
+    cpu_physical_memory_rw(ptr + ohci->localmem_base, buf, len - n, write);
 }
 
 static void ohci_process_lists(OHCIState *ohci, int completion);
@@ -579,7 +619,7 @@ static int ohci_service_iso_td(OHCIState *ohci, struct ohci_ed *ed,
 
     addr = ed->head & OHCI_DPTR_MASK;
 
-    if (!ohci_read_iso_td(addr, &iso_td)) {
+    if (!ohci_read_iso_td(ohci, addr, &iso_td)) {
         printf("usb-ohci: ISO_TD read error at %x\n", addr);
         return 0;
     }
@@ -621,7 +661,7 @@ static int ohci_service_iso_td(OHCIState *ohci, struct ohci_ed *ed,
         i = OHCI_BM(iso_td.flags, TD_DI);
         if (i < ohci->done_count)
             ohci->done_count = i;
-        ohci_put_iso_td(addr, &iso_td);        
+        ohci_put_iso_td(ohci, addr, &iso_td);
         return 0;
     }
 
@@ -696,7 +736,7 @@ static int ohci_service_iso_td(OHCIState *ohci, struct ohci_ed *ed,
     }
 
     if (len && dir != OHCI_TD_DIR_IN) {
-        ohci_copy_iso_td(start_addr, end_addr, ohci->usb_buf, len, 0);
+        ohci_copy_iso_td(ohci, start_addr, end_addr, ohci->usb_buf, len, 0);
     }
 
     if (completion) {
@@ -732,7 +772,7 @@ static int ohci_service_iso_td(OHCIState *ohci, struct ohci_ed *ed,
     /* Writeback */
     if (dir == OHCI_TD_DIR_IN && ret >= 0 && ret <= len) {
         /* IN transfer succeeded */
-        ohci_copy_iso_td(start_addr, end_addr, ohci->usb_buf, ret, 1);
+        ohci_copy_iso_td(ohci, start_addr, end_addr, ohci->usb_buf, ret, 1);
         OHCI_SET_BM(iso_td.offset[relative_frame_number], TD_PSW_CC,
                     OHCI_CC_NOERROR);
         OHCI_SET_BM(iso_td.offset[relative_frame_number], TD_PSW_SIZE, ret);
@@ -788,7 +828,7 @@ static int ohci_service_iso_td(OHCIState *ohci, struct ohci_ed *ed,
         if (i < ohci->done_count)
             ohci->done_count = i;
     }
-    ohci_put_iso_td(addr, &iso_td);
+    ohci_put_iso_td(ohci, addr, &iso_td);
     return 1;
 }
 
@@ -818,7 +858,7 @@ static int ohci_service_td(OHCIState *ohci, struct ohci_ed *ed)
 #endif
         return 1;
     }
-    if (!ohci_read_td(addr, &td)) {
+    if (!ohci_read_td(ohci, addr, &td)) {
         fprintf(stderr, "usb-ohci: TD read error at %x\n", addr);
         return 0;
     }
@@ -859,13 +899,13 @@ static int ohci_service_td(OHCIState *ohci, struct ohci_ed *ed)
         }
 
         if (len && dir != OHCI_TD_DIR_IN && !completion) {
-            ohci_copy_td(&td, ohci->usb_buf, len, 0);
+            ohci_copy_td(ohci, &td, ohci->usb_buf, len, 0);
         }
     }
 
     flag_r = (td.flags & OHCI_TD_R) != 0;
 #ifdef DEBUG_PACKET
-    dprintf(" TD @ 0x%.8x %u bytes %s r=%d cbp=0x%.8x be=0x%.8x\n",
+    dprintf(" TD @ 0x%.8x %" PRId64 " bytes %s r=%d cbp=0x%.8x be=0x%.8x\n",
             addr, len, str, flag_r, td.cbp, td.be);
 
     if (len > 0 && dir != OHCI_TD_DIR_IN) {
@@ -918,7 +958,7 @@ static int ohci_service_td(OHCIState *ohci, struct ohci_ed *ed)
     }
     if (ret >= 0) {
         if (dir == OHCI_TD_DIR_IN) {
-            ohci_copy_td(&td, ohci->usb_buf, ret, 1);
+            ohci_copy_td(ohci, &td, ohci->usb_buf, ret, 1);
 #ifdef DEBUG_PACKET
             dprintf("  data:");
             for (i = 0; i < ret; i++)
@@ -987,7 +1027,7 @@ static int ohci_service_td(OHCIState *ohci, struct ohci_ed *ed)
     i = OHCI_BM(td.flags, TD_DI);
     if (i < ohci->done_count)
         ohci->done_count = i;
-    ohci_put_td(addr, &td);
+    ohci_put_td(ohci, addr, &td);
     return OHCI_BM(td.flags, TD_CC) != OHCI_CC_NOERROR;
 }
 
@@ -1005,7 +1045,7 @@ static int ohci_service_ed_list(OHCIState *ohci, uint32_t head, int completion)
         return 0;
 
     for (cur = head; cur; cur = next_ed) {
-        if (!ohci_read_ed(cur, &ed)) {
+        if (!ohci_read_ed(ohci, cur, &ed)) {
             fprintf(stderr, "usb-ohci: ED read error at %x\n", cur);
             return 0;
         }
@@ -1046,7 +1086,7 @@ static int ohci_service_ed_list(OHCIState *ohci, uint32_t head, int completion)
             }
         }
 
-        ohci_put_ed(cur, &ed);
+        ohci_put_ed(ohci, cur, &ed);
     }
 
     return active;
@@ -1087,7 +1127,7 @@ static void ohci_frame_boundary(void *opaque)
     OHCIState *ohci = opaque;
     struct ohci_hcca hcca;
 
-    cpu_physical_memory_rw(ohci->hcca, (uint8_t *)&hcca, sizeof(hcca), 0);
+    ohci_read_hcca(ohci, ohci->hcca, &hcca);
 
     /* Process all the lists at the end of the frame */
     if (ohci->ctl & OHCI_CTL_PLE) {
@@ -1109,9 +1149,9 @@ static void ohci_frame_boundary(void *opaque)
     /* Frame boundary, so do EOF stuf here */
     ohci->frt = ohci->fit;
 
-    /* XXX: endianness */
+    /* Increment frame number and take care of endianness. */
     ohci->frame_number = (ohci->frame_number + 1) & 0xffff;
-    hcca.frame = cpu_to_le32(ohci->frame_number);
+    hcca.frame = cpu_to_le16(ohci->frame_number);
 
     if (ohci->done_count == 0 && !(ohci->intr_status & OHCI_INTR_WD)) {
         if (!ohci->done)
@@ -1131,7 +1171,7 @@ static void ohci_frame_boundary(void *opaque)
     ohci_sof(ohci);
 
     /* Writeback HCCA */
-    cpu_physical_memory_rw(ohci->hcca, (uint8_t *)&hcca, sizeof(hcca), 1);
+    ohci_put_hcca(ohci, ohci->hcca, &hcca);
 }
 
 /* Start sending SOF tokens across the USB bus, lists are processed in
@@ -1620,7 +1660,8 @@ static CPUWriteMemoryFunc *ohci_writefn[3]={
 };
 
 static void usb_ohci_init(OHCIState *ohci, int num_ports, int devfn,
-            qemu_irq irq, enum ohci_type type, const char *name)
+                          qemu_irq irq, enum ohci_type type,
+                          const char *name, uint32_t localmem_base)
 {
     int i;
 
@@ -1636,11 +1677,12 @@ static void usb_ohci_init(OHCIState *ohci, int num_ports, int devfn,
             usb_bit_time = 1;
         }
 #endif
-        dprintf("usb-ohci: usb_bit_time=%lli usb_frame_time=%lli\n",
+        dprintf("usb-ohci: usb_bit_time=%" PRId64 " usb_frame_time=%" PRId64 "\n",
                 usb_frame_time, usb_bit_time);
     }
 
-    ohci->mem = cpu_register_io_memory(0, ohci_readfn, ohci_writefn, ohci);
+    ohci->mem = cpu_register_io_memory(ohci_readfn, ohci_writefn, ohci);
+    ohci->localmem_base = localmem_base;
     ohci->name = name;
 
     ohci->irq = irq;
@@ -1680,15 +1722,16 @@ void usb_ohci_init_pci(struct PCIBus *bus, int num_ports, int devfn)
     }
 
     pci_config_set_vendor_id(ohci->pci_dev.config, PCI_VENDOR_ID_APPLE);
-    pci_config_set_device_id(ohci->pci_dev.config, 0x003f); // device_id
+    pci_config_set_device_id(ohci->pci_dev.config,
+                             PCI_DEVICE_ID_APPLE_IPID_USB);
     ohci->pci_dev.config[0x09] = 0x10; /* OHCI */
     pci_config_set_class(ohci->pci_dev.config, PCI_CLASS_SERIAL_USB);
     ohci->pci_dev.config[0x3d] = 0x01; /* interrupt pin 1 */
 
     usb_ohci_init(&ohci->state, num_ports, devfn, ohci->pci_dev.irq[0],
-                  OHCI_TYPE_PCI, ohci->pci_dev.name);
+                  OHCI_TYPE_PCI, ohci->pci_dev.name, 0);
 
-    pci_register_io_region((struct PCIDevice *)ohci, 0, 256,
+    pci_register_bar((struct PCIDevice *)ohci, 0, 256,
                            PCI_ADDRESS_SPACE_MEM, ohci_mapfunc);
 }
 
@@ -1698,7 +1741,19 @@ void usb_ohci_init_pxa(target_phys_addr_t base, int num_ports, int devfn,
     OHCIState *ohci = (OHCIState *)qemu_mallocz(sizeof(OHCIState));
 
     usb_ohci_init(ohci, num_ports, devfn, irq,
-                  OHCI_TYPE_PXA, "OHCI USB");
+                  OHCI_TYPE_PXA, "OHCI USB", 0);
 
     cpu_register_physical_memory(base, 0x1000, ohci->mem);
 }
+
+void usb_ohci_init_sm501(uint32_t mmio_base, uint32_t localmem_base,
+                         int num_ports, int devfn, qemu_irq irq)
+{
+    OHCIState *ohci = (OHCIState *)qemu_mallocz(sizeof(OHCIState));
+
+    usb_ohci_init(ohci, num_ports, devfn, irq,
+                  OHCI_TYPE_SM501, "OHCI USB", localmem_base);
+
+    cpu_register_physical_memory(mmio_base, 0x1000, ohci->mem);
+}
+

@@ -13,23 +13,18 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "hw.h"
 #include "pxa.h"
 #include "sharpsl.h"
 
 #undef REG_FMT
-#if TARGET_PHYS_ADDR_BITS == 32
-#define REG_FMT			"0x%02x"
-#else
 #define REG_FMT			"0x%02lx"
-#endif
 
 /* SCOOP devices */
 
-struct scoop_info_s {
+struct ScoopInfo {
     qemu_irq handler[16];
     qemu_irq *in;
     uint16_t status;
@@ -58,7 +53,7 @@ struct scoop_info_s {
 #define SCOOP_GPWR	0x24
 #define SCOOP_GPRR	0x28
 
-static inline void scoop_gpio_handler_update(struct scoop_info_s *s) {
+static inline void scoop_gpio_handler_update(ScoopInfo *s) {
     uint32_t level, diff;
     int bit;
     level = s->gpio_level & s->gpio_dir;
@@ -73,7 +68,7 @@ static inline void scoop_gpio_handler_update(struct scoop_info_s *s) {
 
 static uint32_t scoop_readb(void *opaque, target_phys_addr_t addr)
 {
-    struct scoop_info_s *s = (struct scoop_info_s *) opaque;
+    ScoopInfo *s = (ScoopInfo *) opaque;
 
     switch (addr) {
     case SCOOP_MCR:
@@ -98,7 +93,7 @@ static uint32_t scoop_readb(void *opaque, target_phys_addr_t addr)
     case SCOOP_GPRR:
         return s->gpio_level;
     default:
-        zaurus_printf("Bad register offset " REG_FMT "\n", addr);
+        zaurus_printf("Bad register offset " REG_FMT "\n", (unsigned long)addr);
     }
 
     return 0;
@@ -106,7 +101,7 @@ static uint32_t scoop_readb(void *opaque, target_phys_addr_t addr)
 
 static void scoop_writeb(void *opaque, target_phys_addr_t addr, uint32_t value)
 {
-    struct scoop_info_s *s = (struct scoop_info_s *) opaque;
+    ScoopInfo *s = (ScoopInfo *) opaque;
     value &= 0xffff;
 
     switch (addr) {
@@ -143,7 +138,7 @@ static void scoop_writeb(void *opaque, target_phys_addr_t addr, uint32_t value)
         scoop_gpio_handler_update(s);
         break;
     default:
-        zaurus_printf("Bad register offset " REG_FMT "\n", addr);
+        zaurus_printf("Bad register offset " REG_FMT "\n", (unsigned long)addr);
     }
 }
 
@@ -160,7 +155,7 @@ static CPUWriteMemoryFunc *scoop_writefn[] = {
 
 void scoop_gpio_set(void *opaque, int line, int level)
 {
-    struct scoop_info_s *s = (struct scoop_info_s *) s;
+    ScoopInfo *s = (ScoopInfo *) s;
 
     if (level)
         s->gpio_level |= (1 << line);
@@ -168,12 +163,12 @@ void scoop_gpio_set(void *opaque, int line, int level)
         s->gpio_level &= ~(1 << line);
 }
 
-qemu_irq *scoop_gpio_in_get(struct scoop_info_s *s)
+qemu_irq *scoop_gpio_in_get(ScoopInfo *s)
 {
     return s->in;
 }
 
-void scoop_gpio_out_set(struct scoop_info_s *s, int line,
+void scoop_gpio_out_set(ScoopInfo *s, int line,
                 qemu_irq handler) {
     if (line >= 16) {
         fprintf(stderr, "No GPIO pin %i\n", line);
@@ -185,7 +180,7 @@ void scoop_gpio_out_set(struct scoop_info_s *s, int line,
 
 static void scoop_save(QEMUFile *f, void *opaque)
 {
-    struct scoop_info_s *s = (struct scoop_info_s *) opaque;
+    ScoopInfo *s = (ScoopInfo *) opaque;
     qemu_put_be16s(f, &s->status);
     qemu_put_be16s(f, &s->power);
     qemu_put_be32s(f, &s->gpio_level);
@@ -202,7 +197,7 @@ static void scoop_save(QEMUFile *f, void *opaque)
 static int scoop_load(QEMUFile *f, void *opaque, int version_id)
 {
     uint16_t dummy;
-    struct scoop_info_s *s = (struct scoop_info_s *) opaque;
+    ScoopInfo *s = (ScoopInfo *) opaque;
     qemu_get_be16s(f, &s->status);
     qemu_get_be16s(f, &s->power);
     qemu_get_be32s(f, &s->gpio_level);
@@ -220,19 +215,19 @@ static int scoop_load(QEMUFile *f, void *opaque, int version_id)
     return 0;
 }
 
-struct scoop_info_s *scoop_init(struct pxa2xx_state_s *cpu,
+ScoopInfo *scoop_init(PXA2xxState *cpu,
 		int instance,
 		target_phys_addr_t target_base) {
     int iomemtype;
-    struct scoop_info_s *s;
+    ScoopInfo *s;
 
-    s = (struct scoop_info_s *)
-            qemu_mallocz(sizeof(struct scoop_info_s));
-    memset(s, 0, sizeof(struct scoop_info_s));
+    s = (ScoopInfo *)
+            qemu_mallocz(sizeof(ScoopInfo));
+    memset(s, 0, sizeof(ScoopInfo));
 
     s->status = 0x02;
     s->in = qemu_allocate_irqs(scoop_gpio_set, s, 16);
-    iomemtype = cpu_register_io_memory(0, scoop_readfn,
+    iomemtype = cpu_register_io_memory(scoop_readfn,
                     scoop_writefn, s);
     cpu_register_physical_memory(target_base, 0x1000, iomemtype);
     register_savevm("scoop", instance, 1, scoop_save, scoop_load, s);
@@ -275,8 +270,8 @@ static struct __attribute__ ((__packed__)) sl_param_info {
     .phadadj		= 0x01,
 };
 
-void sl_bootparam_write(uint32_t ptr)
+void sl_bootparam_write(target_phys_addr_t ptr)
 {
-    memcpy(phys_ram_base + ptr, &zaurus_bootparam,
-                    sizeof(struct sl_param_info));
+    cpu_physical_memory_write(ptr, (void *)&zaurus_bootparam,
+                              sizeof(struct sl_param_info));
 }

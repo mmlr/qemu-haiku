@@ -28,7 +28,7 @@
 #undef TCG_TARGET_WORDS_BIGENDIAN
 #undef TCG_TARGET_HAS_div_i32
 #undef TCG_TARGET_HAS_div_i64
-#undef TCG_TARGET_HAS_bswap_i32
+#undef TCG_TARGET_HAS_bswap32_i32
 #define TCG_TARGET_HAS_ext8s_i32
 #define TCG_TARGET_HAS_ext16s_i32
 #define TCG_TARGET_HAS_neg_i32
@@ -51,8 +51,9 @@ enum {
     TCG_REG_R12,
     TCG_REG_R13,
     TCG_REG_R14,
-    TCG_TARGET_NB_REGS
 };
+
+#define TCG_TARGET_NB_REGS 15
 
 /* used for function call generation */
 #define TCG_REG_CALL_STACK		TCG_REG_R13
@@ -64,14 +65,12 @@ enum {
     TCG_AREG0 = TCG_REG_R7,
     TCG_AREG1 = TCG_REG_R4,
     TCG_AREG2 = TCG_REG_R5,
-    TCG_AREG3 = TCG_REG_R6,
 };
 
 static inline void flush_icache_range(unsigned long start, unsigned long stop)
 {
 #if QEMU_GNUC_PREREQ(4, 1)
-    void __clear_cache(char *beg, char *end);
-    __clear_cache((char *) start, (char *) stop);
+    __builtin___clear_cache((char *) start, (char *) stop);
 #else
     register unsigned long _beg __asm ("a1") = start;
     register unsigned long _end __asm ("a2") = stop;

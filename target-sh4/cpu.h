@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef _CPU_SH4_H
 #define _CPU_SH4_H
@@ -36,6 +35,8 @@
 #define SH_CPU_SH7785  (1 << 5)
 #define SH_CPU_SH7750_ALL (SH_CPU_SH7750 | SH_CPU_SH7750S | SH_CPU_SH7750R)
 #define SH_CPU_SH7751_ALL (SH_CPU_SH7751 | SH_CPU_SH7751R)
+
+#define CPUState struct CPUSH4State
 
 #include "cpu-defs.h"
 
@@ -98,6 +99,12 @@ enum sh_features {
     SH_FEATURE_BCR3_AND_BCR4 = 2,
 };
 
+typedef struct memory_content {
+    uint32_t address;
+    uint32_t value;
+    struct memory_content *next;
+} memory_content;
+
 typedef struct CPUSH4State {
     int id;			/* CPU model */
 
@@ -146,6 +153,8 @@ typedef struct CPUSH4State {
     tlb_t itlb[ITLB_SIZE];	/* instruction translation table */
     void *intc_handle;
     int intr_at_halt;		/* SR_BL ignored during sleep */
+    memory_content *movcal_backup;
+    memory_content **movcal_backup_tail;
 } CPUSH4State;
 
 CPUSH4State *cpu_sh4_init(const char *cpu_model);
@@ -160,6 +169,8 @@ void sh4_cpu_list(FILE *f, int (*cpu_fprintf)(FILE *f, const char *fmt, ...));
 void cpu_sh4_write_mmaped_utlb_addr(CPUSH4State *s, target_phys_addr_t addr,
 				    uint32_t mem_value);
 
+int cpu_sh4_is_cached(CPUSH4State * env, target_ulong addr);
+
 static inline void cpu_set_tls(CPUSH4State *env, target_ulong newtls)
 {
   env->gbr = newtls;
@@ -169,7 +180,6 @@ void cpu_load_tlb(CPUSH4State * env);
 
 #include "softfloat.h"
 
-#define CPUState CPUSH4State
 #define cpu_init cpu_sh4_init
 #define cpu_exec cpu_sh4_exec
 #define cpu_gen_code cpu_sh4_gen_code
@@ -292,6 +302,8 @@ static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)
     env->flags = tb->flags;
 }
 
+#define TB_FLAG_PENDING_MOVCA  (1 << 4)
+
 static inline void cpu_get_tb_cpu_state(CPUState *env, target_ulong *pc,
                                         target_ulong *cs_base, int *flags)
 {
@@ -301,7 +313,8 @@ static inline void cpu_get_tb_cpu_state(CPUState *env, target_ulong *pc,
                     | DELAY_SLOT_TRUE | DELAY_SLOT_CLEARME))   /* Bits  0- 3 */
             | (env->fpscr & (FPSCR_FR | FPSCR_SZ | FPSCR_PR))  /* Bits 19-21 */
             | (env->sr & (SR_MD | SR_RB))                      /* Bits 29-30 */
-            | (env->sr & SR_FD);                               /* Bit 15 */
+            | (env->sr & SR_FD)                                /* Bit 15 */
+            | (env->movcal_backup ? TB_FLAG_PENDING_MOVCA : 0); /* Bit 4 */
 }
 
 #endif				/* _CPU_SH4_H */

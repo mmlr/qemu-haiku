@@ -2,14 +2,10 @@
 #include "hw/boards.h"
 #include "hw/pc.h"
 #include "hw/isa.h"
+#include "host-utils.h"
 
 #include "exec-all.h"
-
-void register_machines(void)
-{
-    qemu_register_machine(&pc_machine);
-    qemu_register_machine(&isapc_machine);
-}
+#include "kvm.h"
 
 static void cpu_put_seg(QEMUFile *f, SegmentCache *dt)
 {
@@ -33,7 +29,10 @@ void cpu_save(QEMUFile *f, void *opaque)
     uint16_t fptag, fpus, fpuc, fpregs_format;
     uint32_t hflags;
     int32_t a20_mask;
-    int i;
+    int32_t pending_irq;
+    int i, bit;
+
+    cpu_synchronize_state(env, 0);
 
     for(i = 0; i < CPU_NB_REGS; i++)
         qemu_put_betls(f, &env->regs[i]);
@@ -143,7 +142,36 @@ void cpu_save(QEMUFile *f, void *opaque)
         qemu_put_be64s(f, &env->mtrr_var[i].base);
         qemu_put_be64s(f, &env->mtrr_var[i].mask);
     }
-}
+
+    /* KVM-related states */
+
+    /* There can only be one pending IRQ set in the bitmap at a time, so try
+       to find it and save its number instead (-1 for none). */
+    pending_irq = -1;
+    for (i = 0; i < ARRAY_SIZE(env->interrupt_bitmap); i++) {
+        if (env->interrupt_bitmap[i]) {
+            bit = ctz64(env->interrupt_bitmap[i]);
+            pending_irq = i * 64 + bit;
+            break;
+        }
+    }
+    qemu_put_sbe32s(f, &pending_irq);
+    qemu_put_be32s(f, &env->mp_state);
+    qemu_put_be64s(f, &env->tsc);
+
+    /* MCE */
+    qemu_put_be64s(f, &env->mcg_cap);
+    if (env->mcg_cap) {
+        qemu_put_be64s(f, &env->mcg_status);
+        qemu_put_be64s(f, &env->mcg_ctl);
+        for (i = 0; i < (env->mcg_cap & 0xff); i++) {
+            qemu_put_be64s(f, &env->mce_banks[4*i]);
+            qemu_put_be64s(f, &env->mce_banks[4*i + 1]);
+            qemu_put_be64s(f, &env->mce_banks[4*i + 2]);
+            qemu_put_be64s(f, &env->mce_banks[4*i + 3]);
+        }
+    }
+ }
 
 #ifdef USE_X86LDOUBLE
 /* XXX: add that in a FPU generic layer */
@@ -176,9 +204,9 @@ int cpu_load(QEMUFile *f, void *opaque, int version_id)
     uint32_t hflags;
     uint16_t fpus, fpuc, fptag, fpregs_format;
     int32_t a20_mask;
+    int32_t pending_irq;
 
-    if (version_id != 3 && version_id != 4 && version_id != 5
-        && version_id != 6 && version_id != 7 && version_id != 8)
+    if (version_id < 3 || version_id > CPU_SAVE_VERSION)
         return -EINVAL;
     for(i = 0; i < CPU_NB_REGS; i++)
         qemu_get_betls(f, &env->regs[i]);
@@ -323,9 +351,35 @@ int cpu_load(QEMUFile *f, void *opaque, int version_id)
         }
     }
 
+    if (version_id >= 9) {
+        qemu_get_sbe32s(f, &pending_irq);
+        memset(&env->interrupt_bitmap, 0, sizeof(env->interrupt_bitmap));
+        if (pending_irq >= 0) {
+            env->interrupt_bitmap[pending_irq / 64] |=
+                (uint64_t)1 << (pending_irq % 64);
+        }
+        qemu_get_be32s(f, &env->mp_state);
+        qemu_get_be64s(f, &env->tsc);
+    }
+
+    if (version_id >= 10) {
+        qemu_get_be64s(f, &env->mcg_cap);
+        if (env->mcg_cap) {
+            qemu_get_be64s(f, &env->mcg_status);
+            qemu_get_be64s(f, &env->mcg_ctl);
+            for (i = 0; i < (env->mcg_cap & 0xff); i++) {
+                qemu_get_be64s(f, &env->mce_banks[4*i]);
+                qemu_get_be64s(f, &env->mce_banks[4*i + 1]);
+                qemu_get_be64s(f, &env->mce_banks[4*i + 2]);
+                qemu_get_be64s(f, &env->mce_banks[4*i + 3]);
+            }
+        }
+    }
+
     /* XXX: ensure compatiblity for halted bit ? */
     /* XXX: compute redundant hflags bits */
     env->hflags = hflags;
     tlb_flush(env, 1);
+    cpu_synchronize_state(env, 1);
     return 0;
 }

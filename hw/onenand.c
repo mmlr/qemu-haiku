@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "qemu-common.h"
@@ -31,7 +30,7 @@
 /* Fixed */
 #define BLOCK_SHIFT	(PAGE_SHIFT + 6)
 
-struct onenand_s {
+typedef struct {
     uint32_t id;
     int shift;
     target_phys_addr_t base;
@@ -59,14 +58,14 @@ struct onenand_s {
     uint16_t intstatus;
     uint16_t wpstatus;
 
-    struct ecc_state_s ecc;
+    ECCState ecc;
 
     int density_mask;
     int secs;
     int secs_cur;
     int blocks;
     uint8_t *blockwp;
-};
+} OneNANDState;
 
 enum {
     ONEN_BUF_BLOCK = 0,
@@ -99,7 +98,7 @@ enum {
 
 void onenand_base_update(void *opaque, target_phys_addr_t new)
 {
-    struct onenand_s *s = (struct onenand_s *) opaque;
+    OneNANDState *s = (OneNANDState *) opaque;
 
     s->base = new;
 
@@ -118,19 +117,19 @@ void onenand_base_update(void *opaque, target_phys_addr_t new)
 
 void onenand_base_unmap(void *opaque)
 {
-    struct onenand_s *s = (struct onenand_s *) opaque;
+    OneNANDState *s = (OneNANDState *) opaque;
 
     cpu_register_physical_memory(s->base,
                     0x10000 << s->shift, IO_MEM_UNASSIGNED);
 }
 
-static void onenand_intr_update(struct onenand_s *s)
+static void onenand_intr_update(OneNANDState *s)
 {
     qemu_set_irq(s->intr, ((s->intstatus >> 15) ^ (~s->config[0] >> 6)) & 1);
 }
 
 /* Hot reset (Reset OneNAND command) or warm reset (RP pin low) */
-static void onenand_reset(struct onenand_s *s, int cold)
+static void onenand_reset(OneNANDState *s, int cold)
 {
     memset(&s->addr, 0, sizeof(s->addr));
     s->command = 0;
@@ -156,12 +155,11 @@ static void onenand_reset(struct onenand_s *s, int cold)
         memset(s->blockwp, ONEN_LOCK_LOCKED, s->blocks);
 
         if (s->bdrv && bdrv_read(s->bdrv, 0, s->boot[0], 8) < 0)
-            cpu_abort(cpu_single_env, "%s: Loading the BootRAM failed.\n",
-                            __FUNCTION__);
+            hw_error("%s: Loading the BootRAM failed.\n", __FUNCTION__);
     }
 }
 
-static inline int onenand_load_main(struct onenand_s *s, int sec, int secn,
+static inline int onenand_load_main(OneNANDState *s, int sec, int secn,
                 void *dest)
 {
     if (s->bdrv_cur)
@@ -174,7 +172,7 @@ static inline int onenand_load_main(struct onenand_s *s, int sec, int secn,
     return 0;
 }
 
-static inline int onenand_prog_main(struct onenand_s *s, int sec, int secn,
+static inline int onenand_prog_main(OneNANDState *s, int sec, int secn,
                 void *src)
 {
     if (s->bdrv_cur)
@@ -187,7 +185,7 @@ static inline int onenand_prog_main(struct onenand_s *s, int sec, int secn,
     return 0;
 }
 
-static inline int onenand_load_spare(struct onenand_s *s, int sec, int secn,
+static inline int onenand_load_spare(OneNANDState *s, int sec, int secn,
                 void *dest)
 {
     uint8_t buf[512];
@@ -204,7 +202,7 @@ static inline int onenand_load_spare(struct onenand_s *s, int sec, int secn,
     return 0;
 }
 
-static inline int onenand_prog_spare(struct onenand_s *s, int sec, int secn,
+static inline int onenand_prog_spare(OneNANDState *s, int sec, int secn,
                 void *src)
 {
     uint8_t buf[512];
@@ -222,7 +220,7 @@ static inline int onenand_prog_spare(struct onenand_s *s, int sec, int secn,
     return 0;
 }
 
-static inline int onenand_erase(struct onenand_s *s, int sec, int num)
+static inline int onenand_erase(OneNANDState *s, int sec, int num)
 {
     /* TODO: optimise */
     uint8_t buf[512];
@@ -238,7 +236,7 @@ static inline int onenand_erase(struct onenand_s *s, int sec, int num)
     return 0;
 }
 
-static void onenand_command(struct onenand_s *s, int cmd)
+static void onenand_command(OneNANDState *s, int cmd)
 {
     int b;
     int sec;
@@ -447,7 +445,7 @@ static void onenand_command(struct onenand_s *s, int cmd)
 
 static uint32_t onenand_read(void *opaque, target_phys_addr_t addr)
 {
-    struct onenand_s *s = (struct onenand_s *) opaque;
+    OneNANDState *s = (OneNANDState *) opaque;
     int offset = addr >> s->shift;
 
     switch (offset) {
@@ -500,7 +498,7 @@ static uint32_t onenand_read(void *opaque, target_phys_addr_t addr)
     case 0xff02:	/* ECC Result of spare area data */
     case 0xff03:	/* ECC Result of main area data */
     case 0xff04:	/* ECC Result of spare area data */
-        cpu_abort(cpu_single_env, "%s: imeplement ECC\n", __FUNCTION__);
+        hw_error("%s: imeplement ECC\n", __FUNCTION__);
         return 0x0000;
     }
 
@@ -512,7 +510,7 @@ static uint32_t onenand_read(void *opaque, target_phys_addr_t addr)
 static void onenand_write(void *opaque, target_phys_addr_t addr,
                 uint32_t value)
 {
-    struct onenand_s *s = (struct onenand_s *) opaque;
+    OneNANDState *s = (OneNANDState *) opaque;
     int offset = addr >> s->shift;
     int sec;
 
@@ -619,7 +617,7 @@ static CPUWriteMemoryFunc *onenand_writefn[] = {
 
 void *onenand_init(uint32_t id, int regshift, qemu_irq irq)
 {
-    struct onenand_s *s = (struct onenand_s *) qemu_mallocz(sizeof(*s));
+    OneNANDState *s = (OneNANDState *) qemu_mallocz(sizeof(*s));
     int bdrv_index = drive_get_index(IF_MTD, 0, 0);
     uint32_t size = 1 << (24 + ((id >> 12) & 7));
     void *ram;
@@ -632,7 +630,7 @@ void *onenand_init(uint32_t id, int regshift, qemu_irq irq)
     s->secs = size >> 9;
     s->blockwp = qemu_malloc(s->blocks);
     s->density_mask = (id & (1 << 11)) ? (1 << (6 + ((id >> 12) & 7))) : 0;
-    s->iomemtype = cpu_register_io_memory(0, onenand_readfn,
+    s->iomemtype = cpu_register_io_memory(onenand_readfn,
                     onenand_writefn, s);
     if (bdrv_index == -1)
         s->image = memset(qemu_malloc(size + (size >> 5)),
@@ -642,7 +640,7 @@ void *onenand_init(uint32_t id, int regshift, qemu_irq irq)
     s->otp = memset(qemu_malloc((64 + 2) << PAGE_SHIFT),
                     0xff, (64 + 2) << PAGE_SHIFT);
     s->ram = qemu_ram_alloc(0xc000 << s->shift);
-    ram = phys_ram_base + s->ram;
+    ram = qemu_get_ram_ptr(s->ram);
     s->boot[0] = ram + (0x0000 << s->shift);
     s->boot[1] = ram + (0x8000 << s->shift);
     s->data[0][0] = ram + ((0x0200 + (0 << (PAGE_SHIFT - 1))) << s->shift);
@@ -657,7 +655,7 @@ void *onenand_init(uint32_t id, int regshift, qemu_irq irq)
 
 void *onenand_raw_otp(void *opaque)
 {
-    struct onenand_s *s = (struct onenand_s *) opaque;
+    OneNANDState *s = (OneNANDState *) opaque;
 
     return s->otp;
 }

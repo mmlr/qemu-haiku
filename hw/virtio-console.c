@@ -38,8 +38,10 @@ static void virtio_console_handle_output(VirtIODevice *vdev, VirtQueue *vq)
         ssize_t len = 0;
         int d;
 
-        for (d=0; d < elem.out_num; d++)
-            len += qemu_chr_write(s->chr, elem.out_sg[d].iov_base,elem.out_sg[d].iov_len);
+        for (d = 0; d < elem.out_num; d++) {
+            len += qemu_chr_write(s->chr, (uint8_t *)elem.out_sg[d].iov_base,
+                                  elem.out_sg[d].iov_len);
+        }
         virtqueue_push(vq, &elem, len);
         virtio_notify(vdev, vq);
     }
@@ -121,27 +123,19 @@ static int virtio_console_load(QEMUFile *f, void *opaque, int version_id)
     return 0;
 }
 
-void *virtio_console_init(PCIBus *bus, CharDriverState *chr)
+VirtIODevice *virtio_console_init(DeviceState *dev)
 {
     VirtIOConsole *s;
-
-    s = (VirtIOConsole *)virtio_init_pci(bus, "virtio-console",
-                                         PCI_VENDOR_ID_REDHAT_QUMRANET,
-                                         PCI_DEVICE_ID_VIRTIO_CONSOLE,
-                                         PCI_VENDOR_ID_REDHAT_QUMRANET,
-                                         VIRTIO_ID_CONSOLE,
-                                         PCI_CLASS_DISPLAY_OTHER, 0x00,
-                                         0, sizeof(VirtIOConsole));
-    if (s == NULL)
-        return NULL;
-
+    s = (VirtIOConsole *)virtio_common_init("virtio-console",
+                                            VIRTIO_ID_CONSOLE,
+                                            0, sizeof(VirtIOConsole));
     s->vdev.get_features = virtio_console_get_features;
 
     s->ivq = virtio_add_queue(&s->vdev, 128, virtio_console_handle_input);
     s->dvq = virtio_add_queue(&s->vdev, 128, virtio_console_handle_output);
 
-    s->chr = chr;
-    qemu_chr_add_handlers(chr, vcon_can_read, vcon_read, vcon_event, s);
+    s->chr = qdev_init_chardev(dev);
+    qemu_chr_add_handlers(s->chr, vcon_can_read, vcon_read, vcon_event, s);
 
     register_savevm("virtio-console", -1, 1, virtio_console_save, virtio_console_load, s);
 

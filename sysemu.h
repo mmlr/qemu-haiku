@@ -2,13 +2,23 @@
 #define SYSEMU_H
 /* Misc. things related to the system emulator.  */
 
+#include "qemu-common.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 /* vl.c */
 extern const char *bios_name;
-extern const char *bios_dir;
+
+#define QEMU_FILE_TYPE_BIOS   0
+#define QEMU_FILE_TYPE_KEYMAP 1
+char *qemu_find_file(int type, const char *name);
 
 extern int vm_running;
 extern const char *qemu_name;
 extern uint8_t qemu_uuid[];
+int qemu_uuid_parse(const char *str, uint8_t *uuid);
 #define UUID_FMT "%02hhx%02hhx%02hhx%02hhx-%02hhx%02hhx-%02hhx%02hhx-%02hhx%02hhx-%02hhx%02hhx%02hhx%02hhx%02hhx%02hhx"
 
 typedef struct vm_change_state_entry VMChangeStateEntry;
@@ -21,6 +31,10 @@ void qemu_del_vm_change_state_handler(VMChangeStateEntry *e);
 void vm_start(void);
 void vm_stop(int reason);
 
+uint64_t ram_bytes_remaining(void);
+uint64_t ram_bytes_transferred(void);
+uint64_t ram_bytes_total(void);
+
 int64_t cpu_get_ticks(void);
 void cpu_enable_ticks(void);
 void cpu_disable_ticks(void);
@@ -31,18 +45,20 @@ void qemu_system_powerdown_request(void);
 int qemu_shutdown_requested(void);
 int qemu_reset_requested(void);
 int qemu_powerdown_requested(void);
+#ifdef NEED_CPU_H
 #if !defined(TARGET_SPARC) && !defined(TARGET_I386)
 // Please implement a power failure function to signal the OS
 #define qemu_system_powerdown() do{}while(0)
 #else
 void qemu_system_powerdown(void);
 #endif
+#endif
 void qemu_system_reset(void);
 
-void do_savevm(const char *name);
-void do_loadvm(const char *name);
-void do_delvm(const char *name);
-void do_info_snapshots(void);
+void do_savevm(Monitor *mon, const char *name);
+void do_loadvm(Monitor *mon, const char *name);
+void do_delvm(Monitor *mon, const char *name);
+void do_info_snapshots(Monitor *mon);
 
 void qemu_announce_self(void);
 
@@ -75,53 +91,72 @@ int tap_win32_init(VLANState *vlan, const char *model,
                    const char *name, const char *ifname);
 
 /* SLIRP */
-void do_info_slirp(void);
+void do_info_slirp(Monitor *mon);
 
+typedef enum DisplayType
+{
+    DT_DEFAULT,
+    DT_CURSES,
+    DT_SDL,
+    DT_VNC,
+    DT_NOGRAPHIC,
+} DisplayType;
+
+extern int autostart;
 extern int bios_size;
-extern int cirrus_vga_enabled;
-extern int std_vga_enabled;
-extern int vmsvga_enabled;
+
+typedef enum {
+    VGA_NONE, VGA_STD, VGA_CIRRUS, VGA_VMWARE, VGA_XENFB
+} VGAInterfaceType;
+
+extern int vga_interface_type;
+#define cirrus_vga_enabled (vga_interface_type == VGA_CIRRUS)
+#define std_vga_enabled (vga_interface_type == VGA_STD)
+#define xenfb_enabled (vga_interface_type == VGA_XENFB)
+#define vmsvga_enabled (vga_interface_type == VGA_VMWARE)
+
 extern int graphic_width;
 extern int graphic_height;
 extern int graphic_depth;
-extern int nographic;
+extern DisplayType display_type;
 extern const char *keyboard_layout;
 extern int win2k_install_hack;
 extern int rtc_td_hack;
 extern int alt_grab;
 extern int usb_enabled;
+extern int virtio_balloon;
+extern const char *virtio_balloon_devaddr;
 extern int smp_cpus;
 extern int cursor_hide;
 extern int graphic_rotate;
 extern int no_quit;
 extern int semihosting_enabled;
 extern int old_param;
-extern const char *bootp_filename;
+extern int boot_menu;
 
-#ifdef USE_KQEMU
+#ifdef CONFIG_KQEMU
 extern int kqemu_allowed;
 #endif
+
+#define MAX_NODES 64
+extern int nb_numa_nodes;
+extern uint64_t node_mem[MAX_NODES];
 
 #define MAX_OPTION_ROMS 16
 extern const char *option_rom[MAX_OPTION_ROMS];
 extern int nb_option_roms;
 
+#ifdef NEED_CPU_H
 #if defined(TARGET_SPARC) || defined(TARGET_PPC)
 #define MAX_PROM_ENVS 128
 extern const char *prom_envs[MAX_PROM_ENVS];
 extern unsigned int nb_prom_envs;
 #endif
-
-#if defined (TARGET_PPC)
-#define BIOS_SIZE (1024 * 1024)
-#elif defined (TARGET_SPARC64)
-#define BIOS_SIZE ((512 + 32) * 1024)
-#elif defined(TARGET_MIPS)
-#define BIOS_SIZE (4 * 1024 * 1024)
 #endif
 
 typedef enum {
-    IF_IDE, IF_SCSI, IF_FLOPPY, IF_PFLASH, IF_MTD, IF_SD, IF_VIRTIO
+    IF_IDE, IF_SCSI, IF_FLOPPY, IF_PFLASH, IF_MTD, IF_SD, IF_VIRTIO, IF_XEN,
+    IF_COUNT
 } BlockInterfaceType;
 
 typedef enum {
@@ -129,15 +164,18 @@ typedef enum {
     BLOCK_ERR_STOP_ANY
 } BlockInterfaceErrorAction;
 
+#define BLOCK_SERIAL_STRLEN 20
+
 typedef struct DriveInfo {
     BlockDriverState *bdrv;
+    const char *devaddr;
     BlockInterfaceType type;
     int bus;
     int unit;
     int used;
     int drive_opt_idx;
     BlockInterfaceErrorAction onerror;
-    char serial[21];
+    char serial[BLOCK_SERIAL_STRLEN + 1];
 } DriveInfo;
 
 #define MAX_IDE_DEVS	2
@@ -154,6 +192,8 @@ extern void drive_remove(int index);
 extern const char *drive_get_serial(BlockDriverState *bdrv);
 extern BlockInterfaceErrorAction drive_get_onerror(BlockDriverState *bdrv);
 
+BlockDriverState *qdev_init_bdrv(DeviceState *dev, BlockInterfaceType type);
+
 struct drive_opt {
     const char *file;
     char opt[1024];
@@ -167,7 +207,8 @@ extern int drive_add(const char *file, const char *fmt, ...);
 extern int drive_init(struct drive_opt *arg, int snapshot, void *machine);
 
 /* acpi */
-void qemu_system_hot_add_init(void);
+typedef void (*qemu_system_device_hot_add_t)(int pcibus, int slot, int state);
+void qemu_system_device_hot_add_register(qemu_system_device_hot_add_t callback);
 void qemu_system_device_hot_add(int pcibus, int slot, int state);
 
 /* device-hotplug */
@@ -179,9 +220,10 @@ void destroy_nic(dev_match_fn *match_fn, void *arg);
 void destroy_bdrvs(dev_match_fn *match_fn, void *arg);
 
 /* pci-hotplug */
-void pci_device_hot_add(const char *pci_addr, const char *type, const char *opts);
-void drive_hot_add(const char *pci_addr, const char *opts);
-void pci_device_hot_remove(const char *pci_addr);
+void pci_device_hot_add(Monitor *mon, const char *pci_addr, const char *type,
+                        const char *opts);
+void drive_hot_add(Monitor *mon, const char *pci_addr, const char *opts);
+void pci_device_hot_remove(Monitor *mon, const char *pci_addr);
 void pci_device_hot_remove_success(int pcibus, int slot);
 
 /* serial ports */
@@ -229,23 +271,25 @@ struct soundhw {
     int enabled;
     int isa;
     union {
-        int (*init_isa) (AudioState *s, qemu_irq *pic);
-        int (*init_pci) (PCIBus *bus, AudioState *s);
+        int (*init_isa) (qemu_irq *pic);
+        int (*init_pci) (PCIBus *bus);
     } init;
 };
 
 extern struct soundhw soundhw[];
 #endif
 
-void do_usb_add(const char *devname);
-void do_usb_del(const char *devname);
-void usb_info(void);
+void do_usb_add(Monitor *mon, const char *devname);
+void do_usb_del(Monitor *mon, const char *devname);
+void usb_info(Monitor *mon);
 
-const char *get_opt_name(char *buf, int buf_size, const char *p);
-const char *get_opt_value(char *buf, int buf_size, const char *p);
 int get_param_value(char *buf, int buf_size,
                     const char *tag, const char *str);
+int get_next_param_value(char *buf, int buf_size,
+                         const char *tag, const char **pstr);
 int check_params(char *buf, int buf_size,
                  const char * const *params, const char *str);
+
+void register_devices(void);
 
 #endif

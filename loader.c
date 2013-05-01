@@ -39,8 +39,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "qemu-common.h"
@@ -199,7 +198,6 @@ static void bswap_ahdr(struct exec *e)
     (N_MAGIC(x) == ZMAGIC ? _N_HDROFF((x)) + sizeof (struct exec) :	\
      (N_MAGIC(x) == QMAGIC ? 0 : sizeof (struct exec)))
 #define N_TXTADDR(x) (N_MAGIC(x) == QMAGIC ? TARGET_PAGE_SIZE : 0)
-#define N_DATOFF(x) (N_TXTOFF(x) + (x).a_text)
 #define _N_SEGMENT_ROUND(x) (((x) + TARGET_PAGE_SIZE - 1) & ~(TARGET_PAGE_SIZE - 1))
 
 #define _N_TXTENDADDR(x) (N_TXTADDR(x)+(x).a_text)
@@ -383,7 +381,7 @@ static void *zalloc(void *x, unsigned items, unsigned size)
     return (p);
 }
 
-static void zfree(void *x, void *addr, unsigned nb)
+static void zfree(void *x, void *addr)
 {
     qemu_free(addr);
 }
@@ -431,7 +429,7 @@ static ssize_t gunzip(void *dst, size_t dstlen, uint8_t *src,
     }
 
     s.zalloc = zalloc;
-    s.zfree = (free_func)zfree;
+    s.zfree = zfree;
 
     r = inflateInit2(&s, -MAX_WBITS);
     if (r != Z_OK) {

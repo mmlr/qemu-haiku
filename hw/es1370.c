@@ -327,7 +327,7 @@ static void es1370_update_status (ES1370State *s, uint32_t new_status)
     else {
         s->status = new_status & ~STAT_INTR;
     }
-    qemu_set_irq(s->pci_dev->irq[0], !!level);
+    qemu_set_irq (s->pci_dev->irq[0], !!level);
 }
 
 static void es1370_reset (ES1370State *s)
@@ -353,7 +353,7 @@ static void es1370_reset (ES1370State *s)
             s->dac_voice[i] = NULL;
         }
     }
-    qemu_irq_lower(s->pci_dev->irq[0]);
+    qemu_irq_lower (s->pci_dev->irq[0]);
 }
 
 static void es1370_maybe_lower_irq (ES1370State *s, uint32_t sctl)
@@ -1005,36 +1005,16 @@ static void es1370_on_reset (void *opaque)
     es1370_reset (s);
 }
 
-int es1370_init (PCIBus *bus, AudioState *audio)
+static void es1370_initfn(PCIDevice *dev)
 {
-    PCIES1370State *d;
-    ES1370State *s;
-    uint8_t *c;
+    PCIES1370State *d = DO_UPCAST(PCIES1370State, dev, dev);
+    ES1370State *s = &d->es1370;
+    uint8_t *c = d->dev.config;
 
-    if (!bus) {
-        dolog ("No PCI bus\n");
-        return -1;
-    }
-
-    if (!audio) {
-        dolog ("No audio state\n");
-        return -1;
-    }
-
-    d = (PCIES1370State *) pci_register_device (bus, "ES1370",
-                                                sizeof (PCIES1370State),
-                                                -1, NULL, NULL);
-
-    if (!d) {
-        AUD_log (NULL, "Failed to register PCI device for ES1370\n");
-        return -1;
-    }
-
-    c = d->dev.config;
-    pci_config_set_vendor_id(c, PCI_VENDOR_ID_ENSONIQ);
-    pci_config_set_device_id(c, PCI_DEVICE_ID_ENSONIQ_ES1370);
+    pci_config_set_vendor_id (c, PCI_VENDOR_ID_ENSONIQ);
+    pci_config_set_device_id (c, PCI_DEVICE_ID_ENSONIQ_ES1370);
     c[0x07] = 2 << 1;
-    pci_config_set_class(c, PCI_CLASS_MULTIMEDIA_AUDIO);
+    pci_config_set_class (c, PCI_CLASS_MULTIMEDIA_AUDIO);
 
 #if 1
     c[0x2c] = 0x42;
@@ -1058,11 +1038,30 @@ int es1370_init (PCIBus *bus, AudioState *audio)
     s = &d->es1370;
     s->pci_dev = &d->dev;
 
-    pci_register_io_region (&d->dev, 0, 256, PCI_ADDRESS_SPACE_IO, es1370_map);
+    pci_register_bar (&d->dev, 0, 256, PCI_ADDRESS_SPACE_IO, es1370_map);
     register_savevm ("es1370", 0, 2, es1370_save, es1370_load, s);
     qemu_register_reset (es1370_on_reset, s);
 
-    AUD_register_card (audio, "es1370", &s->card);
+    AUD_register_card ("es1370", &s->card);
     es1370_reset (s);
+}
+
+int es1370_init (PCIBus *bus)
+{
+    pci_create_simple(bus, -1, "ES1370");
     return 0;
 }
+
+static PCIDeviceInfo es1370_info = {
+    .qdev.name    = "ES1370",
+    .qdev.desc    = "ENSONIQ AudioPCI ES1370",
+    .qdev.size    = sizeof (PCIES1370State),
+    .init         = es1370_initfn,
+};
+
+static void es1370_register(void)
+{
+    pci_qdev_register (&es1370_info);
+}
+device_init (es1370_register);
+

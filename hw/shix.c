@@ -28,6 +28,7 @@
    More information in target-sh4/README.sh4
 */
 #include "hw.h"
+#include "pc.h"
 #include "sh.h"
 #include "sysemu.h"
 #include "boards.h"
@@ -35,17 +36,17 @@
 #define BIOS_FILENAME "shix_bios.bin"
 #define BIOS_ADDRESS 0xA0000000
 
-void irq_info(void)
+void irq_info(Monitor *mon)
 {
     /* XXXXX */
 }
 
-void pic_info(void)
+void pic_info(Monitor *mon)
 {
     /* XXXXX */
 }
 
-static void shix_init(ram_addr_t ram_size, int vga_ram_size,
+static void shix_init(ram_addr_t ram_size,
                const char *boot_device,
 	       const char *kernel_filename, const char *kernel_cmdline,
 	       const char *initrd_filename, const char *cpu_model)
@@ -72,7 +73,7 @@ static void shix_init(ram_addr_t ram_size, int vga_ram_size,
     if (bios_name == NULL)
         bios_name = BIOS_FILENAME;
     printf("%s: load BIOS '%s'\n", __func__, bios_name);
-    ret = load_image(bios_name, phys_ram_base);
+    ret = load_image_targphys(bios_name, 0, 0x4000);
     if (ret < 0) {		/* Check bios size */
 	fprintf(stderr, "ret=%d\n", ret);
 	fprintf(stderr, "qemu: could not load SHIX bios '%s'\n",
@@ -87,9 +88,16 @@ static void shix_init(ram_addr_t ram_size, int vga_ram_size,
     fprintf(stderr, "initialization terminated\n");
 }
 
-QEMUMachine shix_machine = {
+static QEMUMachine shix_machine = {
     .name = "shix",
     .desc = "shix card",
     .init = shix_init,
-    .ram_require = (0x00004000 + 0x01000000 + 0x01000000) | RAMSIZE_FIXED,
+    .is_default = 1,
 };
+
+static void shix_machine_init(void)
+{
+    qemu_register_machine(&shix_machine);
+}
+
+machine_init(shix_machine_init);

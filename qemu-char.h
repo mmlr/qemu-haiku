@@ -1,12 +1,16 @@
 #ifndef QEMU_CHAR_H
 #define QEMU_CHAR_H
 
+#include "qemu-common.h"
 #include "sys-queue.h"
+
 /* character device */
 
-#define CHR_EVENT_BREAK 0 /* serial break char */
-#define CHR_EVENT_FOCUS 1 /* focus to this terminal (modal input needed) */
-#define CHR_EVENT_RESET 2 /* new connection established */
+#define CHR_EVENT_BREAK   0 /* serial break char */
+#define CHR_EVENT_FOCUS   1 /* focus to this terminal (modal input needed) */
+#define CHR_EVENT_RESET   2 /* new connection established */
+#define CHR_EVENT_MUX_IN  3 /* mux-focus was set to this terminal */
+#define CHR_EVENT_MUX_OUT 4 /* mux-focus will move on */
 
 
 #define CHR_IOCTL_SERIAL_SET_PARAMS   1
@@ -47,6 +51,7 @@ struct CharDriverState {
     int (*chr_write)(struct CharDriverState *s, const uint8_t *buf, int len);
     void (*chr_update_read_handler)(struct CharDriverState *s);
     int (*chr_ioctl)(struct CharDriverState *s, int cmd, void *arg);
+    int (*get_msgfd)(struct CharDriverState *s);
     IOEventHandler *chr_event;
     IOCanRWHandler *chr_can_read;
     IOReadHandler *chr_read;
@@ -77,8 +82,9 @@ void qemu_chr_reset(CharDriverState *s);
 void qemu_chr_initial_reset(void);
 int qemu_chr_can_read(CharDriverState *s);
 void qemu_chr_read(CharDriverState *s, uint8_t *buf, int len);
+int qemu_chr_get_msgfd(CharDriverState *s);
 void qemu_chr_accept_input(CharDriverState *s);
-void qemu_chr_info(void);
+void qemu_chr_info(Monitor *mon);
 
 extern int term_escape_char;
 

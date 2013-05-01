@@ -30,10 +30,10 @@
 //#define DEBUG_FW_CFG
 
 #ifdef DEBUG_FW_CFG
-#define FW_CFG_DPRINTF(fmt, args...)                     \
-    do { printf("FW_CFG: " fmt , ##args); } while (0)
+#define FW_CFG_DPRINTF(fmt, ...)                        \
+    do { printf("FW_CFG: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define FW_CFG_DPRINTF(fmt, args...)
+#define FW_CFG_DPRINTF(fmt, ...)
 #endif
 
 #define FW_CFG_SIZE 2
@@ -108,7 +108,7 @@ static uint32_t fw_cfg_io_readb(void *opaque, uint32_t addr)
 
 static void fw_cfg_io_writeb(void *opaque, uint32_t addr, uint32_t value)
 {
-    return fw_cfg_write(opaque, (uint8_t)value);
+    fw_cfg_write(opaque, (uint8_t)value);
 }
 
 static void fw_cfg_io_writew(void *opaque, uint32_t addr, uint32_t value)
@@ -124,7 +124,7 @@ static uint32_t fw_cfg_mem_readb(void *opaque, target_phys_addr_t addr)
 static void fw_cfg_mem_writeb(void *opaque, target_phys_addr_t addr,
                               uint32_t value)
 {
-    return fw_cfg_write(opaque, (uint8_t)value);
+    fw_cfg_write(opaque, (uint8_t)value);
 }
 
 static void fw_cfg_mem_writew(void *opaque, target_phys_addr_t addr,
@@ -266,19 +266,20 @@ void *fw_cfg_init(uint32_t ctl_port, uint32_t data_port,
         register_ioport_write(data_port, 1, 1, fw_cfg_io_writeb, s);
     }
     if (ctl_addr) {
-        io_ctl_memory = cpu_register_io_memory(0, fw_cfg_ctl_mem_read,
+        io_ctl_memory = cpu_register_io_memory(fw_cfg_ctl_mem_read,
                                            fw_cfg_ctl_mem_write, s);
         cpu_register_physical_memory(ctl_addr, FW_CFG_SIZE, io_ctl_memory);
     }
     if (data_addr) {
-        io_data_memory = cpu_register_io_memory(0, fw_cfg_data_mem_read,
+        io_data_memory = cpu_register_io_memory(fw_cfg_data_mem_read,
                                            fw_cfg_data_mem_write, s);
         cpu_register_physical_memory(data_addr, FW_CFG_SIZE, io_data_memory);
     }
     fw_cfg_add_bytes(s, FW_CFG_SIGNATURE, (uint8_t *)"QEMU", 4);
     fw_cfg_add_bytes(s, FW_CFG_UUID, qemu_uuid, 16);
-    fw_cfg_add_i16(s, FW_CFG_NOGRAPHIC, (uint16_t)nographic);
+    fw_cfg_add_i16(s, FW_CFG_NOGRAPHIC, (uint16_t)(display_type == DT_NOGRAPHIC));
     fw_cfg_add_i16(s, FW_CFG_NB_CPUS, (uint16_t)smp_cpus);
+    fw_cfg_add_i16(s, FW_CFG_BOOT_MENU, (uint16_t)boot_menu);
 
     register_savevm("fw_cfg", -1, 1, fw_cfg_save, fw_cfg_load, s);
     qemu_register_reset(fw_cfg_reset, s);

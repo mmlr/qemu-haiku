@@ -3,15 +3,6 @@
 
 #include "exec-all.h"
 
-void register_machines(void)
-{
-    qemu_register_machine(&mips_malta_machine);
-    qemu_register_machine(&mips_magnum_machine);
-    qemu_register_machine(&mips_pica61_machine);
-    qemu_register_machine(&mips_mipssim_machine);
-    qemu_register_machine(&mips_machine);
-}
-
 static void save_tc(QEMUFile *f, TCState *tc)
 {
     int i;
@@ -76,10 +67,12 @@ void cpu_save(QEMUFile *f, void *opaque)
                           (env->tlb->mmu.r4k.tlb[i].V1 << 2) |
                           (env->tlb->mmu.r4k.tlb[i].D0 << 1) |
                           (env->tlb->mmu.r4k.tlb[i].D1 << 0));
+        uint8_t asid;
 
         qemu_put_betls(f, &env->tlb->mmu.r4k.tlb[i].VPN);
         qemu_put_be32s(f, &env->tlb->mmu.r4k.tlb[i].PageMask);
-        qemu_put_8s(f, &env->tlb->mmu.r4k.tlb[i].ASID);
+        asid = env->tlb->mmu.r4k.tlb[i].ASID;
+        qemu_put_8s(f, &asid);
         qemu_put_be16s(f, &flags);
         qemu_put_betls(f, &env->tlb->mmu.r4k.tlb[i].PFN[0]);
         qemu_put_betls(f, &env->tlb->mmu.r4k.tlb[i].PFN[1]);
@@ -91,7 +84,8 @@ void cpu_save(QEMUFile *f, void *opaque)
     qemu_put_sbe32s(f, &env->error_code);
     qemu_put_be32s(f, &env->hflags);
     qemu_put_betls(f, &env->btarget);
-    qemu_put_sbe32s(f, &env->bcond);
+    i = env->bcond;
+    qemu_put_sbe32s(f, &i);
 
     /* Save remaining CP1 registers */
     qemu_put_sbe32s(f, &env->CP0_Index);
@@ -218,10 +212,12 @@ int cpu_load(QEMUFile *f, void *opaque, int version_id)
     qemu_get_be32s(f, &env->tlb->tlb_in_use);
     for(i = 0; i < MIPS_TLB_MAX; i++) {
         uint16_t flags;
+        uint8_t asid;
 
         qemu_get_betls(f, &env->tlb->mmu.r4k.tlb[i].VPN);
         qemu_get_be32s(f, &env->tlb->mmu.r4k.tlb[i].PageMask);
-        qemu_get_8s(f, &env->tlb->mmu.r4k.tlb[i].ASID);
+        qemu_get_8s(f, &asid);
+        env->tlb->mmu.r4k.tlb[i].ASID = asid;
         qemu_get_be16s(f, &flags);
         env->tlb->mmu.r4k.tlb[i].G = (flags >> 10) & 1;
         env->tlb->mmu.r4k.tlb[i].C0 = (flags >> 7) & 3;
@@ -240,7 +236,8 @@ int cpu_load(QEMUFile *f, void *opaque, int version_id)
     qemu_get_sbe32s(f, &env->error_code);
     qemu_get_be32s(f, &env->hflags);
     qemu_get_betls(f, &env->btarget);
-    qemu_get_sbe32s(f, &env->bcond);
+    qemu_get_sbe32s(f, &i);
+    env->bcond = i;
 
     /* Load remaining CP1 registers */
     qemu_get_sbe32s(f, &env->CP0_Index);

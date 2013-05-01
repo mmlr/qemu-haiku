@@ -30,9 +30,9 @@
 //#define DEBUG_PARALLEL
 
 #ifdef DEBUG_PARALLEL
-#define pdebug(fmt, arg...) printf("pp: " fmt, ##arg)
+#define pdebug(fmt, ...) printf("pp: " fmt, ## __VA_ARGS__)
 #else
-#define pdebug(fmt, arg...) ((void)0)
+#define pdebug(fmt, ...) ((void)0)
 #endif
 
 #define PARA_REG_DATA 0
@@ -543,7 +543,7 @@ ParallelState *parallel_mm_init(target_phys_addr_t base, int it_shift, qemu_irq 
     parallel_reset(s);
     qemu_register_reset(parallel_reset, s);
 
-    io_sw = cpu_register_io_memory(0, parallel_mm_read_sw, parallel_mm_write_sw, s);
+    io_sw = cpu_register_io_memory(parallel_mm_read_sw, parallel_mm_write_sw, s);
     cpu_register_physical_memory(base, 8 << it_shift, io_sw);
     return s;
 }

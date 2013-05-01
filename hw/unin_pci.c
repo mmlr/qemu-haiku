@@ -29,10 +29,10 @@
 //#define DEBUG_UNIN
 
 #ifdef DEBUG_UNIN
-#define UNIN_DPRINTF(fmt, args...) \
-do { printf("UNIN: " fmt , ##args); } while (0)
+#define UNIN_DPRINTF(fmt, ...)                                  \
+    do { printf("UNIN: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define UNIN_DPRINTF(fmt, args...)
+#define UNIN_DPRINTF(fmt, ...)
 #endif
 
 typedef target_phys_addr_t pci_addr_t;
@@ -92,31 +92,20 @@ static CPUReadMemoryFunc *pci_unin_main_read[] = {
     &pci_host_data_readl,
 };
 
-#if 0
-
 static void pci_unin_config_writel (void *opaque, target_phys_addr_t addr,
                                     uint32_t val)
 {
     UNINState *s = opaque;
 
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
-#endif
-    s->config_reg = 0x80000000 | (val & ~0x00000001);
+    s->config_reg = val;
 }
 
 static uint32_t pci_unin_config_readl (void *opaque,
                                        target_phys_addr_t addr)
 {
     UNINState *s = opaque;
-    uint32_t val;
 
-    val = (s->config_reg | 0x00000001) & ~0x80000000;
-#ifdef TARGET_WORDS_BIGENDIAN
-    val = bswap32(val);
-#endif
-
-    return val;
+    return s->config_reg;
 }
 
 static CPUWriteMemoryFunc *pci_unin_config_write[] = {
@@ -131,6 +120,7 @@ static CPUReadMemoryFunc *pci_unin_config_read[] = {
     &pci_unin_config_readl,
 };
 
+#if 0
 static CPUWriteMemoryFunc *pci_unin_write[] = {
     &pci_host_pci_writeb,
     &pci_host_pci_writew,
@@ -185,12 +175,13 @@ PCIBus *pci_pmac_init(qemu_irq *pic)
     /* Use values found on a real PowerMac */
     /* Uninorth main bus */
     s = qemu_mallocz(sizeof(UNINState));
-    s->bus = pci_register_bus(pci_unin_set_irq, pci_unin_map_irq,
+    s->bus = pci_register_bus(NULL, "pci",
+                              pci_unin_set_irq, pci_unin_map_irq,
                               pic, 11 << 3, 4);
 
-    pci_mem_config = cpu_register_io_memory(0, pci_unin_main_config_read,
+    pci_mem_config = cpu_register_io_memory(pci_unin_main_config_read,
                                             pci_unin_main_config_write, s);
-    pci_mem_data = cpu_register_io_memory(0, pci_unin_main_read,
+    pci_mem_data = cpu_register_io_memory(pci_unin_main_read,
                                           pci_unin_main_write, s);
     cpu_register_physical_memory(0xf2800000, 0x1000, pci_mem_config);
     cpu_register_physical_memory(0xf2c00000, 0x1000, pci_mem_data);
@@ -202,7 +193,7 @@ PCIBus *pci_pmac_init(qemu_irq *pic)
     pci_config_set_class(d->config, PCI_CLASS_BRIDGE_HOST);
     d->config[0x0C] = 0x08; // cache_line_size
     d->config[0x0D] = 0x10; // latency_timer
-    d->config[0x0E] = 0x00; // header_type
+    d->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
     d->config[0x34] = 0x00; // capabilities_pointer
 
 #if 0 // XXX: not activated as PPC BIOS doesn't handle multiple buses properly
@@ -215,7 +206,7 @@ PCIBus *pci_pmac_init(qemu_irq *pic)
     pci_config_set_class(d->config, PCI_CLASS_BRIDGE_PCI);
     d->config[0x0C] = 0x08; // cache_line_size
     d->config[0x0D] = 0x20; // latency_timer
-    d->config[0x0E] = 0x01; // header_type
+    d->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_BRIDGE; // header_type
 
     d->config[0x18] = 0x01; // primary_bus
     d->config[0x19] = 0x02; // secondary_bus
@@ -233,34 +224,32 @@ PCIBus *pci_pmac_init(qemu_irq *pic)
     d->config[0x27] = 0x7F;
     // d->config[0x34] = 0xdc // capabilities_pointer
 #endif
-#if 0 // XXX: not needed for now
+
     /* Uninorth AGP bus */
-    s = &pci_bridge[1];
-    pci_mem_config = cpu_register_io_memory(0, pci_unin_config_read,
+    pci_mem_config = cpu_register_io_memory(pci_unin_config_read,
                                             pci_unin_config_write, s);
-    pci_mem_data = cpu_register_io_memory(0, pci_unin_read,
-                                          pci_unin_write, s);
+    pci_mem_data = cpu_register_io_memory(pci_unin_main_read,
+                                          pci_unin_main_write, s);
     cpu_register_physical_memory(0xf0800000, 0x1000, pci_mem_config);
     cpu_register_physical_memory(0xf0c00000, 0x1000, pci_mem_data);
 
-    d = pci_register_device("Uni-north AGP", sizeof(PCIDevice), 0, 11 << 3,
-                            NULL, NULL);
+    d = pci_register_device(s->bus, "Uni-north AGP", sizeof(PCIDevice),
+                            11 << 3, NULL, NULL);
     pci_config_set_vendor_id(d->config, PCI_VENDOR_ID_APPLE);
     pci_config_set_device_id(d->config, PCI_DEVICE_ID_APPLE_UNI_N_AGP);
     d->config[0x08] = 0x00; // revision
     pci_config_set_class(d->config, PCI_CLASS_BRIDGE_HOST);
     d->config[0x0C] = 0x08; // cache_line_size
     d->config[0x0D] = 0x10; // latency_timer
-    d->config[0x0E] = 0x00; // header_type
+    d->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
     //    d->config[0x34] = 0x80; // capabilities_pointer
-#endif
 
 #if 0 // XXX: not needed for now
     /* Uninorth internal bus */
     s = &pci_bridge[2];
-    pci_mem_config = cpu_register_io_memory(0, pci_unin_config_read,
+    pci_mem_config = cpu_register_io_memory(pci_unin_config_read,
                                             pci_unin_config_write, s);
-    pci_mem_data = cpu_register_io_memory(0, pci_unin_read,
+    pci_mem_data = cpu_register_io_memory(pci_unin_read,
                                           pci_unin_write, s);
     cpu_register_physical_memory(0xf4800000, 0x1000, pci_mem_config);
     cpu_register_physical_memory(0xf4c00000, 0x1000, pci_mem_data);
@@ -273,7 +262,7 @@ PCIBus *pci_pmac_init(qemu_irq *pic)
     pci_config_set_class(d->config, PCI_CLASS_BRIDGE_HOST);
     d->config[0x0C] = 0x08; // cache_line_size
     d->config[0x0D] = 0x10; // latency_timer
-    d->config[0x0E] = 0x00; // header_type
+    d->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
     d->config[0x34] = 0x00; // capabilities_pointer
 #endif
     register_savevm("uninorth", 0, 1, pci_unin_save, pci_unin_load, d);

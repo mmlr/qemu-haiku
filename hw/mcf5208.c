@@ -89,8 +89,7 @@ static void m5208_timer_write(void *opaque, target_phys_addr_t offset,
     case 4:
         break;
     default:
-        cpu_abort(cpu_single_env, "m5208_timer_write: Bad offset 0x%x\n",
-                  (int)offset);
+        hw_error("m5208_timer_write: Bad offset 0x%x\n", (int)offset);
         break;
     }
     m5208_timer_update(s);
@@ -114,8 +113,7 @@ static uint32_t m5208_timer_read(void *opaque, target_phys_addr_t addr)
     case 4:
         return ptimer_get_count(s->timer);
     default:
-        cpu_abort(cpu_single_env, "m5208_timer_read: Bad offset 0x%x\n",
-                  (int)addr);
+        hw_error("m5208_timer_read: Bad offset 0x%x\n", (int)addr);
         return 0;
     }
 }
@@ -148,8 +146,7 @@ static uint32_t m5208_sys_read(void *opaque, target_phys_addr_t addr)
         return 0;
 
     default:
-        cpu_abort(cpu_single_env, "m5208_sys_read: Bad offset 0x%x\n",
-                  (int)addr);
+        hw_error("m5208_sys_read: Bad offset 0x%x\n", (int)addr);
         return 0;
     }
 }
@@ -157,8 +154,7 @@ static uint32_t m5208_sys_read(void *opaque, target_phys_addr_t addr)
 static void m5208_sys_write(void *opaque, target_phys_addr_t addr,
                             uint32_t value)
 {
-    cpu_abort(cpu_single_env, "m5208_sys_write: Bad offset 0x%x\n",
-              (int)addr);
+    hw_error("m5208_sys_write: Bad offset 0x%x\n", (int)addr);
 }
 
 static CPUReadMemoryFunc *m5208_sys_readfn[] = {
@@ -180,7 +176,7 @@ static void mcf5208_sys_init(qemu_irq *pic)
     QEMUBH *bh;
     int i;
 
-    iomemtype = cpu_register_io_memory(0, m5208_sys_readfn,
+    iomemtype = cpu_register_io_memory(m5208_sys_readfn,
                                        m5208_sys_writefn, NULL);
     /* SDRAMC.  */
     cpu_register_physical_memory(0xfc0a8000, 0x00004000, iomemtype);
@@ -189,7 +185,7 @@ static void mcf5208_sys_init(qemu_irq *pic)
         s = (m5208_timer_state *)qemu_mallocz(sizeof(m5208_timer_state));
         bh = qemu_bh_new(m5208_timer_trigger, s);
         s->timer = ptimer_init(bh);
-        iomemtype = cpu_register_io_memory(0, m5208_timer_readfn,
+        iomemtype = cpu_register_io_memory(m5208_timer_readfn,
                                            m5208_timer_writefn, s);
         cpu_register_physical_memory(0xfc080000 + 0x4000 * i, 0x00004000,
                                      iomemtype);
@@ -197,7 +193,7 @@ static void mcf5208_sys_init(qemu_irq *pic)
     }
 }
 
-static void mcf5208evb_init(ram_addr_t ram_size, int vga_ram_size,
+static void mcf5208evb_init(ram_addr_t ram_size,
                      const char *boot_device,
                      const char *kernel_filename, const char *kernel_cmdline,
                      const char *initrd_filename, const char *cpu_model)
@@ -220,7 +216,7 @@ static void mcf5208evb_init(ram_addr_t ram_size, int vga_ram_size,
     env->vbr = 0;
     /* TODO: Configure BARs.  */
 
-    /* DRAM at 0x20000000 */
+    /* DRAM at 0x40000000 */
     cpu_register_physical_memory(0x40000000, ram_size,
         qemu_ram_alloc(ram_size) | IO_MEM_RAM);
 
@@ -278,8 +274,9 @@ static void mcf5208evb_init(ram_addr_t ram_size, int vga_ram_size,
         kernel_size = load_uimage(kernel_filename, &entry, NULL, NULL);
     }
     if (kernel_size < 0) {
-        kernel_size = load_image(kernel_filename, phys_ram_base);
-        entry = 0x20000000;
+        kernel_size = load_image_targphys(kernel_filename, 0x40000000,
+                                          ram_size);
+        entry = 0x40000000;
     }
     if (kernel_size < 0) {
         fprintf(stderr, "qemu: could not load kernel '%s'\n", kernel_filename);
@@ -289,9 +286,16 @@ static void mcf5208evb_init(ram_addr_t ram_size, int vga_ram_size,
     env->pc = entry;
 }
 
-QEMUMachine mcf5208evb_machine = {
+static QEMUMachine mcf5208evb_machine = {
     .name = "mcf5208evb",
     .desc = "MCF5206EVB",
     .init = mcf5208evb_init,
-    .ram_require = 16384,
+    .is_default = 1,
 };
+
+static void mcf5208evb_machine_init(void)
+{
+    qemu_register_machine(&mcf5208evb_machine);
+}
+
+machine_init(mcf5208evb_machine_init);

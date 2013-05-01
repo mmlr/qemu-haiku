@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdarg.h>
 #include <stdlib.h>
@@ -23,7 +22,6 @@
 #include <string.h>
 #include <inttypes.h>
 #include <signal.h>
-#include <assert.h>
 
 #include "cpu.h"
 #include "exec-all.h"

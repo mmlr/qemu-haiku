@@ -7,9 +7,7 @@
  * This code is licenced under the GPL.
  */
 
-#include "hw.h"
-#include "primecell.h"
-#include "arm-misc.h"
+#include "sysbus.h"
 
 /* The number of virtual priority levels.  16 user vectors plus the
    unvectored IRQ.  Chained interrupts would require an additional level
@@ -18,6 +16,7 @@
 #define PL190_NUM_PRIO 17
 
 typedef struct {
+    SysBusDevice busdev;
     uint32_t level;
     uint32_t soft_level;
     uint32_t irq_enable;
@@ -137,7 +136,7 @@ static uint32_t pl190_read(void *opaque, target_phys_addr_t offset)
     case 13: /* DEFVECTADDR */
         return s->vect_addr[16];
     default:
-        cpu_abort (cpu_single_env, "pl190_read: Bad offset %x\n", (int)offset);
+        hw_error("pl190_read: Bad offset %x\n", (int)offset);
         return 0;
     }
 }
@@ -190,11 +189,12 @@ static void pl190_write(void *opaque, target_phys_addr_t offset, uint32_t val)
         s->default_addr = val;
         break;
     case 0xc0: /* ITCR */
-        if (val)
-            cpu_abort(cpu_single_env, "pl190: Test mode not implemented\n");
+        if (val) {
+            hw_error("pl190: Test mode not implemented\n");
+        }
         break;
     default:
-        cpu_abort(cpu_single_env, "pl190_write: Bad offset %x\n", (int)offset);
+        hw_error("pl190_write: Bad offset %x\n", (int)offset);
         return;
     }
     pl190_update(s);
@@ -227,20 +227,24 @@ static void pl190_reset(pl190_state *s)
   pl190_update_vectors(s);
 }
 
-qemu_irq *pl190_init(uint32_t base, qemu_irq irq, qemu_irq fiq)
+static void pl190_init(SysBusDevice *dev)
 {
-    pl190_state *s;
-    qemu_irq *qi;
+    pl190_state *s = FROM_SYSBUS(pl190_state, dev);
     int iomemtype;
 
-    s = (pl190_state *)qemu_mallocz(sizeof(pl190_state));
-    iomemtype = cpu_register_io_memory(0, pl190_readfn,
+    iomemtype = cpu_register_io_memory(pl190_readfn,
                                        pl190_writefn, s);
-    cpu_register_physical_memory(base, 0x00001000, iomemtype);
-    qi = qemu_allocate_irqs(pl190_set_irq, s, 32);
-    s->irq = irq;
-    s->fiq = fiq;
+    sysbus_init_mmio(dev, 0x1000, iomemtype);
+    qdev_init_gpio_in(&dev->qdev, pl190_set_irq, 32);
+    sysbus_init_irq(dev, &s->irq);
+    sysbus_init_irq(dev, &s->fiq);
     pl190_reset(s);
     /* ??? Save/restore.  */
-    return qi;
 }
+
+static void pl190_register_devices(void)
+{
+    sysbus_register_dev("pl190", sizeof(pl190_state), pl190_init);
+}
+
+device_init(pl190_register_devices)

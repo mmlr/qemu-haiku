@@ -83,6 +83,19 @@ int stristart(const char *str, const char *val, const char **ptr)
     return 1;
 }
 
+/* XXX: use host strnlen if available ? */
+int qemu_strnlen(const char *s, int max_len)
+{
+    int i;
+
+    for(i = 0; i < max_len; i++) {
+        if (s[i] == '\0') {
+            break;
+        }
+    }
+    return i;
+}
+
 time_t mktimegm(struct tm *tm)
 {
     time_t t;
@@ -112,8 +125,22 @@ void qemu_iovec_init(QEMUIOVector *qiov, int alloc_hint)
     qiov->size = 0;
 }
 
+void qemu_iovec_init_external(QEMUIOVector *qiov, struct iovec *iov, int niov)
+{
+    int i;
+
+    qiov->iov = iov;
+    qiov->niov = niov;
+    qiov->nalloc = -1;
+    qiov->size = 0;
+    for (i = 0; i < niov; i++)
+        qiov->size += iov[i].iov_len;
+}
+
 void qemu_iovec_add(QEMUIOVector *qiov, void *base, size_t len)
 {
+    assert(qiov->nalloc != -1);
+
     if (qiov->niov == qiov->nalloc) {
         qiov->nalloc = 2 * qiov->nalloc + 1;
         qiov->iov = qemu_realloc(qiov->iov, qiov->nalloc * sizeof(struct iovec));
@@ -126,11 +153,15 @@ void qemu_iovec_add(QEMUIOVector *qiov, void *base, size_t len)
 
 void qemu_iovec_destroy(QEMUIOVector *qiov)
 {
+    assert(qiov->nalloc != -1);
+
     qemu_free(qiov->iov);
 }
 
 void qemu_iovec_reset(QEMUIOVector *qiov)
 {
+    assert(qiov->nalloc != -1);
+
     qiov->niov = 0;
     qiov->size = 0;
 }

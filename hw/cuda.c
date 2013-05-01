@@ -36,10 +36,10 @@
 //#define DEBUG_CUDA_PACKET
 
 #ifdef DEBUG_CUDA
-#define CUDA_DPRINTF(fmt, args...) \
-do { printf("CUDA: " fmt , ##args); } while (0)
+#define CUDA_DPRINTF(fmt, ...)                                  \
+    do { printf("CUDA: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define CUDA_DPRINTF(fmt, args...)
+#define CUDA_DPRINTF(fmt, ...)
 #endif
 
 /* Bits in B data register: all active low */
@@ -760,7 +760,7 @@ void cuda_init (int *cuda_mem_index, qemu_irq irq)
     s->tick_offset = (uint32_t)mktimegm(&tm) + RTC_OFFSET;
 
     s->adb_poll_timer = qemu_new_timer(vm_clock, cuda_adb_poll, s);
-    *cuda_mem_index = cpu_register_io_memory(0, cuda_read, cuda_write, s);
+    *cuda_mem_index = cpu_register_io_memory(cuda_read, cuda_write, s);
     register_savevm("cuda", -1, 1, cuda_save, cuda_load, s);
     qemu_register_reset(cuda_reset, s);
     cuda_reset(s);

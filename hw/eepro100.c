@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * Tested features (i82559):
  *      PXE boot (i386) no valid link
@@ -38,7 +37,6 @@
 # warning "PXE boot still not working!"
 #endif
 
-#include <assert.h>
 #include <stddef.h>             /* offsetof */
 #include "hw.h"
 #include "pci.h"
@@ -46,23 +44,6 @@
 #include "eeprom93xx.h"
 
 /* Common declarations for all PCI devices. */
-
-#define PCI_VENDOR_ID           0x00    /* 16 bits */
-#define PCI_DEVICE_ID           0x02    /* 16 bits */
-#define PCI_COMMAND             0x04    /* 16 bits */
-#define PCI_STATUS              0x06    /* 16 bits */
-
-#define PCI_REVISION_ID         0x08    /* 8 bits  */
-#define PCI_CLASS_CODE          0x0b    /* 8 bits */
-#define PCI_SUBCLASS_CODE       0x0a    /* 8 bits */
-#define PCI_HEADER_TYPE         0x0e    /* 8 bits */
-
-#define PCI_BASE_ADDRESS_0      0x10    /* 32 bits */
-#define PCI_BASE_ADDRESS_1      0x14    /* 32 bits */
-#define PCI_BASE_ADDRESS_2      0x18    /* 32 bits */
-#define PCI_BASE_ADDRESS_3      0x1c    /* 32 bits */
-#define PCI_BASE_ADDRESS_4      0x20    /* 32 bits */
-#define PCI_BASE_ADDRESS_5      0x24    /* 32 bits */
 
 #define PCI_CONFIG_8(offset, value) \
     (pci_conf[offset] = (value))
@@ -77,9 +58,9 @@
 //~ #define DEBUG_EEPRO100
 
 #ifdef DEBUG_EEPRO100
-#define logout(fmt, args...) fprintf(stderr, "EE100\t%-24s" fmt, __func__, ##args)
+#define logout(fmt, ...) fprintf(stderr, "EE100\t%-24s" fmt, __func__, ## __VA_ARGS__)
 #else
-#define logout(fmt, args...) ((void)0)
+#define logout(fmt, ...) ((void)0)
 #endif
 
 /* Set flags to 0 to disable debug output. */
@@ -198,12 +179,6 @@ typedef enum {
     ru_no_resources = 2,
     ru_ready = 4
 } ru_state_t;
-
-#if defined(__BIG_ENDIAN_BITFIELD)
-#define X(a,b)	b,a
-#else
-#define X(a,b)	a,b
-#endif
 
 typedef struct {
 #if 1
@@ -424,7 +399,7 @@ static void pci_reset(EEPRO100State * s)
     /* PCI Vendor ID */
     pci_config_set_vendor_id(pci_conf, PCI_VENDOR_ID_INTEL);
     /* PCI Device ID */
-    pci_config_set_device_id(pci_conf, 0x1209);
+    pci_config_set_device_id(pci_conf, PCI_DEVICE_ID_INTEL_82551IT);
     /* PCI Command */
     PCI_CONFIG_16(PCI_COMMAND, 0x0000);
     /* PCI Status */
@@ -1457,23 +1432,21 @@ static void pci_mmio_map(PCIDevice * pci_dev, int region_num,
     }
 }
 
-static int nic_can_receive(void *opaque)
+static int nic_can_receive(VLANClientState *vc)
 {
-    EEPRO100State *s = opaque;
+    EEPRO100State *s = vc->opaque;
     logout("%p\n", s);
     return get_ru_state(s) == ru_ready;
     //~ return !eepro100_buffer_full(s);
 }
 
-#define MIN_BUF_SIZE 60
-
-static void nic_receive(void *opaque, const uint8_t * buf, int size)
+static ssize_t nic_receive(VLANClientState *vc, const uint8_t * buf, size_t size)
 {
     /* TODO:
      * - Magic packets should set bit 30 in power management driver register.
      * - Interesting packets should set bit 29 in power management driver register.
      */
-    EEPRO100State *s = opaque;
+    EEPRO100State *s = vc->opaque;
     uint16_t rfd_status = 0xa000;
     static const uint8_t broadcast_macaddr[6] =
         { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -1484,18 +1457,18 @@ static void nic_receive(void *opaque, const uint8_t * buf, int size)
     if (s->configuration[8] & 0x80) {
         /* CSMA is disabled. */
         logout("%p received while CSMA is disabled\n", s);
-        return;
+        return -1;
     } else if (size < 64 && (s->configuration[7] & 1)) {
         /* Short frame and configuration byte 7/0 (discard short receive) set:
          * Short frame is discarded */
         logout("%p received short frame (%d byte)\n", s, size);
         s->statistics.rx_short_frame_errors++;
-        //~ return;
+        //~ return -1;
     } else if ((size > MAX_ETH_FRAME_SIZE + 4) && !(s->configuration[18] & 8)) {
         /* Long frame and configuration byte 18/3 (long receive ok) not set:
          * Long frames are discarded. */
         logout("%p received long frame (%d byte), ignored\n", s, size);
-        return;
+        return -1;
     } else if (memcmp(buf, s->macaddr, 6) == 0) {       // !!!
         /* Frame matches individual address. */
         /* TODO: check configuration byte 15/4 (ignore U/L). */
@@ -1511,7 +1484,7 @@ static void nic_receive(void *opaque, const uint8_t * buf, int size)
         assert(!(s->configuration[21] & BIT(3)));
         int mcast_idx = compute_mcast_idx(buf);
         if (!(s->mult[mcast_idx >> 3] & (1 << (mcast_idx & 7)))) {
-            return;
+            return size;
         }
         rfd_status |= 0x0002;
     } else if (s->configuration[15] & 1) {
@@ -1521,7 +1494,7 @@ static void nic_receive(void *opaque, const uint8_t * buf, int size)
     } else {
         logout("%p received frame, ignored, len=%d,%s\n", s, size,
                nic_dump(buf, size));
-        return;
+        return size;
     }
 
     if (get_ru_state(s) != ru_ready) {
@@ -1529,7 +1502,7 @@ static void nic_receive(void *opaque, const uint8_t * buf, int size)
         logout("no ressources, state=%u\n", get_ru_state(s));
         s->statistics.rx_resource_errors++;
         //~ assert(!"no ressources");
-        return;
+        return -1;
     }
     //~ !!!
 //~ $3 = {status = 0x0, command = 0xc000, link = 0x2d220, rx_buf_addr = 0x207dc, count = 0x0, size = 0x5f8, packet = {0x0 <repeats 1518 times>}}
@@ -1566,6 +1539,7 @@ static void nic_receive(void *opaque, const uint8_t * buf, int size)
         /* S bit is set. */
         set_ru_state(s, ru_suspended);
     }
+    return size;
 }
 
 static int nic_load(QEMUFile * f, void *opaque, int version_id)
@@ -1754,18 +1728,12 @@ static int pci_nic_uninit(PCIDevice *dev)
     return 0;
 }
 
-static PCIDevice *nic_init(PCIBus * bus, NICInfo * nd, uint32_t device)
+static void nic_init(PCIDevice *pci_dev, uint32_t device)
 {
-    PCIEEPRO100State *d;
+    PCIEEPRO100State *d = (PCIEEPRO100State *)pci_dev;
     EEPRO100State *s;
 
     logout("\n");
-
-    d = (PCIEEPRO100State *) pci_register_device(bus, nd->model,
-                                                 sizeof(PCIEEPRO100State), -1,
-                                                 NULL, NULL);
-    if (!d)
-        return NULL;
 
     d->dev.unregister = pci_nic_uninit;
 
@@ -1781,24 +1749,24 @@ static PCIDevice *nic_init(PCIBus * bus, NICInfo * nd, uint32_t device)
 
     /* Handler for memory-mapped I/O */
     d->eepro100.mmio_index =
-        cpu_register_io_memory(0, pci_mmio_read, pci_mmio_write, s);
+        cpu_register_io_memory(pci_mmio_read, pci_mmio_write, s);
 
-    pci_register_io_region(&d->dev, 0, PCI_MEM_SIZE,
+    pci_register_bar(&d->dev, 0, PCI_MEM_SIZE,
                            PCI_ADDRESS_SPACE_MEM |
                            PCI_ADDRESS_SPACE_MEM_PREFETCH, pci_mmio_map);
-    pci_register_io_region(&d->dev, 1, PCI_IO_SIZE, PCI_ADDRESS_SPACE_IO,
+    pci_register_bar(&d->dev, 1, PCI_IO_SIZE, PCI_ADDRESS_SPACE_IO,
                            pci_map);
-    pci_register_io_region(&d->dev, 2, PCI_FLASH_SIZE, PCI_ADDRESS_SPACE_MEM,
+    pci_register_bar(&d->dev, 2, PCI_FLASH_SIZE, PCI_ADDRESS_SPACE_MEM,
                            pci_mmio_map);
 
-    memcpy(s->macaddr, nd->macaddr, 6);
+    qdev_get_macaddr(&d->dev.qdev, s->macaddr);
     logout("macaddr: %s\n", nic_dump(&s->macaddr[0], 6));
     assert(s->region[1] == 0);
 
     nic_reset(s);
 
-    s->vc = qemu_new_vlan_client(nd->vlan, nd->model, nd->name,
-                                 nic_receive, nic_can_receive,
+    s->vc = qdev_get_vlan_client(&d->dev.qdev,
+                                 nic_can_receive, nic_receive, NULL,
                                  nic_cleanup, s);
 
     qemu_format_nic_info_str(s->vc, s->macaddr);
@@ -1806,22 +1774,44 @@ static PCIDevice *nic_init(PCIBus * bus, NICInfo * nd, uint32_t device)
     qemu_register_reset(nic_reset, s);
 
     register_savevm(s->vc->model, -1, 3, nic_save, nic_load, s);
-    return (PCIDevice *)d;
 }
 
-PCIDevice *pci_i82551_init(PCIBus * bus, NICInfo * nd, int devfn)
+static void pci_i82551_init(PCIDevice *dev)
 {
-    return nic_init(bus, nd, i82551);
+    nic_init(dev, i82551);
 }
 
-PCIDevice *pci_i82557b_init(PCIBus * bus, NICInfo * nd, int devfn)
+static void pci_i82557b_init(PCIDevice *dev)
 {
-    return nic_init(bus, nd, i82557B);
+    nic_init(dev, i82557B);
 }
 
-PCIDevice *pci_i82559er_init(PCIBus * bus, NICInfo * nd, int devfn)
+static void pci_i82559er_init(PCIDevice *dev)
 {
-    return nic_init(bus, nd, i82559ER);
+    nic_init(dev, i82559ER);
 }
 
-/* eof */
+static PCIDeviceInfo eepro100_info[] = {
+    {
+        .qdev.name = "i82551",
+        .qdev.size = sizeof(PCIEEPRO100State),
+        .init      = pci_i82551_init,
+    },{
+        .qdev.name = "i82557b",
+        .qdev.size = sizeof(PCIEEPRO100State),
+        .init      = pci_i82557b_init,
+    },{
+        .qdev.name = "i82559er",
+        .qdev.size = sizeof(PCIEEPRO100State),
+        .init      = pci_i82559er_init,
+    },{
+        /* end of list */
+    }
+};
+
+static void eepro100_register_devices(void)
+{
+    pci_qdev_register_many(eepro100_info);
+}
+
+device_init(eepro100_register_devices)

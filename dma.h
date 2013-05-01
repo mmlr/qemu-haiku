@@ -11,7 +11,8 @@
 #define DMA_H
 
 #include <stdio.h>
-#include "cpu.h"
+//#include "cpu.h"
+#include "hw/hw.h"
 #include "block.h"
 
 typedef struct {
@@ -37,6 +38,4 @@ BlockDriverAIOCB *dma_bdrv_read(BlockDriverState *bs,
 BlockDriverAIOCB *dma_bdrv_write(BlockDriverState *bs,
                                  QEMUSGList *sg, uint64_t sector,
                                  BlockDriverCompletionFunc *cb, void *opaque);
-void dma_helper_init(void);
-
 #endif

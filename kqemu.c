@@ -14,12 +14,10 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "config.h"
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winioctl.h>
 #else
@@ -42,7 +40,7 @@
 #include "exec-all.h"
 #include "qemu-common.h"
 
-#ifdef USE_KQEMU
+#ifdef CONFIG_KQEMU
 
 #define DEBUG
 //#define PROFILE
@@ -82,7 +80,7 @@ int kqemu_fd = KQEMU_INVALID_FD;
    1 = user kqemu
    2 = kernel kqemu
 */
-int kqemu_allowed = 1;
+int kqemu_allowed = 0;
 uint64_t *pages_to_flush;
 unsigned int nb_pages_to_flush;
 uint64_t *ram_pages_to_update;
@@ -92,6 +90,8 @@ unsigned int nb_modified_ram_pages;
 uint8_t *modified_ram_pages_table;
 int qpi_io_memory;
 uint32_t kqemu_comm_base; /* physical address of the QPI communication page */
+ram_addr_t kqemu_phys_ram_size;
+uint8_t *kqemu_phys_ram_base;
 
 #define cpuid(index, eax, ebx, ecx, edx) \
   asm volatile ("cpuid" \
@@ -215,13 +215,14 @@ int kqemu_init(CPUState *env)
                                       sizeof(uint64_t));
     if (!modified_ram_pages)
         goto fail;
-    modified_ram_pages_table = qemu_mallocz(phys_ram_size >> TARGET_PAGE_BITS);
+    modified_ram_pages_table =
+        qemu_mallocz(kqemu_phys_ram_size >> TARGET_PAGE_BITS);
     if (!modified_ram_pages_table)
         goto fail;
 
     memset(&kinit, 0, sizeof(kinit)); /* set the paddings to zero */
-    kinit.ram_base = phys_ram_base;
-    kinit.ram_size = phys_ram_size;
+    kinit.ram_base = kqemu_phys_ram_base;
+    kinit.ram_size = kqemu_phys_ram_size;
     kinit.ram_dirty = phys_ram_dirty;
     kinit.pages_to_flush = pages_to_flush;
     kinit.ram_pages_to_update = ram_pages_to_update;
@@ -988,7 +989,7 @@ static CPUWriteMemoryFunc *qpi_mem_write[3] = {
 static void qpi_init(void)
 {
     kqemu_comm_base = 0xff000000 | 1;
-    qpi_io_memory = cpu_register_io_memory(0, 
+    qpi_io_memory = cpu_register_io_memory(
                                            qpi_mem_read, 
                                            qpi_mem_write, NULL);
     cpu_register_physical_memory(kqemu_comm_base & ~0xfff, 

@@ -21,18 +21,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu-common.h"
-#include "hw/hw.h"
-#include "net.h"
-#include "console.h"
-#include "sysemu.h"
-#include "qemu-timer.h"
-#include "qemu-char.h"
-#include "block.h"
-#include "audio/audio.h"
-#include "migration.h"
-#include "qemu_socket.h"
-
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -40,6 +28,9 @@
 #include <errno.h>
 #include <sys/time.h>
 #include <zlib.h>
+
+/* Needed early for HOST_BSD etc. */
+#include "config-host.h"
 
 #ifndef _WIN32
 #include <sys/times.h>
@@ -61,9 +52,9 @@
 #include <dirent.h>
 #include <netdb.h>
 #include <sys/select.h>
-#ifdef _BSD
+#ifdef HOST_BSD
 #include <sys/stat.h>
-#ifdef __FreeBSD__
+#if defined(__FreeBSD__) || defined(__DragonFly__)
 #include <libutil.h>
 #else
 #include <util.h>
@@ -80,12 +71,25 @@
 #endif
 
 #ifdef _WIN32
+#include <windows.h>
 #include <malloc.h>
 #include <sys/timeb.h>
 #include <mmsystem.h>
 #define getopt_long_only getopt_long
 #define memalign(align, size) malloc(size)
 #endif
+
+#include "qemu-common.h"
+#include "hw/hw.h"
+#include "net.h"
+#include "monitor.h"
+#include "sysemu.h"
+#include "qemu-timer.h"
+#include "qemu-char.h"
+#include "block.h"
+#include "audio/audio.h"
+#include "migration.h"
+#include "qemu_socket.h"
 
 /* point to the block driver where the snapshots are managed */
 static BlockDriverState *bs_snapshots;
@@ -103,31 +107,46 @@ static int announce_self_create(uint8_t *buf,
 
     /* FIXME: should we send a different packet (arp/rarp/ping)? */
 
+    memset(buf, 0, 64);
     memset(buf, 0xff, 6);         /* h_dst */
     memcpy(buf + 6, mac_addr, 6); /* h_src */
     memcpy(buf + 12, &proto, 2);  /* h_proto */
     memcpy(buf + 14, &magic, 4);  /* magic */
 
-    return 18; /* len */
+    return 64; /* len */
 }
 
-void qemu_announce_self(void)
+static void qemu_announce_self_once(void *opaque)
 {
-    int i, j, len;
+    int i, len;
     VLANState *vlan;
     VLANClientState *vc;
     uint8_t buf[256];
+    static int count = SELF_ANNOUNCE_ROUNDS;
+    QEMUTimer *timer = *(QEMUTimer **)opaque;
 
     for (i = 0; i < MAX_NICS; i++) {
         if (!nd_table[i].used)
             continue;
         len = announce_self_create(buf, nd_table[i].macaddr);
         vlan = nd_table[i].vlan;
-        for(vc = vlan->first_client; vc != NULL; vc = vc->next) {
-            for (j=0; j < SELF_ANNOUNCE_ROUNDS; j++)
-                vc->fd_read(vc->opaque, buf, len);
+	for(vc = vlan->first_client; vc != NULL; vc = vc->next) {
+            vc->receive(vc, buf, len);
         }
     }
+    if (count--) {
+	    qemu_mod_timer(timer, qemu_get_clock(rt_clock) + 100);
+    } else {
+	    qemu_del_timer(timer);
+	    qemu_free_timer(timer);
+    }
+}
+
+void qemu_announce_self(void)
+{
+	static QEMUTimer *timer;
+	timer = qemu_new_timer(rt_clock, qemu_announce_self_once, &timer);
+	qemu_announce_self_once(&timer);
 }
 
 /***********************************************************/
@@ -140,6 +159,7 @@ struct QEMUFile {
     QEMUFileGetBufferFunc *get_buffer;
     QEMUFileCloseFunc *close;
     QEMUFileRateLimit *rate_limit;
+    QEMUFileSetRateLimit *set_rate_limit;
     void *opaque;
     int is_write;
 
@@ -170,7 +190,7 @@ static int socket_get_buffer(void *opaque, uint8_t *buf, int64_t pos, int size)
     ssize_t len;
 
     do {
-        len = recv(s->fd, buf, size, 0);
+        len = recv(s->fd, (void *)buf, size, 0);
     } while (len == -1 && socket_error() == EINTR);
 
     if (len == -1)
@@ -195,7 +215,14 @@ static int popen_put_buffer(void *opaque, const uint8_t *buf, int64_t pos, int s
 static int popen_get_buffer(void *opaque, uint8_t *buf, int64_t pos, int size)
 {
     QEMUFilePopen *s = opaque;
-    return fread(buf, 1, size, s->popen_file);
+    FILE *fp = s->popen_file;
+    int bytes;
+
+    do {
+        clearerr(fp);
+        bytes = fread(buf, 1, size, fp);
+    } while ((bytes == 0) && ferror(fp) && (errno == EINTR));
+    return bytes;
 }
 
 static int popen_close(void *opaque)
@@ -220,11 +247,10 @@ QEMUFile *qemu_popen(FILE *popen_file, const char *mode)
     s->popen_file = popen_file;
 
     if(mode[0] == 'r') {
-        s->file = qemu_fopen_ops(s, NULL, popen_get_buffer, popen_close, NULL);
+        s->file = qemu_fopen_ops(s, NULL, popen_get_buffer, popen_close, NULL, NULL);
     } else {
-        s->file = qemu_fopen_ops(s, popen_put_buffer, NULL, popen_close, NULL);
+        s->file = qemu_fopen_ops(s, popen_put_buffer, NULL, popen_close, NULL, NULL);
     }
-    fprintf(stderr, "qemu_popen: returning result of qemu_fopen_ops\n");
     return s->file;
 }
 
@@ -240,12 +266,23 @@ QEMUFile *qemu_popen_cmd(const char *command, const char *mode)
     return qemu_popen(popen_file, mode);
 }
 
+int qemu_popen_fd(QEMUFile *f)
+{
+    QEMUFilePopen *p;
+    int fd;
+
+    p = (QEMUFilePopen *)f->opaque;
+    fd = fileno(p->popen_file);
+
+    return fd;
+}
+
 QEMUFile *qemu_fopen_socket(int fd)
 {
     QEMUFileSocket *s = qemu_mallocz(sizeof(QEMUFileSocket));
 
     s->fd = fd;
-    s->file = qemu_fopen_ops(s, NULL, socket_get_buffer, socket_close, NULL);
+    s->file = qemu_fopen_ops(s, NULL, socket_get_buffer, socket_close, NULL, NULL);
     return s->file;
 }
 
@@ -289,9 +326,9 @@ QEMUFile *qemu_fopen(const char *filename, const char *mode)
         goto fail;
 
     if (!strcmp(mode, "wb"))
-        return qemu_fopen_ops(s, file_put_buffer, NULL, file_close, NULL);
+        return qemu_fopen_ops(s, file_put_buffer, NULL, file_close, NULL, NULL);
     else if (!strcmp(mode, "rb"))
-        return qemu_fopen_ops(s, NULL, file_get_buffer, file_close, NULL);
+        return qemu_fopen_ops(s, NULL, file_get_buffer, file_close, NULL, NULL);
 
 fail:
     if (s->outfile)
@@ -300,52 +337,35 @@ fail:
     return NULL;
 }
 
-typedef struct QEMUFileBdrv
-{
-    BlockDriverState *bs;
-    int64_t base_offset;
-} QEMUFileBdrv;
-
 static int block_put_buffer(void *opaque, const uint8_t *buf,
                            int64_t pos, int size)
 {
-    QEMUFileBdrv *s = opaque;
-    bdrv_put_buffer(s->bs, buf, s->base_offset + pos, size);
+    bdrv_save_vmstate(opaque, buf, pos, size);
     return size;
 }
 
 static int block_get_buffer(void *opaque, uint8_t *buf, int64_t pos, int size)
 {
-    QEMUFileBdrv *s = opaque;
-    return bdrv_get_buffer(s->bs, buf, s->base_offset + pos, size);
+    return bdrv_load_vmstate(opaque, buf, pos, size);
 }
 
 static int bdrv_fclose(void *opaque)
 {
-    QEMUFileBdrv *s = opaque;
-    qemu_free(s);
     return 0;
 }
 
-static QEMUFile *qemu_fopen_bdrv(BlockDriverState *bs, int64_t offset, int is_writable)
+static QEMUFile *qemu_fopen_bdrv(BlockDriverState *bs, int is_writable)
 {
-    QEMUFileBdrv *s;
-
-    s = qemu_mallocz(sizeof(QEMUFileBdrv));
-
-    s->bs = bs;
-    s->base_offset = offset;
-
     if (is_writable)
-        return qemu_fopen_ops(s, block_put_buffer, NULL, bdrv_fclose, NULL);
-
-    return qemu_fopen_ops(s, NULL, block_get_buffer, bdrv_fclose, NULL);
+        return qemu_fopen_ops(bs, block_put_buffer, NULL, bdrv_fclose, NULL, NULL);
+    return qemu_fopen_ops(bs, NULL, block_get_buffer, bdrv_fclose, NULL, NULL);
 }
 
 QEMUFile *qemu_fopen_ops(void *opaque, QEMUFilePutBufferFunc *put_buffer,
                          QEMUFileGetBufferFunc *get_buffer,
                          QEMUFileCloseFunc *close,
-                         QEMUFileRateLimit *rate_limit)
+                         QEMUFileRateLimit *rate_limit,
+                         QEMUFileSetRateLimit *set_rate_limit)
 {
     QEMUFile *f;
 
@@ -356,6 +376,7 @@ QEMUFile *qemu_fopen_ops(void *opaque, QEMUFilePutBufferFunc *put_buffer,
     f->get_buffer = get_buffer;
     f->close = close;
     f->rate_limit = rate_limit;
+    f->set_rate_limit = set_rate_limit;
     f->is_write = 0;
 
     return f;
@@ -529,6 +550,16 @@ int qemu_file_rate_limit(QEMUFile *f)
 {
     if (f->rate_limit)
         return f->rate_limit(f->opaque);
+
+    return 0;
+}
+
+size_t qemu_file_set_rate_limit(QEMUFile *f, size_t new_rate)
+{
+    /* any failed or completed migration keeps its state to allow probing of
+     * migration data, but has no associated file anymore */
+    if (f && f->set_rate_limit)
+        return f->set_rate_limit(f->opaque, new_rate);
 
     return 0;
 }
@@ -1017,12 +1048,11 @@ static int bdrv_snapshot_find(BlockDriverState *bs, QEMUSnapshotInfo *sn_info,
     return ret;
 }
 
-void do_savevm(const char *name)
+void do_savevm(Monitor *mon, const char *name)
 {
     BlockDriverState *bs, *bs1;
     QEMUSnapshotInfo sn1, *sn = &sn1, old_sn1, *old_sn = &old_sn1;
     int must_delete, ret, i;
-    BlockDriverInfo bdi1, *bdi = &bdi1;
     QEMUFile *f;
     int saved_vm_running;
     uint32_t vm_state_size;
@@ -1034,7 +1064,7 @@ void do_savevm(const char *name)
 
     bs = get_bs_snapshots();
     if (!bs) {
-        term_printf("No block device can accept snapshots\n");
+        monitor_printf(mon, "No block device can accept snapshots\n");
         return;
     }
 
@@ -1072,23 +1102,17 @@ void do_savevm(const char *name)
 #endif
     sn->vm_clock_nsec = qemu_get_clock(vm_clock);
 
-    if (bdrv_get_info(bs, bdi) < 0 || bdi->vm_state_offset <= 0) {
-        term_printf("Device %s does not support VM state snapshots\n",
-                    bdrv_get_device_name(bs));
-        goto the_end;
-    }
-
     /* save the VM state */
-    f = qemu_fopen_bdrv(bs, bdi->vm_state_offset, 1);
+    f = qemu_fopen_bdrv(bs, 1);
     if (!f) {
-        term_printf("Could not open VM state file\n");
+        monitor_printf(mon, "Could not open VM state file\n");
         goto the_end;
     }
     ret = qemu_savevm_state(f);
     vm_state_size = qemu_ftell(f);
     qemu_fclose(f);
     if (ret < 0) {
-        term_printf("Error %d while writing VM\n", ret);
+        monitor_printf(mon, "Error %d while writing VM\n", ret);
         goto the_end;
     }
 
@@ -1100,16 +1124,17 @@ void do_savevm(const char *name)
             if (must_delete) {
                 ret = bdrv_snapshot_delete(bs1, old_sn->id_str);
                 if (ret < 0) {
-                    term_printf("Error while deleting snapshot on '%s'\n",
-                                bdrv_get_device_name(bs1));
+                    monitor_printf(mon,
+                                   "Error while deleting snapshot on '%s'\n",
+                                   bdrv_get_device_name(bs1));
                 }
             }
             /* Write VM state size only to the image that contains the state */
             sn->vm_state_size = (bs == bs1 ? vm_state_size : 0);
             ret = bdrv_snapshot_create(bs1, sn);
             if (ret < 0) {
-                term_printf("Error while creating snapshot on '%s'\n",
-                            bdrv_get_device_name(bs1));
+                monitor_printf(mon, "Error while creating snapshot on '%s'\n",
+                               bdrv_get_device_name(bs1));
             }
         }
     }
@@ -1119,10 +1144,9 @@ void do_savevm(const char *name)
         vm_start();
 }
 
-void do_loadvm(const char *name)
+void do_loadvm(Monitor *mon, const char *name)
 {
     BlockDriverState *bs, *bs1;
-    BlockDriverInfo bdi1, *bdi = &bdi1;
     QEMUSnapshotInfo sn;
     QEMUFile *f;
     int i, ret;
@@ -1130,7 +1154,7 @@ void do_loadvm(const char *name)
 
     bs = get_bs_snapshots();
     if (!bs) {
-        term_printf("No block device supports snapshots\n");
+        monitor_printf(mon, "No block device supports snapshots\n");
         return;
     }
 
@@ -1146,19 +1170,21 @@ void do_loadvm(const char *name)
             ret = bdrv_snapshot_goto(bs1, name);
             if (ret < 0) {
                 if (bs != bs1)
-                    term_printf("Warning: ");
+                    monitor_printf(mon, "Warning: ");
                 switch(ret) {
                 case -ENOTSUP:
-                    term_printf("Snapshots not supported on device '%s'\n",
-                                bdrv_get_device_name(bs1));
+                    monitor_printf(mon,
+                                   "Snapshots not supported on device '%s'\n",
+                                   bdrv_get_device_name(bs1));
                     break;
                 case -ENOENT:
-                    term_printf("Could not find snapshot '%s' on device '%s'\n",
-                                name, bdrv_get_device_name(bs1));
+                    monitor_printf(mon, "Could not find snapshot '%s' on "
+                                   "device '%s'\n",
+                                   name, bdrv_get_device_name(bs1));
                     break;
                 default:
-                    term_printf("Error %d while activating snapshot on '%s'\n",
-                                ret, bdrv_get_device_name(bs1));
+                    monitor_printf(mon, "Error %d while activating snapshot on"
+                                   " '%s'\n", ret, bdrv_get_device_name(bs1));
                     break;
                 }
                 /* fatal on snapshot block device */
@@ -1168,41 +1194,35 @@ void do_loadvm(const char *name)
         }
     }
 
-    if (bdrv_get_info(bs, bdi) < 0 || bdi->vm_state_offset <= 0) {
-        term_printf("Device %s does not support VM state snapshots\n",
-                    bdrv_get_device_name(bs));
-        return;
-    }
-
     /* Don't even try to load empty VM states */
     ret = bdrv_snapshot_find(bs, &sn, name);
     if ((ret >= 0) && (sn.vm_state_size == 0))
         goto the_end;
 
     /* restore the VM state */
-    f = qemu_fopen_bdrv(bs, bdi->vm_state_offset, 0);
+    f = qemu_fopen_bdrv(bs, 0);
     if (!f) {
-        term_printf("Could not open VM state file\n");
+        monitor_printf(mon, "Could not open VM state file\n");
         goto the_end;
     }
     ret = qemu_loadvm_state(f);
     qemu_fclose(f);
     if (ret < 0) {
-        term_printf("Error %d while loading VM state\n", ret);
+        monitor_printf(mon, "Error %d while loading VM state\n", ret);
     }
  the_end:
     if (saved_vm_running)
         vm_start();
 }
 
-void do_delvm(const char *name)
+void do_delvm(Monitor *mon, const char *name)
 {
     BlockDriverState *bs, *bs1;
     int i, ret;
 
     bs = get_bs_snapshots();
     if (!bs) {
-        term_printf("No block device supports snapshots\n");
+        monitor_printf(mon, "No block device supports snapshots\n");
         return;
     }
 
@@ -1212,17 +1232,18 @@ void do_delvm(const char *name)
             ret = bdrv_snapshot_delete(bs1, name);
             if (ret < 0) {
                 if (ret == -ENOTSUP)
-                    term_printf("Snapshots not supported on device '%s'\n",
-                                bdrv_get_device_name(bs1));
+                    monitor_printf(mon,
+                                   "Snapshots not supported on device '%s'\n",
+                                   bdrv_get_device_name(bs1));
                 else
-                    term_printf("Error %d while deleting snapshot on '%s'\n",
-                                ret, bdrv_get_device_name(bs1));
+                    monitor_printf(mon, "Error %d while deleting snapshot on "
+                                   "'%s'\n", ret, bdrv_get_device_name(bs1));
             }
         }
     }
 }
 
-void do_info_snapshots(void)
+void do_info_snapshots(Monitor *mon)
 {
     BlockDriverState *bs, *bs1;
     QEMUSnapshotInfo *sn_tab, *sn;
@@ -1231,29 +1252,30 @@ void do_info_snapshots(void)
 
     bs = get_bs_snapshots();
     if (!bs) {
-        term_printf("No available block device supports snapshots\n");
+        monitor_printf(mon, "No available block device supports snapshots\n");
         return;
     }
-    term_printf("Snapshot devices:");
+    monitor_printf(mon, "Snapshot devices:");
     for(i = 0; i <= nb_drives; i++) {
         bs1 = drives_table[i].bdrv;
         if (bdrv_has_snapshot(bs1)) {
             if (bs == bs1)
-                term_printf(" %s", bdrv_get_device_name(bs1));
+                monitor_printf(mon, " %s", bdrv_get_device_name(bs1));
         }
     }
-    term_printf("\n");
+    monitor_printf(mon, "\n");
 
     nb_sns = bdrv_snapshot_list(bs, &sn_tab);
     if (nb_sns < 0) {
-        term_printf("bdrv_snapshot_list: error %d\n", nb_sns);
+        monitor_printf(mon, "bdrv_snapshot_list: error %d\n", nb_sns);
         return;
     }
-    term_printf("Snapshot list (from %s):\n", bdrv_get_device_name(bs));
-    term_printf("%s\n", bdrv_snapshot_dump(buf, sizeof(buf), NULL));
+    monitor_printf(mon, "Snapshot list (from %s):\n",
+                   bdrv_get_device_name(bs));
+    monitor_printf(mon, "%s\n", bdrv_snapshot_dump(buf, sizeof(buf), NULL));
     for(i = 0; i < nb_sns; i++) {
         sn = &sn_tab[i];
-        term_printf("%s\n", bdrv_snapshot_dump(buf, sizeof(buf), sn));
+        monitor_printf(mon, "%s\n", bdrv_snapshot_dump(buf, sizeof(buf), sn));
     }
     qemu_free(sn_tab);
 }

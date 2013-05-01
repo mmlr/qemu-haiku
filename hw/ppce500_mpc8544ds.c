@@ -22,7 +22,6 @@
 #include "hw.h"
 #include "pc.h"
 #include "pci.h"
-#include "virtio-blk.h"
 #include "boards.h"
 #include "sysemu.h"
 #include "kvm.h"
@@ -47,6 +46,7 @@
 #define MPC8544_PCI_IO             0xE1000000
 #define MPC8544_PCI_IOLEN          0x10000
 
+#ifdef HAVE_FDT
 static int mpc8544_copy_soc_cell(void *fdt, const char *node, const char *prop)
 {
     uint32_t cell;
@@ -68,8 +68,9 @@ static int mpc8544_copy_soc_cell(void *fdt, const char *node, const char *prop)
 out:
     return ret;
 }
+#endif
 
-static void *mpc8544_load_device_tree(void *addr,
+static void *mpc8544_load_device_tree(target_phys_addr_t addr,
                                      uint32_t ramsize,
                                      target_phys_addr_t initrd_base,
                                      target_phys_addr_t initrd_size,
@@ -78,19 +79,19 @@ static void *mpc8544_load_device_tree(void *addr,
     void *fdt = NULL;
 #ifdef HAVE_FDT
     uint32_t mem_reg_property[] = {0, ramsize};
-    char *path;
-    int pathlen;
+    char *filename;
+    int fdt_size;
     int ret;
 
-    pathlen = snprintf(NULL, 0, "%s/%s", bios_dir, BINARY_DEVICE_TREE_FILE) + 1;
-    path = qemu_malloc(pathlen);
-
-    snprintf(path, pathlen, "%s/%s", bios_dir, BINARY_DEVICE_TREE_FILE);
-
-    fdt = load_device_tree(path, addr);
-    qemu_free(path);
-    if (fdt == NULL)
+    filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, BINARY_DEVICE_TREE_FILE);
+    if (!filename) {
         goto out;
+    }
+    fdt = load_device_tree(filename, &fdt_size);
+    qemu_free(filename);
+    if (fdt == NULL) {
+        goto out;
+    }
 
     /* Manipulate device tree in memory. */
     ret = qemu_devtree_setprop(fdt, "/memory", "reg", mem_reg_property,
@@ -140,13 +141,15 @@ static void *mpc8544_load_device_tree(void *addr,
         mpc8544_copy_soc_cell(fdt, buf, "timebase-frequency");
     }
 
+    cpu_physical_memory_write (addr, (void *)fdt, fdt_size);
+
 out:
 #endif
 
     return fdt;
 }
 
-static void mpc8544ds_init(ram_addr_t ram_size, int vga_ram_size,
+static void mpc8544ds_init(ram_addr_t ram_size,
                          const char *boot_device,
                          const char *kernel_filename,
                          const char *kernel_cmdline,
@@ -154,6 +157,7 @@ static void mpc8544ds_init(ram_addr_t ram_size, int vga_ram_size,
                          const char *cpu_model)
 {
     PCIBus *pci_bus;
+    PCIDevice *pci_dev;
     CPUState *env;
     uint64_t elf_entry;
     uint64_t elf_lowaddr;
@@ -180,7 +184,7 @@ static void mpc8544ds_init(ram_addr_t ram_size, int vga_ram_size,
     ram_size &= ~(RAM_SIZES_ALIGN - 1);
 
     /* Register Memory */
-    cpu_register_physical_memory(0, ram_size, 0);
+    cpu_register_physical_memory(0, ram_size, qemu_ram_alloc(ram_size));
 
     /* MPIC */
     irqs = qemu_mallocz(sizeof(qemu_irq) * OPENPIC_OUTPUT_NB);
@@ -216,13 +220,14 @@ static void mpc8544ds_init(ram_addr_t ram_size, int vga_ram_size,
 
         /* Add virtio block devices. */
         while ((i = drive_get_index(IF_VIRTIO, 0, unit_id)) != -1) {
-            virtio_blk_init(pci_bus, drives_table[i].bdrv);
+            pci_dev = pci_create("virtio-blk-pci", drives_table[i].devaddr);
+            qdev_init(&pci_dev->qdev);
             unit_id++;
         }
 
         /* Register network interfaces. */
         for (i = 0; i < nb_nics; i++) {
-            pci_nic_init(pci_bus, &nd_table[i], -1, "virtio");
+            pci_nic_init(&nd_table[i], "virtio", NULL);
         }
     }
 
@@ -245,7 +250,8 @@ static void mpc8544ds_init(ram_addr_t ram_size, int vga_ram_size,
 
     /* Load initrd. */
     if (initrd_filename) {
-        initrd_size = load_image(initrd_filename, phys_ram_base + initrd_base);
+        initrd_size = load_image_targphys(initrd_filename, initrd_base,
+                                          ram_size - initrd_base);
 
         if (initrd_size < 0) {
             fprintf(stderr, "qemu: could not load initial ram disk '%s'\n",
@@ -256,7 +262,7 @@ static void mpc8544ds_init(ram_addr_t ram_size, int vga_ram_size,
 
     /* If we're loading a kernel directly, we must load the device tree too. */
     if (kernel_filename) {
-        fdt = mpc8544_load_device_tree(phys_ram_base + dt_base, ram_size,
+        fdt = mpc8544_load_device_tree(dt_base, ram_size,
                                       initrd_base, initrd_size, kernel_cmdline);
         if (fdt == NULL) {
             fprintf(stderr, "couldn't load device tree\n");
@@ -276,9 +282,15 @@ static void mpc8544ds_init(ram_addr_t ram_size, int vga_ram_size,
     return;
 }
 
-QEMUMachine mpc8544ds_machine = {
+static QEMUMachine mpc8544ds_machine = {
     .name = "mpc8544ds",
     .desc = "mpc8544ds",
     .init = mpc8544ds_init,
-    .ram_require = RAM_SIZES_ALIGN | RAMSIZE_FIXED,
 };
+
+static void mpc8544ds_machine_init(void)
+{
+    qemu_register_machine(&mpc8544ds_machine);
+}
+
+machine_init(mpc8544ds_machine_init);

@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA  02110-1301 USA
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -43,12 +42,12 @@
 
 //#define PFLASH_DEBUG
 #ifdef PFLASH_DEBUG
-#define DPRINTF(fmt, args...)                      \
+#define DPRINTF(fmt, ...)                          \
 do {                                               \
-        printf("PFLASH: " fmt , ##args);           \
+    printf("PFLASH: " fmt , ## __VA_ARGS__);       \
 } while (0)
 #else
-#define DPRINTF(fmt, args...) do { } while (0)
+#define DPRINTF(fmt, ...) do { } while (0)
 #endif
 
 struct pflash_t {
@@ -557,8 +556,9 @@ pflash_t *pflash_cfi02_register(target_phys_addr_t base, ram_addr_t off,
         return NULL;
 #endif
     pfl = qemu_mallocz(sizeof(pflash_t));
-    pfl->storage = phys_ram_base + off;
-    pfl->fl_mem = cpu_register_io_memory(0, pflash_read_ops, pflash_write_ops,
+    /* FIXME: Allocate ram ourselves.  */
+    pfl->storage = qemu_get_ram_ptr(off);
+    pfl->fl_mem = cpu_register_io_memory(pflash_read_ops, pflash_write_ops,
                                          pfl);
     pfl->off = off;
     pfl->base = base;

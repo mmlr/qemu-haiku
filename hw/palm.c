@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "hw.h"
 #include "audio/audio.h"
@@ -84,7 +83,7 @@ static CPUWriteMemoryFunc *static_writefn[] = {
 #define PALMTE_MMC2_GPIO	7
 #define PALMTE_MMC3_GPIO	11
 
-static struct mouse_transform_info_s palmte_pointercal = {
+static MouseTransformInfo palmte_pointercal = {
     .x = 320,
     .y = 320,
     .a = { -5909, 8, 22465308, 104, 7644, -1219972, 65536 },
@@ -92,15 +91,9 @@ static struct mouse_transform_info_s palmte_pointercal = {
 
 static void palmte_microwire_setup(struct omap_mpu_state_s *cpu)
 {
-    struct uwire_slave_s *tsc;
-    AudioState *audio = 0;
+    uWireSlave *tsc;
 
-#ifdef HAS_AUDIO
-    audio = AUD_init();
-#endif
-
-    tsc = tsc2102_init(omap_gpio_in_get(cpu->gpio)[PALMTE_PINTDAV_GPIO],
-                    audio);
+    tsc = tsc2102_init(omap_gpio_in_get(cpu->gpio)[PALMTE_PINTDAV_GPIO]);
 
     omap_uwire_attach(cpu->microwire, tsc, 0);
     omap_mcbsp_i2s_attach(cpu->mcbsp1, tsc210x_codec(tsc));
@@ -199,7 +192,7 @@ static struct arm_boot_info palmte_binfo = {
     .board_id = 0x331,
 };
 
-static void palmte_init(ram_addr_t ram_size, int vga_ram_size,
+static void palmte_init(ram_addr_t ram_size,
                 const char *boot_device,
                 const char *kernel_filename, const char *kernel_cmdline,
                 const char *initrd_filename, const char *cpu_model)
@@ -216,26 +209,20 @@ static void palmte_init(ram_addr_t ram_size, int vga_ram_size,
     int rom_size, rom_loaded = 0;
     DisplayState *ds = get_displaystate();
 
-    if (ram_size < flash_size + sdram_size + OMAP15XX_SRAM_SIZE) {
-        fprintf(stderr, "This architecture uses %i bytes of memory\n",
-                        flash_size + sdram_size + OMAP15XX_SRAM_SIZE);
-        exit(1);
-    }
-
     cpu = omap310_mpu_init(sdram_size, cpu_model);
 
     /* External Flash (EMIFS) */
     cpu_register_physical_memory(OMAP_CS0_BASE, flash_size,
                     (phys_flash = qemu_ram_alloc(flash_size)) | IO_MEM_ROM);
 
-    io = cpu_register_io_memory(0, static_readfn, static_writefn, &cs0val);
+    io = cpu_register_io_memory(static_readfn, static_writefn, &cs0val);
     cpu_register_physical_memory(OMAP_CS0_BASE + flash_size,
                     OMAP_CS0_SIZE - flash_size, io);
-    io = cpu_register_io_memory(0, static_readfn, static_writefn, &cs1val);
+    io = cpu_register_io_memory(static_readfn, static_writefn, &cs1val);
     cpu_register_physical_memory(OMAP_CS1_BASE, OMAP_CS1_SIZE, io);
-    io = cpu_register_io_memory(0, static_readfn, static_writefn, &cs2val);
+    io = cpu_register_io_memory(static_readfn, static_writefn, &cs2val);
     cpu_register_physical_memory(OMAP_CS2_BASE, OMAP_CS2_SIZE, io);
-    io = cpu_register_io_memory(0, static_readfn, static_writefn, &cs3val);
+    io = cpu_register_io_memory(static_readfn, static_writefn, &cs3val);
     cpu_register_physical_memory(OMAP_CS3_BASE, OMAP_CS3_SIZE, io);
 
     palmte_microwire_setup(cpu);
@@ -247,16 +234,21 @@ static void palmte_init(ram_addr_t ram_size, int vga_ram_size,
     /* Setup initial (reset) machine state */
     if (nb_option_roms) {
         rom_size = get_image_size(option_rom[0]);
-        if (rom_size > flash_size)
+        if (rom_size > flash_size) {
             fprintf(stderr, "%s: ROM image too big (%x > %x)\n",
                             __FUNCTION__, rom_size, flash_size);
-        else if (rom_size > 0 && load_image(option_rom[0],
-                                phys_ram_base + phys_flash) > 0) {
+            rom_size = 0;
+        }
+        if (rom_size > 0) {
+            rom_size = load_image_targphys(option_rom[0], OMAP_CS0_BASE,
+                                           flash_size);
             rom_loaded = 1;
             cpu->env->regs[15] = 0x00000000;
-        } else
+        }
+        if (rom_size < 0) {
             fprintf(stderr, "%s: error loading '%s'\n",
                             __FUNCTION__, option_rom[0]);
+        }
     }
 
     if (!rom_loaded && !kernel_filename) {
@@ -278,14 +270,19 @@ static void palmte_init(ram_addr_t ram_size, int vga_ram_size,
     /* FIXME: We shouldn't really be doing this here.  The LCD controller
        will set the size once configured, so this just sets an initial
        size until the guest activates the display.  */
-    ds->surface = qemu_resize_displaysurface(ds->surface, 320, 320, 32, 4 * 320);
+    ds->surface = qemu_resize_displaysurface(ds, 320, 320);
     dpy_resize(ds);
 }
 
-QEMUMachine palmte_machine = {
+static QEMUMachine palmte_machine = {
     .name = "cheetah",
     .desc = "Palm Tungsten|E aka. Cheetah PDA (OMAP310)",
     .init = palmte_init,
-    .ram_require = (0x02000000 + 0x00800000 + OMAP15XX_SRAM_SIZE) |
-            RAMSIZE_FIXED,
 };
+
+static void palmte_machine_init(void)
+{
+    qemu_register_machine(&palmte_machine);
+}
+
+machine_init(palmte_machine_init);
