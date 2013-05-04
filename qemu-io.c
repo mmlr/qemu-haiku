@@ -84,7 +84,7 @@ dump_buffer(const void *buffer, int64_t offset, int len)
 	for (i = 0, p = buffer; i < len; i += 16) {
 		const uint8_t *s = p;
 
-		printf("%08llx:  ", (unsigned long long)offset + i);
+                printf("%08" PRIx64 ":  ", offset + i);
 		for (j = 0; j < 16 && i + j < len; j++, p++)
 			printf("%02x ", *p);
 		printf(" ");
@@ -108,8 +108,8 @@ print_report(const char *op, struct timeval *t, int64_t offset,
 	if (!Cflag) {
 		cvtstr((double)total, s1, sizeof(s1));
 		cvtstr(tdiv((double)total, *t), s2, sizeof(s2));
-		printf("%s %d/%d bytes at offset %lld\n",
-			op, total, count, (long long)offset);
+                printf("%s %d/%d bytes at offset %" PRId64 "\n",
+                       op, total, count, offset);
 		printf("%s, %d ops; %s (%s/sec and %.4f ops/sec)\n",
 			s1, cnt, ts, s2, tdiv((double)cnt, *t));
 	} else {/* bytes,ops,time,bytes/sec,ops/sec */
@@ -135,7 +135,7 @@ create_iovec(QEMUIOVector *qiov, char **argv, int nr_iov, int pattern)
 
 	for (i = 0; i < nr_iov; i++) {
 		char *arg = argv[i];
-		long long len;
+                uint64_t len;
 
 		len = cvtnum(arg);
 		if (len < 0) {
@@ -150,8 +150,8 @@ create_iovec(QEMUIOVector *qiov, char **argv, int nr_iov, int pattern)
 		}
 
 		if (len & 0x1ff) {
-			printf("length argument %lld is not sector aligned\n",
-				len);
+                        printf("length argument %" PRId64
+                               " is not sector aligned\n", len);
 			goto fail;
 		}
 
@@ -267,6 +267,47 @@ static int do_aio_writev(QEMUIOVector *qiov, int64_t offset, int *total)
 	return async_ret < 0 ? async_ret : 1;
 }
 
+struct multiwrite_async_ret {
+	int num_done;
+	int error;
+};
+
+static void multiwrite_cb(void *opaque, int ret)
+{
+	struct multiwrite_async_ret *async_ret = opaque;
+
+	async_ret->num_done++;
+	if (ret < 0) {
+		async_ret->error = ret;
+	}
+}
+
+static int do_aio_multiwrite(BlockRequest* reqs, int num_reqs, int *total)
+{
+	int i, ret;
+	struct multiwrite_async_ret async_ret = {
+		.num_done = 0,
+		.error = 0,
+	};
+
+	*total = 0;
+	for (i = 0; i < num_reqs; i++) {
+		reqs[i].cb = multiwrite_cb;
+		reqs[i].opaque = &async_ret;
+		*total += reqs[i].qiov->size;
+	}
+
+	ret = bdrv_aio_multiwrite(bs, reqs, num_reqs);
+	if (ret < 0) {
+		return ret;
+	}
+
+	while (async_ret.num_done < num_reqs) {
+		qemu_aio_wait();
+	}
+
+	return async_ret.error < 0 ? async_ret.error : 1;
+}
 
 static void
 read_help(void)
@@ -398,8 +439,8 @@ read_f(int argc, char **argv)
 
 	if (!pflag)
 		if (offset & 0x1ff) {
-			printf("offset %lld is not sector aligned\n",
-				(long long)offset);
+                        printf("offset %" PRId64 " is not sector aligned\n",
+                               offset);
 			return 0;
 
 		if (count & 0x1ff) {
@@ -429,9 +470,9 @@ read_f(int argc, char **argv)
 		void* cmp_buf = malloc(pattern_count);
 		memset(cmp_buf, pattern, pattern_count);
 		if (memcmp(buf + pattern_offset, cmp_buf, pattern_count)) {
-			printf("Pattern verification failed at offset %lld, "
-				"%d bytes\n",
-				(long long) offset + pattern_offset, pattern_count);
+			printf("Pattern verification failed at offset %"
+                               PRId64 ", %d bytes\n",
+                               offset + pattern_offset, pattern_count);
 		}
 		free(cmp_buf);
 	}
@@ -492,7 +533,8 @@ readv_f(int argc, char **argv)
 	int c, cnt;
 	char *buf;
 	int64_t offset;
-	int total;
+        /* Some compilers get confused and warn if this is not initialized.  */
+        int total = 0;
 	int nr_iov;
 	QEMUIOVector qiov;
 	int pattern = 0;
@@ -532,8 +574,8 @@ readv_f(int argc, char **argv)
 	optind++;
 
 	if (offset & 0x1ff) {
-		printf("offset %lld is not sector aligned\n",
-			(long long)offset);
+                printf("offset %" PRId64 " is not sector aligned\n",
+                       offset);
 		return 0;
 	}
 
@@ -553,9 +595,9 @@ readv_f(int argc, char **argv)
 		void* cmp_buf = malloc(qiov.size);
 		memset(cmp_buf, pattern, qiov.size);
 		if (memcmp(buf, cmp_buf, qiov.size)) {
-			printf("Pattern verification failed at offset %lld, "
-				"%zd bytes\n",
-				(long long) offset, qiov.size);
+			printf("Pattern verification failed at offset %"
+                               PRId64 ", %zd bytes\n",
+                               offset, qiov.size);
 		}
 		free(cmp_buf);
 	}
@@ -668,8 +710,8 @@ write_f(int argc, char **argv)
 
 	if (!pflag) {
 		if (offset & 0x1ff) {
-			printf("offset %lld is not sector aligned\n",
-				(long long)offset);
+                        printf("offset %" PRId64 " is not sector aligned\n",
+                               offset);
 			return 0;
 		}
 
@@ -747,7 +789,8 @@ writev_f(int argc, char **argv)
 	int c, cnt;
 	char *buf;
 	int64_t offset;
-	int total;
+        /* Some compilers get confused and warn if this is not initialized.  */
+        int total = 0;
 	int nr_iov;
 	int pattern = 0xcd;
 	QEMUIOVector qiov;
@@ -781,8 +824,8 @@ writev_f(int argc, char **argv)
 	optind++;
 
 	if (offset & 0x1ff) {
-		printf("offset %lld is not sector aligned\n",
-			(long long)offset);
+                printf("offset %" PRId64 " is not sector aligned\n",
+                       offset);
 		return 0;
 	}
 
@@ -806,6 +849,156 @@ writev_f(int argc, char **argv)
 	print_report("wrote", &t2, offset, qiov.size, total, cnt, Cflag);
 out:
 	qemu_io_free(buf);
+	return 0;
+}
+
+static void
+multiwrite_help(void)
+{
+	printf(
+"\n"
+" writes a range of bytes from the given offset source from multiple buffers,\n"
+" in a batch of requests that may be merged by qemu\n"
+"\n"
+" Example:\n"
+" 'multiwrite 512 1k 1k ; 4k 1k' \n"
+"  writes 2 kB at 512 bytes and 1 kB at 4 kB into the open file\n"
+"\n"
+" Writes into a segment of the currently open file, using a buffer\n"
+" filled with a set pattern (0xcdcdcdcd). The pattern byte is increased\n"
+" by one for each request contained in the multiwrite command.\n"
+" -P, -- use different pattern to fill file\n"
+" -C, -- report statistics in a machine parsable format\n"
+" -q, -- quiet mode, do not show I/O statistics\n"
+"\n");
+}
+
+static int multiwrite_f(int argc, char **argv);
+
+static const cmdinfo_t multiwrite_cmd = {
+	.name		= "multiwrite",
+	.cfunc		= multiwrite_f,
+	.argmin		= 2,
+	.argmax		= -1,
+	.args		= "[-Cq] [-P pattern ] off len [len..] [; off len [len..]..]",
+	.oneline	= "issues multiple write requests at once",
+	.help		= multiwrite_help,
+};
+
+static int
+multiwrite_f(int argc, char **argv)
+{
+	struct timeval t1, t2;
+	int Cflag = 0, qflag = 0;
+	int c, cnt;
+	char **buf;
+	int64_t offset, first_offset = 0;
+	/* Some compilers get confused and warn if this is not initialized.  */
+	int total = 0;
+	int nr_iov;
+	int nr_reqs;
+	int pattern = 0xcd;
+	QEMUIOVector *qiovs;
+	int i;
+	BlockRequest *reqs;
+
+	while ((c = getopt(argc, argv, "CqP:")) != EOF) {
+		switch (c) {
+		case 'C':
+			Cflag = 1;
+			break;
+		case 'q':
+			qflag = 1;
+			break;
+		case 'P':
+			pattern = parse_pattern(optarg);
+			if (pattern < 0)
+				return 0;
+			break;
+		default:
+			return command_usage(&writev_cmd);
+		}
+	}
+
+	if (optind > argc - 2)
+		return command_usage(&writev_cmd);
+
+	nr_reqs = 1;
+	for (i = optind; i < argc; i++) {
+		if (!strcmp(argv[i], ";")) {
+			nr_reqs++;
+		}
+	}
+
+	reqs = qemu_malloc(nr_reqs * sizeof(*reqs));
+	buf = qemu_malloc(nr_reqs * sizeof(*buf));
+	qiovs = qemu_malloc(nr_reqs * sizeof(*qiovs));
+
+	for (i = 0; i < nr_reqs; i++) {
+		int j;
+
+		/* Read the offset of the request */
+		offset = cvtnum(argv[optind]);
+		if (offset < 0) {
+			printf("non-numeric offset argument -- %s\n", argv[optind]);
+			return 0;
+		}
+		optind++;
+
+		if (offset & 0x1ff) {
+			printf("offset %lld is not sector aligned\n",
+				(long long)offset);
+			return 0;
+		}
+
+        if (i == 0) {
+            first_offset = offset;
+        }
+
+		/* Read lengths for qiov entries */
+		for (j = optind; j < argc; j++) {
+			if (!strcmp(argv[j], ";")) {
+				break;
+			}
+		}
+
+		nr_iov = j - optind;
+
+		/* Build request */
+		reqs[i].qiov = &qiovs[i];
+		buf[i] = create_iovec(reqs[i].qiov, &argv[optind], nr_iov, pattern);
+		reqs[i].sector = offset >> 9;
+		reqs[i].nb_sectors = reqs[i].qiov->size >> 9;
+
+		optind = j + 1;
+
+		offset += reqs[i].qiov->size;
+		pattern++;
+	}
+
+	gettimeofday(&t1, NULL);
+	cnt = do_aio_multiwrite(reqs, nr_reqs, &total);
+	gettimeofday(&t2, NULL);
+
+	if (cnt < 0) {
+		printf("aio_multiwrite failed: %s\n", strerror(-cnt));
+		goto out;
+	}
+
+	if (qflag)
+		goto out;
+
+	/* Finally, report back -- -C gives a parsable format */
+	t2 = tsub(t2, t1);
+	print_report("wrote", &t2, first_offset, total, total, cnt, Cflag);
+out:
+	for (i = 0; i < nr_reqs; i++) {
+		qemu_io_free(buf[i]);
+		qemu_iovec_destroy(&qiovs[i]);
+	}
+	qemu_free(buf);
+	qemu_free(reqs);
+	qemu_free(qiovs);
 	return 0;
 }
 
@@ -866,9 +1059,9 @@ aio_read_done(void *opaque, int ret)
 
 		memset(cmp_buf, ctx->pattern, ctx->qiov.size);
 		if (memcmp(ctx->buf, cmp_buf, ctx->qiov.size)) {
-			printf("Pattern verification failed at offset %lld, "
-				"%zd bytes\n",
-				(long long) ctx->offset, ctx->qiov.size);
+			printf("Pattern verification failed at offset %"
+                               PRId64 ", %zd bytes\n",
+                               ctx->offset, ctx->qiov.size);
 		}
 		free(cmp_buf);
 	}
@@ -902,8 +1095,8 @@ aio_read_help(void)
 "\n"
 " Reads a segment of the currently open file, optionally dumping it to the\n"
 " standard output stream (with -v option) for subsequent inspection.\n"
-" The read is performed asynchronously and should the aio_flush command \n"
-" should be used to ensure all outstanding aio requests have been completed\n"
+" The read is performed asynchronously and the aio_flush command must be\n"
+" used to ensure all outstanding aio requests have been completed\n"
 " -C, -- report statistics in a machine parsable format\n"
 " -P, -- use a pattern to verify read data\n"
 " -v, -- dump buffer to standard output\n"
@@ -967,8 +1160,8 @@ aio_read_f(int argc, char **argv)
 	optind++;
 
 	if (ctx->offset & 0x1ff) {
-		printf("offset %lld is not sector aligned\n",
-			(long long)ctx->offset);
+		printf("offset %" PRId64 " is not sector aligned\n",
+                       ctx->offset);
 		free(ctx);
 		return 0;
 	}
@@ -1001,8 +1194,8 @@ aio_write_help(void)
 "\n"
 " Writes into a segment of the currently open file, using a buffer\n"
 " filled with a set pattern (0xcdcdcdcd).\n"
-" The write is performed asynchronously and should the aio_flush command \n"
-" should be used to ensure all outstanding aio requests have been completed\n"
+" The write is performed asynchronously and the aio_flush command must be\n"
+" used to ensure all outstanding aio requests have been completed\n"
 " -P, -- use different pattern to fill file\n"
 " -C, -- report statistics in a machine parsable format\n"
 " -q, -- quite mode, do not show I/O statistics\n"
@@ -1062,8 +1255,8 @@ aio_write_f(int argc, char **argv)
 	optind++;
 
 	if (ctx->offset & 0x1ff) {
-		printf("offset %lld is not sector aligned\n",
-			(long long)ctx->offset);
+		printf("offset %" PRId64 " is not sector aligned\n",
+                       ctx->offset);
 		free(ctx);
 		return 0;
 	}
@@ -1093,7 +1286,7 @@ aio_flush_f(int argc, char **argv)
 static const cmdinfo_t aio_flush_cmd = {
 	.name		= "aio_flush",
 	.cfunc		= aio_flush_f,
-	.oneline	= "completes all outstanding aio requets"
+	.oneline	= "completes all outstanding aio requests"
 };
 
 static int
@@ -1124,7 +1317,7 @@ truncate_f(int argc, char **argv)
 
 	ret = bdrv_truncate(bs, offset);
 	if (ret < 0) {
-		printf("truncate: %s", strerror(ret));
+		printf("truncate: %s\n", strerror(-ret));
 		return 0;
 	}
 
@@ -1149,7 +1342,7 @@ length_f(int argc, char **argv)
 
 	size = bdrv_getlength(bs);
 	if (size < 0) {
-		printf("getlength: %s", strerror(size));
+		printf("getlength: %s\n", strerror(-size));
 		return 0;
 	}
 
@@ -1212,8 +1405,8 @@ alloc_f(int argc, char **argv)
 
 	offset = cvtnum(argv[1]);
 	if (offset & 0x1ff) {
-		printf("offset %lld is not sector aligned\n",
-			(long long)offset);
+                printf("offset %" PRId64 " is not sector aligned\n",
+                       offset);
 		return 0;
 	}
 
@@ -1274,23 +1467,23 @@ static int openfile(char *name, int flags, int growable)
 		return 1;
 	}
 
-	bs = bdrv_new("hda");
-	if (!bs)
-		return 1;
-
 	if (growable) {
-		flags |= BDRV_O_FILE;
+		if (bdrv_file_open(&bs, name, flags)) {
+			fprintf(stderr, "%s: can't open device %s\n", progname, name);
+			return 1;
+		}
+	} else {
+		bs = bdrv_new("hda");
+		if (!bs)
+			return 1;
+
+		if (bdrv_open(bs, name, flags, NULL) < 0) {
+			fprintf(stderr, "%s: can't open device %s\n", progname, name);
+			bs = NULL;
+			return 1;
+		}
 	}
 
-	if (bdrv_open(bs, name, flags) == -1) {
-		fprintf(stderr, "%s: can't open device %s\n", progname, name);
-		bs = NULL;
-		return 1;
-	}
-
-	if (growable) {
-		bs->growable = 1;
-	}
 	return 0;
 }
 
@@ -1305,7 +1498,6 @@ open_help(void)
 " 'open -Cn /tmp/data' - creates/opens data file read-write and uncached\n"
 "\n"
 " Opens a file for subsequent use by all of the other qemu-io commands.\n"
-" -C, -- create new file if it doesn't exist\n"
 " -r, -- open file read-only\n"
 " -s, -- use snapshot file\n"
 " -n, -- disable host cache\n"
@@ -1335,16 +1527,13 @@ open_f(int argc, char **argv)
 	int growable = 0;
 	int c;
 
-	while ((c = getopt(argc, argv, "snCrg")) != EOF) {
+	while ((c = getopt(argc, argv, "snrg")) != EOF) {
 		switch (c) {
 		case 's':
 			flags |= BDRV_O_SNAPSHOT;
 			break;
 		case 'n':
 			flags |= BDRV_O_NOCACHE;
-			break;
-		case 'C':
-			flags |= BDRV_O_CREAT;
 			break;
 		case 'r':
 			readonly = 1;
@@ -1357,10 +1546,9 @@ open_f(int argc, char **argv)
 		}
 	}
 
-	if (readonly)
-		flags |= BDRV_O_RDONLY;
-	else
-		flags |= BDRV_O_RDWR;
+	if (!readonly) {
+            flags |= BDRV_O_RDWR;
+        }
 
 	if (optind != argc - 1)
 		return command_usage(&open_cmd);
@@ -1394,10 +1582,9 @@ init_check_command(
 static void usage(const char *name)
 {
 	printf(
-"Usage: %s [-h] [-V] [-Crsnm] [-c cmd] ... [file]\n"
+"Usage: %s [-h] [-V] [-rsnm] [-c cmd] ... [file]\n"
 "QEMU Disk exerciser\n"
 "\n"
-"  -C, --create         create new file if it doesn't exist\n"
 "  -c, --cmd            command to execute\n"
 "  -r, --read-only      export read-only\n"
 "  -s, --snapshot       use snapshot file\n"
@@ -1416,13 +1603,12 @@ int main(int argc, char **argv)
 {
 	int readonly = 0;
 	int growable = 0;
-	const char *sopt = "hVc:Crsnmgk";
-	struct option lopt[] = {
+	const char *sopt = "hVc:rsnmgk";
+        const struct option lopt[] = {
 		{ "help", 0, NULL, 'h' },
 		{ "version", 0, NULL, 'V' },
 		{ "offset", 1, NULL, 'o' },
 		{ "cmd", 1, NULL, 'c' },
-		{ "create", 0, NULL, 'C' },
 		{ "read-only", 0, NULL, 'r' },
 		{ "snapshot", 0, NULL, 's' },
 		{ "nocache", 0, NULL, 'n' },
@@ -1447,9 +1633,6 @@ int main(int argc, char **argv)
 			break;
 		case 'c':
 			add_user_command(optarg);
-			break;
-		case 'C':
-			flags |= BDRV_O_CREAT;
 			break;
 		case 'r':
 			readonly = 1;
@@ -1491,6 +1674,7 @@ int main(int argc, char **argv)
 	add_command(&readv_cmd);
 	add_command(&write_cmd);
 	add_command(&writev_cmd);
+	add_command(&multiwrite_cmd);
 	add_command(&aio_read_cmd);
 	add_command(&aio_write_cmd);
 	add_command(&aio_flush_cmd);
@@ -1504,10 +1688,9 @@ int main(int argc, char **argv)
 	add_check_command(init_check_command);
 
 	/* open the device */
-	if (readonly)
-		flags |= BDRV_O_RDONLY;
-	else
-		flags |= BDRV_O_RDWR;
+	if (!readonly) {
+            flags |= BDRV_O_RDWR;
+        }
 
 	if ((argc - optind) == 1)
 		openfile(argv[optind], flags, growable);

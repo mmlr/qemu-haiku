@@ -401,7 +401,7 @@ static void eth_update_ma(struct fs_eth *eth, int ma)
 	eth->macaddr[ma][i++] = eth->regs[reg] >> 16;
 	eth->macaddr[ma][i++] = eth->regs[reg] >> 24;
 	eth->macaddr[ma][i++] = eth->regs[reg + 1];
-	eth->macaddr[ma][i++] = eth->regs[reg + 1] >> 8;
+	eth->macaddr[ma][i] = eth->regs[reg + 1] >> 8;
 
 	D(printf("set mac%d=%x.%x.%x.%x.%x.%x\n", ma,
 		 eth->macaddr[ma][0], eth->macaddr[ma][1],
@@ -437,6 +437,7 @@ eth_writel (void *opaque, target_phys_addr_t addr, uint32_t value)
 				eth_validate_duplex(eth);
 			}
 			eth->mdio_bus.mdc = !!(value & 4);
+			eth->regs[addr] = value;
 			break;
 
 		case RW_REC_CTRL:

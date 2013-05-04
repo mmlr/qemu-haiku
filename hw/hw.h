@@ -5,12 +5,9 @@
 #include "qemu-common.h"
 
 #if defined(TARGET_PHYS_ADDR_BITS) && !defined(NEED_CPU_H)
-#include "targphys.h"
-#include "poison.h"
 #include "cpu-common.h"
 #endif
 
-#include <stdbool.h>
 #include "ioport.h"
 #include "irq.h"
 
@@ -248,14 +245,16 @@ typedef int SaveLiveStateHandler(Monitor *mon, QEMUFile *f, int stage,
                                  void *opaque);
 typedef int LoadStateHandler(QEMUFile *f, void *opaque, int version_id);
 
-int register_savevm(const char *idstr,
+int register_savevm(DeviceState *dev,
+                    const char *idstr,
                     int instance_id,
                     int version_id,
                     SaveStateHandler *save_state,
                     LoadStateHandler *load_state,
                     void *opaque);
 
-int register_savevm_live(const char *idstr,
+int register_savevm_live(DeviceState *dev,
+                         const char *idstr,
                          int instance_id,
                          int version_id,
                          SaveSetParamsHandler *set_params,
@@ -264,7 +263,9 @@ int register_savevm_live(const char *idstr,
                          LoadStateHandler *load_state,
                          void *opaque);
 
-void unregister_savevm(const char *idstr, void *opaque);
+void unregister_savevm(DeviceState *dev, const char *idstr, void *opaque);
+void register_device_unmigratable(DeviceState *dev, const char *idstr,
+                                                                void *opaque);
 
 typedef void QEMUResetHandler(void *opaque);
 
@@ -314,6 +315,11 @@ typedef struct {
     bool (*field_exists)(void *opaque, int version_id);
 } VMStateField;
 
+typedef struct VMStateSubsection {
+    const VMStateDescription *vmsd;
+    bool (*needed)(void *opaque);
+} VMStateSubsection;
+
 struct VMStateDescription {
     const char *name;
     int version_id;
@@ -323,8 +329,8 @@ struct VMStateDescription {
     int (*pre_load)(void *opaque);
     int (*post_load)(void *opaque, int version_id);
     void (*pre_save)(void *opaque);
-    void (*post_save)(void *opaque);
     VMStateField *fields;
+    const VMStateSubsection *subsections;
 };
 
 extern const VMStateInfo vmstate_info_int8;
@@ -475,6 +481,16 @@ extern const VMStateInfo vmstate_info_unused_buffer;
     .size       = sizeof(_type),                                     \
     .flags      = VMS_STRUCT|VMS_ARRAY,                              \
     .offset     = vmstate_offset_array(_state, _field, _type, _num), \
+}
+
+#define VMSTATE_STRUCT_VARRAY_UINT8(_field, _state, _field_num, _version, _vmsd, _type) { \
+    .name       = (stringify(_field)),                               \
+    .num_offset = vmstate_offset_value(_state, _field_num, uint8_t),  \
+    .version_id = (_version),                                        \
+    .vmsd       = &(_vmsd),                                          \
+    .size       = sizeof(_type),                                     \
+    .flags      = VMS_STRUCT|VMS_VARRAY_INT32,                       \
+    .offset     = offsetof(_state, _field),                          \
 }
 
 #define VMSTATE_STATIC_BUFFER(_field, _state, _version, _test, _start, _size) { \
@@ -759,7 +775,13 @@ extern int vmstate_load_state(QEMUFile *f, const VMStateDescription *vmsd,
                               void *opaque, int version_id);
 extern void vmstate_save_state(QEMUFile *f, const VMStateDescription *vmsd,
                                void *opaque);
-extern int vmstate_register(int instance_id, const VMStateDescription *vmsd,
-                            void *base);
-void vmstate_unregister(const VMStateDescription *vmsd, void *opaque);
+extern int vmstate_register(DeviceState *dev, int instance_id,
+                            const VMStateDescription *vmsd, void *base);
+extern int vmstate_register_with_alias_id(DeviceState *dev,
+                                          int instance_id,
+                                          const VMStateDescription *vmsd,
+                                          void *base, int alias_id,
+                                          int required_for_version);
+void vmstate_unregister(DeviceState *dev, const VMStateDescription *vmsd,
+                        void *opaque);
 #endif

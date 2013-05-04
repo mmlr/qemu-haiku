@@ -24,10 +24,10 @@
 //#define DEBUG_MIGRATION
 
 #ifdef DEBUG_MIGRATION
-#define dprintf(fmt, ...) \
+#define DPRINTF(fmt, ...) \
     do { printf("migration: " fmt, ## __VA_ARGS__); } while (0)
 #else
-#define dprintf(fmt, ...) \
+#define DPRINTF(fmt, ...) \
     do { } while (0)
 #endif
 
@@ -36,101 +36,115 @@ static uint32_t max_throttle = (32 << 20);
 
 static MigrationState *current_migration;
 
-void qemu_start_incoming_migration(const char *uri)
+int qemu_start_incoming_migration(const char *uri)
 {
     const char *p;
+    int ret;
 
     if (strstart(uri, "tcp:", &p))
-        tcp_start_incoming_migration(p);
+        ret = tcp_start_incoming_migration(p);
 #if !defined(WIN32)
     else if (strstart(uri, "exec:", &p))
-        exec_start_incoming_migration(p);
+        ret =  exec_start_incoming_migration(p);
     else if (strstart(uri, "unix:", &p))
-        unix_start_incoming_migration(p);
+        ret = unix_start_incoming_migration(p);
     else if (strstart(uri, "fd:", &p))
-        fd_start_incoming_migration(p);
+        ret = fd_start_incoming_migration(p);
 #endif
-    else
+    else {
         fprintf(stderr, "unknown migration protocol: %s\n", uri);
+        ret = -EPROTONOSUPPORT;
+    }
+    return ret;
 }
 
-void do_migrate(Monitor *mon, const QDict *qdict, QObject **ret_data)
+void process_incoming_migration(QEMUFile *f)
+{
+    if (qemu_loadvm_state(f) < 0) {
+        fprintf(stderr, "load of migration failed\n");
+        exit(0);
+    }
+    qemu_announce_self();
+    DPRINTF("successfully loaded vm state\n");
+
+    incoming_expected = false;
+
+    if (autostart)
+        vm_start();
+}
+
+int do_migrate(Monitor *mon, const QDict *qdict, QObject **ret_data)
 {
     MigrationState *s = NULL;
     const char *p;
-    int detach = qdict_get_int(qdict, "detach");
+    int detach = qdict_get_try_bool(qdict, "detach", 0);
+    int blk = qdict_get_try_bool(qdict, "blk", 0);
+    int inc = qdict_get_try_bool(qdict, "inc", 0);
     const char *uri = qdict_get_str(qdict, "uri");
 
     if (current_migration &&
         current_migration->get_status(current_migration) == MIG_STATE_ACTIVE) {
         monitor_printf(mon, "migration already in progress\n");
-        return;
+        return -1;
     }
 
-    if (strstart(uri, "tcp:", &p))
+    if (strstart(uri, "tcp:", &p)) {
         s = tcp_start_outgoing_migration(mon, p, max_throttle, detach,
-                                         (int)qdict_get_int(qdict, "blk"), 
-                                         (int)qdict_get_int(qdict, "inc"));
+                                         blk, inc);
 #if !defined(WIN32)
-    else if (strstart(uri, "exec:", &p))
+    } else if (strstart(uri, "exec:", &p)) {
         s = exec_start_outgoing_migration(mon, p, max_throttle, detach,
-                                          (int)qdict_get_int(qdict, "blk"), 
-                                          (int)qdict_get_int(qdict, "inc"));
-    else if (strstart(uri, "unix:", &p))
+                                          blk, inc);
+    } else if (strstart(uri, "unix:", &p)) {
         s = unix_start_outgoing_migration(mon, p, max_throttle, detach,
-					  (int)qdict_get_int(qdict, "blk"), 
-                                          (int)qdict_get_int(qdict, "inc"));
-    else if (strstart(uri, "fd:", &p))
+                                          blk, inc);
+    } else if (strstart(uri, "fd:", &p)) {
         s = fd_start_outgoing_migration(mon, p, max_throttle, detach, 
-                                        (int)qdict_get_int(qdict, "blk"), 
-                                        (int)qdict_get_int(qdict, "inc"));
+                                        blk, inc);
 #endif
-    else
+    } else {
         monitor_printf(mon, "unknown migration protocol: %s\n", uri);
-
-    if (s == NULL)
-        monitor_printf(mon, "migration failed\n");
-    else {
-        if (current_migration)
-            current_migration->release(current_migration);
-
-        current_migration = s;
+        return -1;
     }
+
+    if (s == NULL) {
+        monitor_printf(mon, "migration failed\n");
+        return -1;
+    }
+
+    if (current_migration) {
+        current_migration->release(current_migration);
+    }
+
+    current_migration = s;
+    return 0;
 }
 
-void do_migrate_cancel(Monitor *mon, const QDict *qdict, QObject **ret_data)
+int do_migrate_cancel(Monitor *mon, const QDict *qdict, QObject **ret_data)
 {
     MigrationState *s = current_migration;
 
     if (s)
         s->cancel(s);
+
+    return 0;
 }
 
-void do_migrate_set_speed(Monitor *mon, const QDict *qdict)
+int do_migrate_set_speed(Monitor *mon, const QDict *qdict, QObject **ret_data)
 {
     double d;
-    char *ptr;
     FdMigrationState *s;
-    const char *value = qdict_get_str(qdict, "value");
 
-    d = strtod(value, &ptr);
-    switch (*ptr) {
-    case 'G': case 'g':
-        d *= 1024;
-    case 'M': case 'm':
-        d *= 1024;
-    case 'K': case 'k':
-        d *= 1024;
-    default:
-        break;
-    }
-
-    max_throttle = (uint32_t)d;
+    d = qdict_get_double(qdict, "value");
+    d = MAX(0, MIN(UINT32_MAX, d));
+    max_throttle = d;
 
     s = migrate_to_fms(current_migration);
     if (s && s->file) {
         qemu_file_set_rate_limit(s->file, max_throttle);
     }
+
+    return 0;
 }
 
 /* amount of nanoseconds we are willing to wait for migration to be down.
@@ -144,24 +158,16 @@ uint64_t migrate_max_downtime(void)
     return max_downtime;
 }
 
-void do_migrate_set_downtime(Monitor *mon, const QDict *qdict)
+int do_migrate_set_downtime(Monitor *mon, const QDict *qdict,
+                            QObject **ret_data)
 {
-    char *ptr;
     double d;
-    const char *value = qdict_get_str(qdict, "value");
 
-    d = strtod(value, &ptr);
-    if (!strcmp(ptr,"ms")) {
-        d *= 1000000;
-    } else if (!strcmp(ptr,"us")) {
-        d *= 1000;
-    } else if (!strcmp(ptr,"ns")) {
-    } else {
-        /* all else considered to be seconds */
-        d *= 1000000000;
-    }
-
+    d = qdict_get_double(qdict, "value") * 1e9;
+    d = MAX(0, MIN(UINT64_MAX, d));
     max_downtime = (uint64_t)d;
+
+    return 0;
 }
 
 static void migrate_print_status(Monitor *mon, const char *name,
@@ -205,49 +211,9 @@ static void migrate_put_status(QDict *qdict, const char *name,
     obj = qobject_from_jsonf("{ 'transferred': %" PRId64 ", "
                                "'remaining': %" PRId64 ", "
                                "'total': %" PRId64 " }", trans, rem, total);
-    assert(obj != NULL);
-
     qdict_put_obj(qdict, name, obj);
 }
 
-/**
- * do_info_migrate(): Migration status
- *
- * Return a QDict. If migration is active there will be another
- * QDict with RAM migration status and if block migration is active
- * another one with block migration status.
- *
- * The main QDict contains the following:
- *
- * - "status": migration status
- * - "ram": only present if "status" is "active", it is a QDict with the
- *   following RAM information (in bytes):
- *          - "transferred": amount transferred
- *          - "remaining": amount remaining
- *          - "total": total
- * - "disk": only present if "status" is "active" and it is a block migration,
- *   it is a QDict with the following disk information (in bytes):
- *          - "transferred": amount transferred
- *          - "remaining": amount remaining
- *          - "total": total
- *
- * Examples:
- *
- * 1. Migration is "completed":
- *
- * { "status": "completed" }
- *
- * 2. Migration is "active" and it is not a block migration:
- *
- * { "status": "active",
- *            "ram": { "transferred": 123, "remaining": 123, "total": 246 } }
- *
- * 3. Migration is "active" and it is a block migration:
- *
- * { "status": "active",
- *   "ram": { "total": 1057024, "remaining": 1053304, "transferred": 3720 },
- *   "disk": { "total": 20971520, "remaining": 20880384, "transferred": 91136 }}
- */
 void do_info_migrate(Monitor *mon, QObject **ret_data)
 {
     QDict *qdict;
@@ -280,7 +246,6 @@ void do_info_migrate(Monitor *mon, QObject **ret_data)
             *ret_data = qobject_from_jsonf("{ 'status': 'cancelled' }");
             break;
         }
-        assert(*ret_data != NULL);
     }
 }
 
@@ -290,7 +255,7 @@ void migrate_fd_monitor_suspend(FdMigrationState *s, Monitor *mon)
 {
     s->mon = mon;
     if (monitor_suspend(mon) == 0) {
-        dprintf("suspending monitor\n");
+        DPRINTF("suspending monitor\n");
     } else {
         monitor_printf(mon, "terminal does not allow synchronous "
                        "migration, continuing detached\n");
@@ -299,18 +264,22 @@ void migrate_fd_monitor_suspend(FdMigrationState *s, Monitor *mon)
 
 void migrate_fd_error(FdMigrationState *s)
 {
-    dprintf("setting error state\n");
+    DPRINTF("setting error state\n");
     s->state = MIG_STATE_ERROR;
     migrate_fd_cleanup(s);
 }
 
-void migrate_fd_cleanup(FdMigrationState *s)
+int migrate_fd_cleanup(FdMigrationState *s)
 {
+    int ret = 0;
+
     qemu_set_fd_handler2(s->fd, NULL, NULL, NULL, NULL);
 
     if (s->file) {
-        dprintf("closing file\n");
-        qemu_fclose(s->file);
+        DPRINTF("closing file\n");
+        if (qemu_fclose(s->file) != 0) {
+            ret = -1;
+        }
         s->file = NULL;
     }
 
@@ -323,6 +292,8 @@ void migrate_fd_cleanup(FdMigrationState *s)
     }
 
     s->fd = -1;
+
+    return ret;
 }
 
 void migrate_fd_put_notify(void *opaque)
@@ -345,8 +316,14 @@ ssize_t migrate_fd_put_buffer(void *opaque, const void *data, size_t size)
     if (ret == -1)
         ret = -(s->get_error(s));
 
-    if (ret == -EAGAIN)
+    if (ret == -EAGAIN) {
         qemu_set_fd_handler2(s->fd, NULL, NULL, migrate_fd_put_notify, s);
+    } else if (ret < 0) {
+        if (s->mon) {
+            monitor_resume(s->mon);
+        }
+        s->state = MIG_STATE_ERROR;
+    }
 
     return ret;
 }
@@ -362,11 +339,11 @@ void migrate_fd_connect(FdMigrationState *s)
                                       migrate_fd_wait_for_unfreeze,
                                       migrate_fd_close);
 
-    dprintf("beginning savevm\n");
+    DPRINTF("beginning savevm\n");
     ret = qemu_savevm_state_begin(s->mon, s->file, s->mig_state.blk,
                                   s->mig_state.shared);
     if (ret < 0) {
-        dprintf("failed, %d\n", ret);
+        DPRINTF("failed, %d\n", ret);
         migrate_fd_error(s);
         return;
     }
@@ -379,16 +356,16 @@ void migrate_fd_put_ready(void *opaque)
     FdMigrationState *s = opaque;
 
     if (s->state != MIG_STATE_ACTIVE) {
-        dprintf("put_ready returning because of non-active state\n");
+        DPRINTF("put_ready returning because of non-active state\n");
         return;
     }
 
-    dprintf("iterate\n");
+    DPRINTF("iterate\n");
     if (qemu_savevm_state_iterate(s->mon, s->file) == 1) {
         int state;
         int old_vm_running = vm_running;
 
-        dprintf("done iterating\n");
+        DPRINTF("done iterating\n");
         vm_stop(0);
 
         qemu_aio_flush();
@@ -401,7 +378,12 @@ void migrate_fd_put_ready(void *opaque)
         } else {
             state = MIG_STATE_COMPLETED;
         }
-        migrate_fd_cleanup(s);
+        if (migrate_fd_cleanup(s) < 0) {
+            if (old_vm_running) {
+                vm_start();
+            }
+            state = MIG_STATE_ERROR;
+        }
         s->state = state;
     }
 }
@@ -419,7 +401,7 @@ void migrate_fd_cancel(MigrationState *mig_state)
     if (s->state != MIG_STATE_ACTIVE)
         return;
 
-    dprintf("cancelling migration\n");
+    DPRINTF("cancelling migration\n");
 
     s->state = MIG_STATE_CANCELLED;
     qemu_savevm_state_cancel(s->mon, s->file);
@@ -431,13 +413,13 @@ void migrate_fd_release(MigrationState *mig_state)
 {
     FdMigrationState *s = migrate_to_fms(mig_state);
 
-    dprintf("releasing state\n");
+    DPRINTF("releasing state\n");
    
     if (s->state == MIG_STATE_ACTIVE) {
         s->state = MIG_STATE_CANCELLED;
         migrate_fd_cleanup(s);
     }
-    free(s);
+    qemu_free(s);
 }
 
 void migrate_fd_wait_for_unfreeze(void *opaque)
@@ -445,7 +427,7 @@ void migrate_fd_wait_for_unfreeze(void *opaque)
     FdMigrationState *s = opaque;
     int ret;
 
-    dprintf("wait for unfreeze\n");
+    DPRINTF("wait for unfreeze\n");
     if (s->state != MIG_STATE_ACTIVE)
         return;
 

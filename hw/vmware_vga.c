@@ -477,13 +477,43 @@ struct vmsvga_cursor_definition_s {
 static inline void vmsvga_cursor_define(struct vmsvga_state_s *s,
                 struct vmsvga_cursor_definition_s *c)
 {
-    int i;
-    for (i = SVGA_BITMAP_SIZE(c->width, c->height) - 1; i >= 0; i --)
-        c->mask[i] = ~c->mask[i];
+    QEMUCursor *qc;
+    int i, pixels;
+
+    qc = cursor_alloc(c->width, c->height);
+    qc->hot_x = c->hot_x;
+    qc->hot_y = c->hot_y;
+    switch (c->bpp) {
+    case 1:
+        cursor_set_mono(qc, 0xffffff, 0x000000, (void*)c->image,
+                        1, (void*)c->mask);
+#ifdef DEBUG
+        cursor_print_ascii_art(qc, "vmware/mono");
+#endif
+        break;
+    case 32:
+        /* fill alpha channel from mask, set color to zero */
+        cursor_set_mono(qc, 0x000000, 0x000000, (void*)c->mask,
+                        1, (void*)c->mask);
+        /* add in rgb values */
+        pixels = c->width * c->height;
+        for (i = 0; i < pixels; i++) {
+            qc->data[i] |= c->image[i] & 0xffffff;
+        }
+#ifdef DEBUG
+        cursor_print_ascii_art(qc, "vmware/32bit");
+#endif
+        break;
+    default:
+        fprintf(stderr, "%s: unhandled bpp %d, using fallback cursor\n",
+                __FUNCTION__, c->bpp);
+        cursor_put(qc);
+        qc = cursor_builtin_left_ptr();
+    }
 
     if (s->vga.ds->cursor_define)
-        s->vga.ds->cursor_define(c->width, c->height, c->bpp, c->hot_x, c->hot_y,
-                        (uint8_t *) c->image, (uint8_t *) c->mask);
+        s->vga.ds->cursor_define(qc);
+    cursor_put(qc);
 }
 #endif
 
@@ -1134,12 +1164,12 @@ static void vmsvga_init(struct vmsvga_state_s *s, int vga_ram_size)
 
 
     s->fifo_size = SVGA_FIFO_SIZE;
-    s->fifo_offset = qemu_ram_alloc(s->fifo_size);
+    s->fifo_offset = qemu_ram_alloc(NULL, "vmsvga.fifo", s->fifo_size);
     s->fifo_ptr = qemu_get_ram_ptr(s->fifo_offset);
 
     vga_common_init(&s->vga, vga_ram_size);
     vga_init(&s->vga);
-    vmstate_register(0, &vmstate_vga_common, &s->vga);
+    vmstate_register(NULL, 0, &vmstate_vga_common, &s->vga);
 
     vga_init_vbe(&s->vga);
 
@@ -1210,16 +1240,14 @@ static int pci_vmsvga_initfn(PCIDevice *dev)
 
     pci_config_set_vendor_id(s->card.config, PCI_VENDOR_ID_VMWARE);
     pci_config_set_device_id(s->card.config, SVGA_PCI_DEVICE_ID);
-    s->card.config[PCI_COMMAND]		= 0x07;		/* I/O + Memory */
     pci_config_set_class(s->card.config, PCI_CLASS_DISPLAY_VGA);
-    s->card.config[0x0c]		= 0x08;		/* Cache line size */
-    s->card.config[0x0d]		= 0x40;		/* Latency timer */
-    s->card.config[PCI_HEADER_TYPE]	= PCI_HEADER_TYPE_NORMAL;
-    s->card.config[0x2c]		= PCI_VENDOR_ID_VMWARE & 0xff;
-    s->card.config[0x2d]		= PCI_VENDOR_ID_VMWARE >> 8;
-    s->card.config[0x2e]		= SVGA_PCI_DEVICE_ID & 0xff;
-    s->card.config[0x2f]		= SVGA_PCI_DEVICE_ID >> 8;
-    s->card.config[0x3c]		= 0xff;		/* End */
+    s->card.config[PCI_CACHE_LINE_SIZE]	= 0x08;		/* Cache line size */
+    s->card.config[PCI_LATENCY_TIMER] = 0x40;		/* Latency timer */
+    s->card.config[PCI_SUBSYSTEM_VENDOR_ID] = PCI_VENDOR_ID_VMWARE & 0xff;
+    s->card.config[PCI_SUBSYSTEM_VENDOR_ID + 1]	= PCI_VENDOR_ID_VMWARE >> 8;
+    s->card.config[PCI_SUBSYSTEM_ID] = SVGA_PCI_DEVICE_ID & 0xff;
+    s->card.config[PCI_SUBSYSTEM_ID + 1] = SVGA_PCI_DEVICE_ID >> 8;
+    s->card.config[PCI_INTERRUPT_LINE] = 0xff;		/* End */
 
     pci_register_bar(&s->card, 0, 0x10,
                     PCI_BASE_ADDRESS_SPACE_IO, pci_vmsvga_map_ioport);
