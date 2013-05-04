@@ -28,7 +28,7 @@ extern "C" {
 #define AUDIO_CAP "haiku"
 #include "audio_int.h"
 
-static	int		haiku_run_out(HWVoiceOut *hw);
+static	int		haiku_run_out(HWVoiceOut *hw, int live);
 static	int		haiku_write(SWVoiceOut *sw, void *buf, int len);
 static	int		haiku_init_out(HWVoiceOut *hw, struct audsettings *as);
 static	void	haiku_fini_out(HWVoiceOut *hw);
