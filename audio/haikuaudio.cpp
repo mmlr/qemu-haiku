@@ -104,15 +104,11 @@ PlayBuffer(void *cookie, void *buffer, size_t size, const media_raw_audio_format
 
 
 static int
-haiku_run_out(HWVoiceOut *hw)
+haiku_run_out(HWVoiceOut *hw, int live)
 {
 	HaikuVoiceOut *voice = (HaikuVoiceOut *)hw;
 	BufferInfo *info = voice->buffer;
 	if (!info)
-		return 0;
-
-	int live = audio_pcm_hw_get_live_out(hw);
-	if (live <= 0)
 		return 0;
 
 	int position = hw->rpos;
