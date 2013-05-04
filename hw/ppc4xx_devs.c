@@ -183,10 +183,10 @@ static void ppcuic_set_irq (void *opaque, int irq_num, int level)
         ppcuic_trigger_irq(uic);
 }
 
-static target_ulong dcr_read_uic (void *opaque, int dcrn)
+static uint32_t dcr_read_uic (void *opaque, int dcrn)
 {
     ppcuic_t *uic;
-    target_ulong ret;
+    uint32_t ret;
 
     uic = opaque;
     dcrn -= uic->dcr_base;
@@ -229,13 +229,13 @@ static target_ulong dcr_read_uic (void *opaque, int dcrn)
     return ret;
 }
 
-static void dcr_write_uic (void *opaque, int dcrn, target_ulong val)
+static void dcr_write_uic (void *opaque, int dcrn, uint32_t val)
 {
     ppcuic_t *uic;
 
     uic = opaque;
     dcrn -= uic->dcr_base;
-    LOG_UIC("%s: dcr %d val " TARGET_FMT_lx "\n", __func__, dcrn, val);
+    LOG_UIC("%s: dcr %d val 0x%x\n", __func__, dcrn, val);
     switch (dcrn) {
     case DCR_UICSR:
         uic->uicsr &= ~val;
@@ -448,10 +448,10 @@ static void sdram_unmap_bcr (ppc4xx_sdram_t *sdram)
     }
 }
 
-static target_ulong dcr_read_sdram (void *opaque, int dcrn)
+static uint32_t dcr_read_sdram (void *opaque, int dcrn)
 {
     ppc4xx_sdram_t *sdram;
-    target_ulong ret;
+    uint32_t ret;
 
     sdram = opaque;
     switch (dcrn) {
@@ -516,7 +516,7 @@ static target_ulong dcr_read_sdram (void *opaque, int dcrn)
     return ret;
 }
 
-static void dcr_write_sdram (void *opaque, int dcrn, target_ulong val)
+static void dcr_write_sdram (void *opaque, int dcrn, uint32_t val)
 {
     ppc4xx_sdram_t *sdram;
 
@@ -668,7 +668,9 @@ ram_addr_t ppc4xx_sdram_adjust(ram_addr_t ram_size, int nr_banks,
             unsigned int bank_size = sdram_bank_sizes[j];
 
             if (bank_size <= size_left) {
-                ram_bases[i] = qemu_ram_alloc(bank_size);
+                char name[32];
+                snprintf(name, sizeof(name), "ppc4xx.sdram%d", i);
+                ram_bases[i] = qemu_ram_alloc(NULL, name, bank_size);
                 ram_sizes[i] = bank_size;
                 size_left -= bank_size;
                 break;

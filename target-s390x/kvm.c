@@ -91,7 +91,7 @@ void kvm_arch_reset_vcpu(CPUState *env)
     /* FIXME: add code to reset vcpu. */
 }
 
-int kvm_arch_put_registers(CPUState *env)
+int kvm_arch_put_registers(CPUState *env, int level)
 {
     struct kvm_regs regs;
     int ret;
@@ -175,6 +175,11 @@ int kvm_arch_post_run(CPUState *env, struct kvm_run *run)
     return 0;
 }
 
+int kvm_arch_process_irqchip_events(CPUState *env)
+{
+    return 0;
+}
+
 static void kvm_s390_interrupt_internal(CPUState *env, int type, uint32_t parm,
                                         uint64_t parm64, int vm)
 {
@@ -186,7 +191,7 @@ static void kvm_s390_interrupt_internal(CPUState *env, int type, uint32_t parm,
     }
 
     env->halted = 0;
-    env->exception_index = 0;
+    env->exception_index = -1;
 
     kvmint.type = type;
     kvmint.parm = parm;
@@ -296,7 +301,6 @@ static int handle_hypercall(CPUState *env, struct kvm_run *run)
 
     cpu_synchronize_state(env);
     r = s390_virtio_hypercall(env);
-    kvm_arch_put_registers(env);
 
     return r;
 }
@@ -325,7 +329,7 @@ static int s390_cpu_restart(CPUState *env)
 {
     kvm_s390_interrupt(env, KVM_S390_RESTART, 0);
     env->halted = 0;
-    env->exception_index = 0;
+    env->exception_index = -1;
     qemu_cpu_kick(env);
     dprintf("DONE: SIGP cpu restart: %p\n", env);
     return 0;
@@ -340,9 +344,20 @@ static int s390_store_status(CPUState *env, uint32_t parameter)
 
 static int s390_cpu_initial_reset(CPUState *env)
 {
-    /* XXX */
-    fprintf(stderr, "XXX SIGP init\n");
-    return -1;
+    int i;
+
+    if (kvm_vcpu_ioctl(env, KVM_S390_INITIAL_RESET, NULL) < 0) {
+        perror("cannot init reset vcpu");
+    }
+
+    /* Manually zero out all registers */
+    cpu_synchronize_state(env);
+    for (i = 0; i < 16; i++) {
+        env->regs[i] = 0;
+    }
+
+    dprintf("DONE: SIGP initial reset: %p\n", env);
+    return 0;
 }
 
 static int handle_sigp(CPUState *env, struct kvm_run *run, uint8_t ipa1)
@@ -480,4 +495,9 @@ int kvm_arch_handle_exit(CPUState *env, struct kvm_run *run)
     }
 
     return ret;
+}
+
+bool kvm_arch_stop_on_emulation_error(CPUState *env)
+{
+    return true;
 }

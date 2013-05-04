@@ -146,15 +146,7 @@ typedef struct CPUARMState {
         int current_sp;
         int exception;
         int pending_exception;
-        void *nvic;
     } v7m;
-
-    /* Coprocessor IO used by peripherals */
-    struct {
-        ARMReadCPFunc *cp_read;
-        ARMWriteCPFunc *cp_write;
-        void *opaque;
-    } cp[15];
 
     /* Thumb-2 EE state.  */
     uint32_t teecr;
@@ -205,6 +197,14 @@ typedef struct CPUARMState {
     CPU_COMMON
 
     /* These fields after the common ones so they are preserved on reset.  */
+
+    /* Coprocessor IO used by peripherals */
+    struct {
+        ARMReadCPFunc *cp_read;
+        ARMWriteCPFunc *cp_write;
+        void *opaque;
+    } cp[15];
+    void *nvic;
     struct arm_boot_info *boot_info;
 } CPUARMState;
 
@@ -405,6 +405,9 @@ void cpu_arm_set_cp_io(CPUARMState *env, int cpnum,
 #define TARGET_PAGE_BITS 10
 #endif
 
+#define TARGET_PHYS_ADDR_SPACE_BITS 32
+#define TARGET_VIRT_ADDR_SPACE_BITS 32
+
 #define cpu_init cpu_arm_init
 #define cpu_exec cpu_arm_exec
 #define cpu_gen_code cpu_arm_gen_code
@@ -432,12 +435,6 @@ static inline void cpu_clone_regs(CPUState *env, target_ulong newsp)
 #endif
 
 #include "cpu-all.h"
-#include "exec-all.h"
-
-static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)
-{
-    env->regs[15] = tb->pc;
-}
 
 static inline void cpu_get_tb_cpu_state(CPUState *env, target_ulong *pc,
                                         target_ulong *cs_base, int *flags)

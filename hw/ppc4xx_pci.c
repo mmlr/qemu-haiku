@@ -378,7 +378,7 @@ PCIBus *ppc4xx_pci_init(CPUState *env, qemu_irq pci_irqs[4],
     cpu_register_physical_memory(config_space + PCIC0_CFGADDR, 4, index);
 
     /* CFGDATA */
-    index = pci_host_data_register_mmio(&controller->pci_state);
+    index = pci_host_data_register_mmio(&controller->pci_state, 1);
     if (index < 0)
         goto free;
     cpu_register_physical_memory(config_space + PCIC0_CFGDATA, 4, index);
@@ -392,8 +392,8 @@ PCIBus *ppc4xx_pci_init(CPUState *env, qemu_irq pci_irqs[4],
     qemu_register_reset(ppc4xx_pci_reset, controller);
 
     /* XXX load/save code not tested. */
-    register_savevm("ppc4xx_pci", ppc4xx_pci_id++, 1,
-                    ppc4xx_pci_save, ppc4xx_pci_load, controller);
+    register_savevm(&controller->pci_dev->qdev, "ppc4xx_pci", ppc4xx_pci_id++,
+                    1, ppc4xx_pci_save, ppc4xx_pci_load, controller);
 
     return controller->pci_state.bus;
 

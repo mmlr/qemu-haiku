@@ -1,6 +1,9 @@
 /*
  * QEMU e1000 emulation
  *
+ * Software developer's manual:
+ * http://download.intel.com/design/network/manuals/8254x_GBe_SDM.pdf
+ *
  * Nir Peleg, Tutis Systems Ltd. for Qumranet Inc.
  * Copyright (c) 2008 Qumranet
  * Based on work done by:
@@ -30,9 +33,9 @@
 
 #include "e1000_hw.h"
 
-#define DEBUG
+#define E1000_DEBUG
 
-#ifdef DEBUG
+#ifdef E1000_DEBUG
 enum {
     DEBUG_GENERAL,	DEBUG_IO,	DEBUG_MMIO,	DEBUG_INTERRUPT,
     DEBUG_RX,		DEBUG_TX,	DEBUG_MDIC,	DEBUG_EEPROM,
@@ -259,19 +262,18 @@ set_eecd(E1000State *s, int index, uint32_t val)
 
     s->eecd_state.old_eecd = val & (E1000_EECD_SK | E1000_EECD_CS |
             E1000_EECD_DI|E1000_EECD_FWE_MASK|E1000_EECD_REQ);
+    if (!(E1000_EECD_CS & val))			// CS inactive; nothing to do
+	return;
+    if (E1000_EECD_CS & (val ^ oldval)) {	// CS rise edge; reset state
+	s->eecd_state.val_in = 0;
+	s->eecd_state.bitnum_in = 0;
+	s->eecd_state.bitnum_out = 0;
+	s->eecd_state.reading = 0;
+    }
     if (!(E1000_EECD_SK & (val ^ oldval)))	// no clock edge
         return;
     if (!(E1000_EECD_SK & val)) {		// falling edge
         s->eecd_state.bitnum_out++;
-        return;
-    }
-    if (!(val & E1000_EECD_CS)) {		// rising, no CS (EEPROM reset)
-        memset(&s->eecd_state, 0, sizeof s->eecd_state);
-        /*
-         * restore old_eecd's E1000_EECD_SK (known to be on)
-         * to avoid false detection of a clock edge
-         */
-        s->eecd_state.old_eecd = E1000_EECD_SK;
         return;
     }
     s->eecd_state.val_in <<= 1;
@@ -339,6 +341,15 @@ static inline int
 is_vlan_txd(uint32_t txd_lower)
 {
     return ((txd_lower & E1000_TXD_CMD_VLE) != 0);
+}
+
+/* FCS aka Ethernet CRC-32. We don't get it from backends and can't
+ * fill it in, just pad descriptor length by 4 bytes unless guest
+ * told us to trip it off the packet. */
+static inline int
+fcs_len(E1000State *s)
+{
+    return (s->mac_reg[RCTL] & E1000_RCTL_SECRC) ? 0 : 4;
 }
 
 static void
@@ -541,8 +552,8 @@ start_xmit(E1000State *s)
 static int
 receive_filter(E1000State *s, const uint8_t *buf, int size)
 {
-    static uint8_t bcast[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-    static int mta_shift[] = {4, 3, 2, 0};
+    static const uint8_t bcast[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    static const int mta_shift[] = {4, 3, 2, 0};
     uint32_t f, rctl = s->mac_reg[RCTL], ra[2], *rp;
 
     if (is_vlan_packet(s, buf) && vlan_rx_filter_enabled(s)) {
@@ -639,14 +650,13 @@ e1000_receive(VLANClientState *nc, const uint8_t *buf, size_t size)
 
     if (vlan_enabled(s) && is_vlan_packet(s, buf)) {
         vlan_special = cpu_to_le16(be16_to_cpup((uint16_t *)(buf + 14)));
-        memmove((void *)(buf + 4), buf, 12);
+        memmove((uint8_t *)buf + 4, buf, 12);
         vlan_status = E1000_RXD_STAT_VP;
         vlan_offset = 4;
         size -= 4;
     }
 
     rdh_start = s->mac_reg[RDH];
-    size += 4; // for the header
     do {
         if (s->mac_reg[RDH] == s->mac_reg[RDT] && s->check_rxov) {
             set_ics(s, 0, E1000_ICS_RXO);
@@ -660,7 +670,7 @@ e1000_receive(VLANClientState *nc, const uint8_t *buf, size_t size)
         if (desc.buffer_addr) {
             cpu_physical_memory_write(le64_to_cpu(desc.buffer_addr),
                                       (void *)(buf + vlan_offset), size);
-            desc.length = cpu_to_le16(size);
+            desc.length = cpu_to_le16(size + fcs_len(s));
             desc.status |= E1000_RXD_STAT_EOP|E1000_RXD_STAT_IXSM;
         } else // as per intel docs; skip descriptors with null buf addr
             DBGOUT(RX, "Null RX descriptor!!\n");
@@ -1089,12 +1099,15 @@ static int pci_e1000_init(PCIDevice *pci_dev)
 
     pci_config_set_vendor_id(pci_conf, PCI_VENDOR_ID_INTEL);
     pci_config_set_device_id(pci_conf, E1000_DEVID);
-    *(uint16_t *)(pci_conf+0x06) = cpu_to_le16(0x0010);
-    pci_conf[0x08] = 0x03;
+    /* TODO: we have no capabilities, so why is this bit set? */
+    pci_set_word(pci_conf + PCI_STATUS, PCI_STATUS_CAP_LIST);
+    pci_conf[PCI_REVISION_ID] = 0x03;
     pci_config_set_class(pci_conf, PCI_CLASS_NETWORK_ETHERNET);
-    pci_conf[0x0c] = 0x10;
+    /* TODO: RST# value should be 0, PCI spec 6.2.4 */
+    pci_conf[PCI_CACHE_LINE_SIZE] = 0x10;
 
-    pci_conf[0x3d] = 1; // interrupt pin 0
+    /* TODO: RST# value should be 0 if programmable, PCI spec 6.2.4 */
+    pci_conf[PCI_INTERRUPT_PIN] = 1; // interrupt pin 0
 
     d->mmio_index = cpu_register_io_memory(e1000_mmio_read,
             e1000_mmio_write, d);

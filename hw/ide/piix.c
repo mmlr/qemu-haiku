@@ -78,7 +78,6 @@ static void bmdma_map(PCIDevice *pci_dev, int region_num,
         BMDMAState *bm = &d->bmdma[i];
         d->bus[i].bmdma = bm;
         bm->bus = d->bus+i;
-        bm->pci_dev = d;
         qemu_add_vm_change_state_handler(ide_dma_restart_cb, bm);
 
         register_ioport_write(addr, 1, 1, bmdma_cmd_writeb, bm);
@@ -107,10 +106,13 @@ static void piix3_reset(void *opaque)
         ide_dma_reset(&d->bmdma[i]);
     }
 
-    pci_conf[0x04] = 0x00;
-    pci_conf[0x05] = 0x00;
-    pci_conf[0x06] = 0x80; /* FBC */
-    pci_conf[0x07] = 0x02; // PCI_status_devsel_medium
+    /* TODO: this is the default. do not override. */
+    pci_conf[PCI_COMMAND] = 0x00;
+    /* TODO: this is the default. do not override. */
+    pci_conf[PCI_COMMAND + 1] = 0x00;
+    /* TODO: use pci_set_word */
+    pci_conf[PCI_STATUS] = PCI_STATUS_FAST_BACK;
+    pci_conf[PCI_STATUS + 1] = PCI_STATUS_DEVSEL_MEDIUM >> 8;
     pci_conf[0x20] = 0x01; /* BMIBA: 20-23h */
 }
 
@@ -118,23 +120,22 @@ static int pci_piix_ide_initfn(PCIIDEState *d)
 {
     uint8_t *pci_conf = d->dev.config;
 
-    pci_conf[0x09] = 0x80; // legacy ATA mode
+    pci_conf[PCI_CLASS_PROG] = 0x80; // legacy ATA mode
     pci_config_set_class(pci_conf, PCI_CLASS_STORAGE_IDE);
-    pci_conf[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
 
     qemu_register_reset(piix3_reset, d);
 
     pci_register_bar(&d->dev, 4, 0x10, PCI_BASE_ADDRESS_SPACE_IO, bmdma_map);
 
-    vmstate_register(0, &vmstate_ide_pci, d);
+    vmstate_register(&d->dev.qdev, 0, &vmstate_ide_pci, d);
 
     ide_bus_new(&d->bus[0], &d->dev.qdev);
     ide_bus_new(&d->bus[1], &d->dev.qdev);
     ide_init_ioport(&d->bus[0], 0x1f0, 0x3f6);
     ide_init_ioport(&d->bus[1], 0x170, 0x376);
 
-    ide_init2(&d->bus[0], NULL, NULL, isa_reserve_irq(14));
-    ide_init2(&d->bus[1], NULL, NULL, isa_reserve_irq(15));
+    ide_init2(&d->bus[0], isa_reserve_irq(14));
+    ide_init2(&d->bus[1], isa_reserve_irq(15));
     return 0;
 }
 
@@ -158,22 +159,24 @@ static int pci_piix4_ide_initfn(PCIDevice *dev)
 
 /* hd_table must contain 4 block drivers */
 /* NOTE: for the PIIX3, the IRQs and IOports are hardcoded */
-void pci_piix3_ide_init(PCIBus *bus, DriveInfo **hd_table, int devfn)
+PCIDevice *pci_piix3_ide_init(PCIBus *bus, DriveInfo **hd_table, int devfn)
 {
     PCIDevice *dev;
 
     dev = pci_create_simple(bus, devfn, "piix3-ide");
     pci_ide_create_devs(dev, hd_table);
+    return dev;
 }
 
 /* hd_table must contain 4 block drivers */
 /* NOTE: for the PIIX4, the IRQs and IOports are hardcoded */
-void pci_piix4_ide_init(PCIBus *bus, DriveInfo **hd_table, int devfn)
+PCIDevice *pci_piix4_ide_init(PCIBus *bus, DriveInfo **hd_table, int devfn)
 {
     PCIDevice *dev;
 
     dev = pci_create_simple(bus, devfn, "piix4-ide");
     pci_ide_create_devs(dev, hd_table);
+    return dev;
 }
 
 static PCIDeviceInfo piix_ide_info[] = {

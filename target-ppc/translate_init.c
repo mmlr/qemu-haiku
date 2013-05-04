@@ -777,16 +777,16 @@ static void gen_tbl (CPUPPCState *env)
                  &spr_read_tbl, SPR_NOACCESS,
                  0x00000000);
     spr_register(env, SPR_TBL,   "TBL",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 SPR_NOACCESS, &spr_write_tbl,
+                 &spr_read_tbl, SPR_NOACCESS,
+                 &spr_read_tbl, &spr_write_tbl,
                  0x00000000);
     spr_register(env, SPR_VTBU,  "TBU",
                  &spr_read_tbu, SPR_NOACCESS,
                  &spr_read_tbu, SPR_NOACCESS,
                  0x00000000);
     spr_register(env, SPR_TBU,   "TBU",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 SPR_NOACCESS, &spr_write_tbu,
+                 &spr_read_tbu, SPR_NOACCESS,
+                 &spr_read_tbu, &spr_write_tbu,
                  0x00000000);
 }
 
@@ -5237,7 +5237,7 @@ static void init_proc_755 (CPUPPCState *env)
 #define POWERPC_FLAG_7400    (POWERPC_FLAG_VRE | POWERPC_FLAG_SE |            \
                               POWERPC_FLAG_BE | POWERPC_FLAG_PMM |            \
                               POWERPC_FLAG_BUS_CLK)
-#define check_pow_7400       check_pow_hid0_74xx
+#define check_pow_7400       check_pow_hid0
 
 static void init_proc_7400 (CPUPPCState *env)
 {
@@ -5289,7 +5289,7 @@ static void init_proc_7400 (CPUPPCState *env)
 #define POWERPC_FLAG_7410    (POWERPC_FLAG_VRE | POWERPC_FLAG_SE |            \
                               POWERPC_FLAG_BE | POWERPC_FLAG_PMM |            \
                               POWERPC_FLAG_BUS_CLK)
-#define check_pow_7410       check_pow_hid0_74xx
+#define check_pow_7410       check_pow_hid0
 
 static void init_proc_7410 (CPUPPCState *env)
 {
