@@ -1,8 +1,0 @@
-1) The QEMU Accelerator Module (aka KQEMU) is released under the GNU
-   General Public license version 2.
-
-2) The header file "kqemu.h" is released under the BSD license.
-
-3) QEMU is a trademark of Fabrice Bellard.
-
-Fabrice Bellard.

@@ -1,4 +1,0 @@
-1) Read the documentation kqemu-doc.html
-2) Launch ./configure
-3) Type 'make' to compile
-4) Type 'make install' as root to install
