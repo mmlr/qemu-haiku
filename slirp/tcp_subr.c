@@ -325,7 +325,7 @@ int tcp_fconnect(struct socket *so)
   DEBUG_CALL("tcp_fconnect");
   DEBUG_ARG("so = %lx", (long )so);
 
-  if( (ret=so->s=socket(AF_INET,SOCK_STREAM,0)) >= 0) {
+  if( (ret = so->s = qemu_socket(AF_INET,SOCK_STREAM,0)) >= 0) {
     int opt, s=so->s;
     struct sockaddr_in addr;
 
@@ -340,7 +340,8 @@ int tcp_fconnect(struct socket *so)
         slirp->vnetwork_addr.s_addr) {
       /* It's an alias */
       if (so->so_faddr.s_addr == slirp->vnameserver_addr.s_addr) {
-	addr.sin_addr = dns_addr;
+	if (get_dns_addr(&addr.sin_addr) < 0)
+	  addr.sin_addr = loopback_addr;
       } else {
 	addr.sin_addr = loopback_addr;
       }

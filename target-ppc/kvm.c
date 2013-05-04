@@ -44,7 +44,17 @@ int kvm_arch_init(KVMState *s, int smp_cpus)
 
 int kvm_arch_init_vcpu(CPUState *cenv)
 {
-    return 0;
+    int ret = 0;
+    struct kvm_sregs sregs;
+
+    sregs.pvr = cenv->spr[SPR_PVR];
+    ret = kvm_vcpu_ioctl(cenv, KVM_SET_SREGS, &sregs);
+
+    return ret;
+}
+
+void kvm_arch_reset_vcpu(CPUState *env)
+{
 }
 
 int kvm_arch_put_registers(CPUState *env)
@@ -88,9 +98,14 @@ int kvm_arch_put_registers(CPUState *env)
 int kvm_arch_get_registers(CPUState *env)
 {
     struct kvm_regs regs;
+    struct kvm_sregs sregs;
     uint32_t i, ret;
 
     ret = kvm_vcpu_ioctl(env, KVM_GET_REGS, &regs);
+    if (ret < 0)
+        return ret;
+
+    ret = kvm_vcpu_ioctl(env, KVM_GET_SREGS, &sregs);
     if (ret < 0)
         return ret;
 
@@ -115,8 +130,43 @@ int kvm_arch_get_registers(CPUState *env)
     for (i = 0;i < 32; i++)
         env->gpr[i] = regs.gpr[i];
 
+#ifdef KVM_CAP_PPC_SEGSTATE
+    if (kvm_check_extension(env->kvm_state, KVM_CAP_PPC_SEGSTATE)) {
+        env->sdr1 = sregs.u.s.sdr1;
+
+        /* Sync SLB */
+#ifdef TARGET_PPC64
+        for (i = 0; i < 64; i++) {
+            ppc_store_slb(env, sregs.u.s.ppc64.slb[i].slbe,
+                               sregs.u.s.ppc64.slb[i].slbv);
+        }
+#endif
+
+        /* Sync SRs */
+        for (i = 0; i < 16; i++) {
+            env->sr[i] = sregs.u.s.ppc32.sr[i];
+        }
+
+        /* Sync BATs */
+        for (i = 0; i < 8; i++) {
+            env->DBAT[0][i] = sregs.u.s.ppc32.dbat[i] & 0xffffffff;
+            env->DBAT[1][i] = sregs.u.s.ppc32.dbat[i] >> 32;
+            env->IBAT[0][i] = sregs.u.s.ppc32.ibat[i] & 0xffffffff;
+            env->IBAT[1][i] = sregs.u.s.ppc32.ibat[i] >> 32;
+        }
+    }
+#endif
+
     return 0;
 }
+
+#if defined(TARGET_PPCEMB)
+#define PPC_INPUT_INT PPC40x_INPUT_INT
+#elif defined(TARGET_PPC64)
+#define PPC_INPUT_INT PPC970_INPUT_INT
+#else
+#define PPC_INPUT_INT PPC6xx_INPUT_INT
+#endif
 
 int kvm_arch_pre_run(CPUState *env, struct kvm_run *run)
 {
@@ -127,7 +177,7 @@ int kvm_arch_pre_run(CPUState *env, struct kvm_run *run)
      * interrupt, reset, etc) in PPC-specific env->irq_input_state. */
     if (run->ready_for_interrupt_injection &&
         (env->interrupt_request & CPU_INTERRUPT_HARD) &&
-        (env->irq_input_state & (1<<PPC40x_INPUT_INT)))
+        (env->irq_input_state & (1<<PPC_INPUT_INT)))
     {
         /* For now KVM disregards the 'irq' argument. However, in the
          * future KVM could cache it in-kernel to avoid a heavyweight exit

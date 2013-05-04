@@ -46,10 +46,10 @@ uint64_t helper_load_fpcr (void)
 {
     uint64_t ret = 0;
 #ifdef CONFIG_SOFTFLOAT
-    ret |= env->fp_status.float_exception_flags << 52;
+    ret |= (uint64_t)env->fp_status.float_exception_flags << 52;
     if (env->fp_status.float_exception_flags)
         ret |= 1ULL << 63;
-    env->ipr[IPR_EXC_SUM] &= ~0x3E:
+    env->ipr[IPR_EXC_SUM] &= ~0x3E;
     env->ipr[IPR_EXC_SUM] |= env->fp_status.float_exception_flags << 1;
 #endif
     switch (env->fp_status.float_rounding_mode) {
@@ -89,7 +89,7 @@ void helper_store_fpcr (uint64_t val)
     }
 }
 
-spinlock_t intr_cpu_lock = SPIN_LOCK_UNLOCKED;
+static spinlock_t intr_cpu_lock = SPIN_LOCK_UNLOCKED;
 
 uint64_t helper_rs(void)
 {
@@ -200,7 +200,7 @@ uint64_t helper_cttz (uint64_t arg)
     return ctz64(arg);
 }
 
-static always_inline uint64_t byte_zap (uint64_t op, uint8_t mskb)
+static inline uint64_t byte_zap(uint64_t op, uint8_t mskb)
 {
     uint64_t mask;
 
@@ -322,7 +322,7 @@ uint64_t helper_cmpbge (uint64_t op1, uint64_t op2)
 /* Floating point helpers */
 
 /* F floating (VAX) */
-static always_inline uint64_t float32_to_f (float32 fa)
+static inline uint64_t float32_to_f(float32 fa)
 {
     uint64_t r, exp, mant, sig;
     CPU_FloatU a;
@@ -355,7 +355,7 @@ static always_inline uint64_t float32_to_f (float32 fa)
     return r;
 }
 
-static always_inline float32 f_to_float32 (uint64_t a)
+static inline float32 f_to_float32(uint64_t a)
 {
     uint32_t exp, mant_sig;
     CPU_FloatU r;
@@ -449,7 +449,7 @@ uint64_t helper_sqrtf (uint64_t t)
 
 
 /* G floating (VAX) */
-static always_inline uint64_t float64_to_g (float64 fa)
+static inline uint64_t float64_to_g(float64 fa)
 {
     uint64_t r, exp, mant, sig;
     CPU_DoubleU a;
@@ -482,7 +482,7 @@ static always_inline uint64_t float64_to_g (float64 fa)
     return r;
 }
 
-static always_inline float64 g_to_float64 (uint64_t a)
+static inline float64 g_to_float64(uint64_t a)
 {
     uint64_t exp, mant_sig;
     CPU_DoubleU r;
@@ -576,7 +576,7 @@ uint64_t helper_sqrtg (uint64_t a)
 
 
 /* S floating (single) */
-static always_inline uint64_t float32_to_s (float32 fa)
+static inline uint64_t float32_to_s(float32 fa)
 {
     CPU_FloatU a;
     uint64_t r;
@@ -589,7 +589,7 @@ static always_inline uint64_t float32_to_s (float32 fa)
     return r;
 }
 
-static always_inline float32 s_to_float32 (uint64_t a)
+static inline float32 s_to_float32(uint64_t a)
 {
     CPU_FloatU r;
     r.l = ((a >> 32) & 0xc0000000) | ((a >> 29) & 0x3fffffff);
@@ -660,7 +660,7 @@ uint64_t helper_sqrts (uint64_t a)
 
 
 /* T floating (double) */
-static always_inline float64 t_to_float64 (uint64_t a)
+static inline float64 t_to_float64(uint64_t a)
 {
     /* Memory format is the same as float64 */
     CPU_DoubleU r;
@@ -668,7 +668,7 @@ static always_inline float64 t_to_float64 (uint64_t a)
     return r.d;
 }
 
-static always_inline uint64_t float64_to_t (float64 fa)
+static inline uint64_t float64_to_t(float64 fa)
 {
     /* Memory format is the same as float64 */
     CPU_DoubleU r;
@@ -939,7 +939,7 @@ uint64_t helper_cvtlq (uint64_t a)
     return (int64_t)((int32_t)((a >> 32) | ((a >> 29) & 0x3FFFFFFF)));
 }
 
-static always_inline uint64_t __helper_cvtql (uint64_t a, int s, int v)
+static inline uint64_t __helper_cvtql(uint64_t a, int s, int v)
 {
     uint64_t r;
 

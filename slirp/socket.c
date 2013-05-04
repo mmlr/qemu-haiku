@@ -552,7 +552,8 @@ sosendto(struct socket *so, struct mbuf *m)
 	    slirp->vnetwork_addr.s_addr) {
 	  /* It's an alias */
 	  if (so->so_faddr.s_addr == slirp->vnameserver_addr.s_addr) {
-	    addr.sin_addr = dns_addr;
+	    if (get_dns_addr(&addr.sin_addr) < 0)
+	      addr.sin_addr = loopback_addr;
 	  } else {
 	    addr.sin_addr = loopback_addr;
 	  }
@@ -625,7 +626,7 @@ tcp_listen(Slirp *slirp, u_int32_t haddr, u_int hport, u_int32_t laddr,
 	addr.sin_addr.s_addr = haddr;
 	addr.sin_port = hport;
 
-	if (((s = socket(AF_INET,SOCK_STREAM,0)) < 0) ||
+	if (((s = qemu_socket(AF_INET,SOCK_STREAM,0)) < 0) ||
 	    (setsockopt(s,SOL_SOCKET,SO_REUSEADDR,(char *)&opt,sizeof(int)) < 0) ||
 	    (bind(s,(struct sockaddr *)&addr, sizeof(addr)) < 0) ||
 	    (listen(s,1) < 0)) {

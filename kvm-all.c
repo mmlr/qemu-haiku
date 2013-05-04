@@ -57,12 +57,16 @@ struct KVMState
     KVMSlot slots[32];
     int fd;
     int vmfd;
+    int regs_modified;
     int coalesced_mmio;
     int broken_set_mem_region;
     int migration_log;
+    int vcpu_events;
 #ifdef KVM_CAP_SET_GUEST_DEBUG
     struct kvm_sw_breakpoint_head kvm_sw_breakpoints;
 #endif
+    int irqchip_in_kernel;
+    int pit_in_kernel;
 };
 
 static KVMState *kvm_state;
@@ -147,11 +151,23 @@ static void kvm_reset_vcpu(void *opaque)
 {
     CPUState *env = opaque;
 
+    kvm_arch_reset_vcpu(env);
     if (kvm_arch_put_registers(env)) {
         fprintf(stderr, "Fatal: kvm vcpu reset failed\n");
         abort();
     }
 }
+
+int kvm_irqchip_in_kernel(void)
+{
+    return kvm_state->irqchip_in_kernel;
+}
+
+int kvm_pit_in_kernel(void)
+{
+    return kvm_state->pit_in_kernel;
+}
+
 
 int kvm_init_vcpu(CPUState *env)
 {
@@ -187,6 +203,7 @@ int kvm_init_vcpu(CPUState *env)
     ret = kvm_arch_init_vcpu(env);
     if (ret == 0) {
         qemu_register_reset(kvm_reset_vcpu, env);
+        kvm_arch_reset_vcpu(env);
         ret = kvm_arch_put_registers(env);
     }
 err:
@@ -206,7 +223,7 @@ static int kvm_dirty_pages_log_change(target_phys_addr_t phys_addr,
     if (mem == NULL)  {
             fprintf(stderr, "BUG: %s: invalid parameters " TARGET_FMT_plx "-"
                     TARGET_FMT_plx "\n", __func__, phys_addr,
-                    phys_addr + size - 1);
+                    (target_phys_addr_t)(phys_addr + size - 1));
             return -EINVAL;
     }
 
@@ -262,6 +279,11 @@ int kvm_set_migration_log(int enable)
     return 0;
 }
 
+static int test_le_bit(unsigned long nr, unsigned char *addr)
+{
+    return (addr[nr >> 3] >> (nr & 7)) & 1;
+}
+
 /**
  * kvm_physical_sync_dirty_bitmap - Grab dirty bitmap from kernel space
  * This function updates qemu's dirty bitmap using cpu_physical_memory_set_dirty().
@@ -308,12 +330,10 @@ int kvm_physical_sync_dirty_bitmap(target_phys_addr_t start_addr,
         for (phys_addr = mem->start_addr, addr = mem->phys_offset;
              phys_addr < mem->start_addr + mem->memory_size;
              phys_addr += TARGET_PAGE_SIZE, addr += TARGET_PAGE_SIZE) {
-            unsigned long *bitmap = (unsigned long *)d.dirty_bitmap;
+            unsigned char *bitmap = (unsigned char *)d.dirty_bitmap;
             unsigned nr = (phys_addr - mem->start_addr) >> TARGET_PAGE_BITS;
-            unsigned word = nr / (sizeof(*bitmap) * 8);
-            unsigned bit = nr % (sizeof(*bitmap) * 8);
 
-            if ((bitmap[word] >> bit) & 1) {
+            if (test_le_bit(nr, bitmap)) {
                 cpu_physical_memory_set_dirty(addr);
             }
         }
@@ -391,13 +411,13 @@ int kvm_init(int smp_cpus)
     s = qemu_mallocz(sizeof(KVMState));
 
 #ifdef KVM_CAP_SET_GUEST_DEBUG
-    TAILQ_INIT(&s->kvm_sw_breakpoints);
+    QTAILQ_INIT(&s->kvm_sw_breakpoints);
 #endif
     for (i = 0; i < ARRAY_SIZE(s->slots); i++)
         s->slots[i].slot = i;
 
     s->vmfd = -1;
-    s->fd = open("/dev/kvm", O_RDWR);
+    s->fd = qemu_open("/dev/kvm", O_RDWR);
     if (s->fd == -1) {
         fprintf(stderr, "Could not access KVM kernel module: %m\n");
         ret = -errno;
@@ -460,6 +480,11 @@ int kvm_init(int smp_cpus)
     }
 #endif
 
+    s->vcpu_events = 0;
+#ifdef KVM_CAP_VCPU_EVENTS
+    s->vcpu_events = kvm_check_extension(s, KVM_CAP_VCPU_EVENTS);
+#endif
+
     ret = kvm_arch_init(s, smp_cpus);
     if (ret < 0)
         goto err;
@@ -480,8 +505,8 @@ err:
     return ret;
 }
 
-static int kvm_handle_io(CPUState *env, uint16_t port, void *data,
-                         int direction, int size, uint32_t count)
+static int kvm_handle_io(uint16_t port, void *data, int direction, int size,
+                         uint32_t count)
 {
     int i;
     uint8_t *ptr = data;
@@ -490,25 +515,25 @@ static int kvm_handle_io(CPUState *env, uint16_t port, void *data,
         if (direction == KVM_EXIT_IO_IN) {
             switch (size) {
             case 1:
-                stb_p(ptr, cpu_inb(env, port));
+                stb_p(ptr, cpu_inb(port));
                 break;
             case 2:
-                stw_p(ptr, cpu_inw(env, port));
+                stw_p(ptr, cpu_inw(port));
                 break;
             case 4:
-                stl_p(ptr, cpu_inl(env, port));
+                stl_p(ptr, cpu_inl(port));
                 break;
             }
         } else {
             switch (size) {
             case 1:
-                cpu_outb(env, port, ldub_p(ptr));
+                cpu_outb(port, ldub_p(ptr));
                 break;
             case 2:
-                cpu_outw(env, port, lduw_p(ptr));
+                cpu_outw(port, lduw_p(ptr));
                 break;
             case 4:
-                cpu_outl(env, port, ldl_p(ptr));
+                cpu_outl(port, ldl_p(ptr));
                 break;
             }
         }
@@ -540,6 +565,14 @@ static void kvm_run_coalesced_mmio(CPUState *env, struct kvm_run *run)
 #endif
 }
 
+void kvm_cpu_synchronize_state(CPUState *env)
+{
+    if (!env->kvm_state->regs_modified) {
+        kvm_arch_get_registers(env);
+        env->kvm_state->regs_modified = 1;
+    }
+}
+
 int kvm_cpu_exec(CPUState *env)
 {
     struct kvm_run *run = env->kvm_run;
@@ -554,8 +587,15 @@ int kvm_cpu_exec(CPUState *env)
             break;
         }
 
+        if (env->kvm_state->regs_modified) {
+            kvm_arch_put_registers(env);
+            env->kvm_state->regs_modified = 0;
+        }
+
         kvm_arch_pre_run(env, run);
+        qemu_mutex_unlock_iothread();
         ret = kvm_vcpu_ioctl(env, KVM_RUN, 0);
+        qemu_mutex_lock_iothread();
         kvm_arch_post_run(env, run);
 
         if (ret == -EINTR || ret == -EAGAIN) {
@@ -575,7 +615,7 @@ int kvm_cpu_exec(CPUState *env)
         switch (run->exit_reason) {
         case KVM_EXIT_IO:
             dprintf("handle_io\n");
-            ret = kvm_handle_io(env, run->io.port,
+            ret = kvm_handle_io(run->io.port,
                                 (uint8_t *)run + run->io.data_offset,
                                 run->io.direction,
                                 run->io.size,
@@ -834,6 +874,11 @@ int kvm_has_sync_mmu(void)
 #endif
 }
 
+int kvm_has_vcpu_events(void)
+{
+    return kvm_state->vcpu_events;
+}
+
 void kvm_setup_guest_memory(void *start, size_t size)
 {
     if (!kvm_has_sync_mmu()) {
@@ -853,12 +898,25 @@ void kvm_setup_guest_memory(void *start, size_t size)
 }
 
 #ifdef KVM_CAP_SET_GUEST_DEBUG
+static void on_vcpu(CPUState *env, void (*func)(void *data), void *data)
+{
+#ifdef CONFIG_IOTHREAD
+    if (env == cpu_single_env) {
+        func(data);
+        return;
+    }
+    abort();
+#else
+    func(data);
+#endif
+}
+
 struct kvm_sw_breakpoint *kvm_find_sw_breakpoint(CPUState *env,
                                                  target_ulong pc)
 {
     struct kvm_sw_breakpoint *bp;
 
-    TAILQ_FOREACH(bp, &env->kvm_state->kvm_sw_breakpoints, entry) {
+    QTAILQ_FOREACH(bp, &env->kvm_state->kvm_sw_breakpoints, entry) {
         if (bp->pc == pc)
             return bp;
     }
@@ -867,21 +925,41 @@ struct kvm_sw_breakpoint *kvm_find_sw_breakpoint(CPUState *env,
 
 int kvm_sw_breakpoints_active(CPUState *env)
 {
-    return !TAILQ_EMPTY(&env->kvm_state->kvm_sw_breakpoints);
+    return !QTAILQ_EMPTY(&env->kvm_state->kvm_sw_breakpoints);
+}
+
+struct kvm_set_guest_debug_data {
+    struct kvm_guest_debug dbg;
+    CPUState *env;
+    int err;
+};
+
+static void kvm_invoke_set_guest_debug(void *data)
+{
+    struct kvm_set_guest_debug_data *dbg_data = data;
+    CPUState *env = dbg_data->env;
+
+    if (env->kvm_state->regs_modified) {
+        kvm_arch_put_registers(env);
+        env->kvm_state->regs_modified = 0;
+    }
+    dbg_data->err = kvm_vcpu_ioctl(env, KVM_SET_GUEST_DEBUG, &dbg_data->dbg);
 }
 
 int kvm_update_guest_debug(CPUState *env, unsigned long reinject_trap)
 {
-    struct kvm_guest_debug dbg;
+    struct kvm_set_guest_debug_data data;
 
-    dbg.control = 0;
+    data.dbg.control = 0;
     if (env->singlestep_enabled)
-        dbg.control = KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP;
+        data.dbg.control = KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_SINGLESTEP;
 
-    kvm_arch_update_guest_debug(env, &dbg);
-    dbg.control |= reinject_trap;
+    kvm_arch_update_guest_debug(env, &data.dbg);
+    data.dbg.control |= reinject_trap;
+    data.env = env;
 
-    return kvm_vcpu_ioctl(env, KVM_SET_GUEST_DEBUG, &dbg);
+    on_vcpu(env, kvm_invoke_set_guest_debug, &data);
+    return data.err;
 }
 
 int kvm_insert_breakpoint(CPUState *current_env, target_ulong addr,
@@ -910,7 +988,7 @@ int kvm_insert_breakpoint(CPUState *current_env, target_ulong addr,
             return err;
         }
 
-        TAILQ_INSERT_HEAD(&current_env->kvm_state->kvm_sw_breakpoints,
+        QTAILQ_INSERT_HEAD(&current_env->kvm_state->kvm_sw_breakpoints,
                           bp, entry);
     } else {
         err = kvm_arch_insert_hw_breakpoint(addr, len, type);
@@ -947,7 +1025,7 @@ int kvm_remove_breakpoint(CPUState *current_env, target_ulong addr,
         if (err)
             return err;
 
-        TAILQ_REMOVE(&current_env->kvm_state->kvm_sw_breakpoints, bp, entry);
+        QTAILQ_REMOVE(&current_env->kvm_state->kvm_sw_breakpoints, bp, entry);
         qemu_free(bp);
     } else {
         err = kvm_arch_remove_hw_breakpoint(addr, len, type);
@@ -969,7 +1047,7 @@ void kvm_remove_all_breakpoints(CPUState *current_env)
     KVMState *s = current_env->kvm_state;
     CPUState *env;
 
-    TAILQ_FOREACH_SAFE(bp, &s->kvm_sw_breakpoints, entry, next) {
+    QTAILQ_FOREACH_SAFE(bp, &s->kvm_sw_breakpoints, entry, next) {
         if (kvm_arch_remove_sw_breakpoint(current_env, bp) != 0) {
             /* Try harder to find a CPU that currently sees the breakpoint. */
             for (env = first_cpu; env != NULL; env = env->next_cpu) {

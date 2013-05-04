@@ -39,7 +39,7 @@
 struct etrax_pic
 {
     SysBusDevice busdev;
-    uint32_t *interrupt_vector;
+    void *interrupt_vector;
     qemu_irq parent_irq;
     qemu_irq parent_nmi;
     uint32_t regs[R_MAX];
@@ -71,7 +71,8 @@ static void pic_update(struct etrax_pic *fs)
     }
 
     if (fs->interrupt_vector) {
-        *fs->interrupt_vector = vector;
+        /* hack alert: ptr property */
+        *(uint32_t*)(fs->interrupt_vector) = vector;
     }
     qemu_set_irq(fs->parent_irq, !!vector);
 }
@@ -98,12 +99,12 @@ pic_writel (void *opaque, target_phys_addr_t addr, uint32_t value)
     }
 }
 
-static CPUReadMemoryFunc *pic_read[] = {
+static CPUReadMemoryFunc * const pic_read[] = {
     NULL, NULL,
     &pic_readl,
 };
 
-static CPUWriteMemoryFunc *pic_write[] = {
+static CPUWriteMemoryFunc * const pic_write[] = {
     NULL, NULL,
     &pic_writel,
 };
@@ -135,7 +136,7 @@ static void irq_handler(void *opaque, int irq, int level)
     pic_update(fs);
 }
 
-static void etraxfs_pic_init(SysBusDevice *dev)
+static int etraxfs_pic_init(SysBusDevice *dev)
 {
     struct etrax_pic *s = FROM_SYSBUS(typeof (*s), dev);
     int intr_vect_regs;
@@ -146,6 +147,7 @@ static void etraxfs_pic_init(SysBusDevice *dev)
 
     intr_vect_regs = cpu_register_io_memory(pic_read, pic_write, s);
     sysbus_init_mmio(dev, R_MAX * 4, intr_vect_regs);
+    return 0;
 }
 
 static SysBusDeviceInfo etraxfs_pic_info = {
@@ -153,12 +155,8 @@ static SysBusDeviceInfo etraxfs_pic_info = {
     .qdev.name  = "etraxfs,pic",
     .qdev.size  = sizeof(struct etrax_pic),
     .qdev.props = (Property[]) {
-        {
-            .name   = "interrupt_vector",
-            .info   = &qdev_prop_ptr,
-            .offset = offsetof(struct etrax_pic, interrupt_vector),
-        },
-        {/* end of list */}
+        DEFINE_PROP_PTR("interrupt_vector", struct etrax_pic, interrupt_vector),
+        DEFINE_PROP_END_OF_LIST(),
     }
 };
 

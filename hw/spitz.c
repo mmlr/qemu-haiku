@@ -156,12 +156,12 @@ static void sl_flash_register(PXA2xxState *cpu, int size)
 {
     int iomemtype;
     SLNANDState *s;
-    CPUReadMemoryFunc *sl_readfn[] = {
+    CPUReadMemoryFunc * const sl_readfn[] = {
         sl_readb,
         sl_readb,
         sl_readl,
     };
-    CPUWriteMemoryFunc *sl_writefn[] = {
+    CPUWriteMemoryFunc * const sl_writefn[] = {
         sl_writeb,
         sl_writeb,
         sl_writeb,
@@ -392,7 +392,8 @@ static void spitz_keyboard_tick(void *opaque)
             s->fifopos = 0;
     }
 
-    qemu_mod_timer(s->kbdtimer, qemu_get_clock(vm_clock) + ticks_per_sec / 32);
+    qemu_mod_timer(s->kbdtimer, qemu_get_clock(vm_clock) +
+                   get_ticks_per_sec() / 32);
 }
 
 static void spitz_keyboard_pre_map(SpitzKeyboardState *s)
@@ -604,7 +605,7 @@ static int spitz_lcdtg_load(QEMUFile *f, void *opaque, int version_id)
     return 0;
 }
 
-static void spitz_lcdtg_init(SSISlave *dev)
+static int spitz_lcdtg_init(SSISlave *dev)
 {
     SpitzLCDTG *s = FROM_SSI_SLAVE(SpitzLCDTG, dev);
 
@@ -614,6 +615,7 @@ static void spitz_lcdtg_init(SSISlave *dev)
 
     register_savevm("spitz-lcdtg", -1, 1,
                     spitz_lcdtg_save, spitz_lcdtg_load, s);
+    return 0;
 }
 
 /* SSP devices */
@@ -697,7 +699,7 @@ static int spitz_ssp_load(QEMUFile *f, void *opaque, int version_id)
     return 0;
 }
 
-static void corgi_ssp_init(SSISlave *dev)
+static int corgi_ssp_init(SSISlave *dev)
 {
     CorgiSSPState *s = FROM_SSI_SLAVE(CorgiSSPState, dev);
 
@@ -707,6 +709,7 @@ static void corgi_ssp_init(SSISlave *dev)
     s->bus[2] = ssi_create_bus(&dev->qdev, "ssi2");
 
     register_savevm("spitz_ssp", -1, 1, spitz_ssp_save, spitz_ssp_load, s);
+    return 0;
 }
 
 static void spitz_ssp_attach(PXA2xxState *cpu)
@@ -744,15 +747,15 @@ static void spitz_ssp_attach(PXA2xxState *cpu)
 static void spitz_microdrive_attach(PXA2xxState *cpu, int slot)
 {
     PCMCIACardState *md;
-    int index;
     BlockDriverState *bs;
+    DriveInfo *dinfo;
 
-    index = drive_get_index(IF_IDE, 0, 0);
-    if (index == -1)
+    dinfo = drive_get(IF_IDE, 0, 0);
+    if (!dinfo)
         return;
-    bs = drives_table[index].bdrv;
+    bs = dinfo->bdrv;
     if (bdrv_is_inserted(bs) && !bdrv_is_removable(bs)) {
-        md = dscm1xxxx_init(bs);
+        md = dscm1xxxx_init(dinfo);
         pxa2xx_pcmcia_attach(cpu->pcmcia[slot], md);
     }
 }

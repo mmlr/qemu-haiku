@@ -39,35 +39,14 @@
 char *exec_path;
 
 int singlestep;
+#if defined(CONFIG_USE_GUEST_BASE)
+unsigned long mmap_min_addr;
+unsigned long guest_base;
+int have_guest_base;
+#endif
 
 static const char *interp_prefix = CONFIG_QEMU_PREFIX;
 const char *qemu_uname_release = CONFIG_UNAME_RELEASE;
-
-#if defined(__i386__) && !defined(CONFIG_STATIC)
-/* Force usage of an ELF interpreter even if it is an ELF shared
-   object ! */
-const char interp[] __attribute__((section(".interp"))) = "/lib/ld-linux.so.2";
-#endif
-
-/* for recent libc, we add these dummy symbols which are not declared
-   when generating a linked object (bug in ld ?) */
-#if (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 3)) && !defined(CONFIG_STATIC)
-asm(".globl __preinit_array_start\n"
-    ".globl __preinit_array_end\n"
-    ".globl __init_array_start\n"
-    ".globl __init_array_end\n"
-    ".globl __fini_array_start\n"
-    ".globl __fini_array_end\n"
-    ".section \".rodata\"\n"
-    "__preinit_array_start:\n"
-    "__preinit_array_end:\n"
-    "__init_array_start:\n"
-    "__init_array_end:\n"
-    "__fini_array_start:\n"
-    "__fini_array_end:\n"
-    ".long 0\n"
-    ".previous\n");
-#endif
 
 /* XXX: on x86 MAP_GROWSDOWN only works if ESP <= address + 32, so
    we allocate a bigger stack. Need a better solution, for example
@@ -103,7 +82,7 @@ int64_t cpu_get_real_ticks(void)
 
 #endif
 
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
 /***********************************************************/
 /* Helper routines for implementing atomic operations.  */
 
@@ -217,7 +196,7 @@ void cpu_list_unlock(void)
 {
     pthread_mutex_unlock(&cpu_list_mutex);
 }
-#else /* if !USE_NPTL */
+#else /* if !CONFIG_USE_NPTL */
 /* These are no-ops because we are not threadsafe.  */
 static inline void cpu_exec_start(CPUState *env)
 {
@@ -545,6 +524,82 @@ do_kernel_trap(CPUARMState *env)
     return 0;
 }
 
+static int do_strex(CPUARMState *env)
+{
+    uint32_t val;
+    int size;
+    int rc = 1;
+    int segv = 0;
+    uint32_t addr;
+    start_exclusive();
+    addr = env->exclusive_addr;
+    if (addr != env->exclusive_test) {
+        goto fail;
+    }
+    size = env->exclusive_info & 0xf;
+    switch (size) {
+    case 0:
+        segv = get_user_u8(val, addr);
+        break;
+    case 1:
+        segv = get_user_u16(val, addr);
+        break;
+    case 2:
+    case 3:
+        segv = get_user_u32(val, addr);
+        break;
+    }
+    if (segv) {
+        env->cp15.c6_data = addr;
+        goto done;
+    }
+    if (val != env->exclusive_val) {
+        goto fail;
+    }
+    if (size == 3) {
+        segv = get_user_u32(val, addr + 4);
+        if (segv) {
+            env->cp15.c6_data = addr + 4;
+            goto done;
+        }
+        if (val != env->exclusive_high) {
+            goto fail;
+        }
+    }
+    val = env->regs[(env->exclusive_info >> 8) & 0xf];
+    switch (size) {
+    case 0:
+        segv = put_user_u8(val, addr);
+        break;
+    case 1:
+        segv = put_user_u16(val, addr);
+        break;
+    case 2:
+    case 3:
+        segv = put_user_u32(val, addr);
+        break;
+    }
+    if (segv) {
+        env->cp15.c6_data = addr;
+        goto done;
+    }
+    if (size == 3) {
+        val = env->regs[(env->exclusive_info >> 12) & 0xf];
+        segv = put_user_u32(val, addr);
+        if (segv) {
+            env->cp15.c6_data = addr + 4;
+            goto done;
+        }
+    }
+    rc = 0;
+fail:
+    env->regs[15] += 4;
+    env->regs[(env->exclusive_info >> 4) & 0xf] = rc;
+done:
+    end_exclusive();
+    return segv;
+}
+
 void cpu_loop(CPUARMState *env)
 {
     int trapnr;
@@ -737,6 +792,12 @@ void cpu_loop(CPUARMState *env)
         case EXCP_KERNEL_TRAP:
             if (do_kernel_trap(env))
               goto error;
+            break;
+        case EXCP_STREX:
+            if (do_strex(env)) {
+                addr = env->cp15.c6_data;
+                goto do_segv;
+            }
             break;
         default:
         error:
@@ -957,7 +1018,7 @@ void cpu_loop (CPUSPARCState *env)
                 if (trapnr == TT_DFAULT)
                     info._sifields._sigfault._addr = env->dmmuregs[4];
                 else
-                    info._sifields._sigfault._addr = env->tsptr->tpc;
+                    info._sifields._sigfault._addr = cpu_tsptr(env)->tpc;
                 queue_signal(env, info.si_signo, &info);
             }
             break;
@@ -1055,6 +1116,63 @@ do {                                                                    \
         log_cpu_state(env, 0);                                          \
 } while (0)
 
+static int do_store_exclusive(CPUPPCState *env)
+{
+    target_ulong addr;
+    target_ulong page_addr;
+    target_ulong val;
+    int flags;
+    int segv = 0;
+
+    addr = env->reserve_ea;
+    page_addr = addr & TARGET_PAGE_MASK;
+    start_exclusive();
+    mmap_lock();
+    flags = page_get_flags(page_addr);
+    if ((flags & PAGE_READ) == 0) {
+        segv = 1;
+    } else {
+        int reg = env->reserve_info & 0x1f;
+        int size = (env->reserve_info >> 5) & 0xf;
+        int stored = 0;
+
+        if (addr == env->reserve_addr) {
+            switch (size) {
+            case 1: segv = get_user_u8(val, addr); break;
+            case 2: segv = get_user_u16(val, addr); break;
+            case 4: segv = get_user_u32(val, addr); break;
+#if defined(TARGET_PPC64)
+            case 8: segv = get_user_u64(val, addr); break;
+#endif
+            default: abort();
+            }
+            if (!segv && val == env->reserve_val) {
+                val = env->gpr[reg];
+                switch (size) {
+                case 1: segv = put_user_u8(val, addr); break;
+                case 2: segv = put_user_u16(val, addr); break;
+                case 4: segv = put_user_u32(val, addr); break;
+#if defined(TARGET_PPC64)
+                case 8: segv = put_user_u64(val, addr); break;
+#endif
+                default: abort();
+                }
+                if (!segv) {
+                    stored = 1;
+                }
+            }
+        }
+        env->crf[0] = (stored << 1) | xer_so;
+        env->reserve_addr = (target_ulong)-1;
+    }
+    if (!segv) {
+        env->nip += 4;
+    }
+    mmap_unlock();
+    end_exclusive();
+    return segv;
+}
+
 void cpu_loop(CPUPPCState *env)
 {
     target_siginfo_t info;
@@ -1062,7 +1180,9 @@ void cpu_loop(CPUPPCState *env)
     uint32_t ret;
 
     for(;;) {
+        cpu_exec_start(env);
         trapnr = cpu_ppc_exec(env);
+        cpu_exec_end(env);
         switch(trapnr) {
         case POWERPC_EXCP_NONE:
             /* Just go on */
@@ -1076,7 +1196,7 @@ void cpu_loop(CPUPPCState *env)
                       "Aborting\n");
             break;
         case POWERPC_EXCP_DSI:      /* Data storage exception                */
-            EXCP_DUMP(env, "Invalid data memory access: 0x" ADDRX "\n",
+            EXCP_DUMP(env, "Invalid data memory access: 0x" TARGET_FMT_lx "\n",
                       env->spr[SPR_DAR]);
             /* XXX: check this. Seems bugged */
             switch (env->error_code & 0xFF000000) {
@@ -1108,8 +1228,8 @@ void cpu_loop(CPUPPCState *env)
             queue_signal(env, info.si_signo, &info);
             break;
         case POWERPC_EXCP_ISI:      /* Instruction storage exception         */
-            EXCP_DUMP(env, "Invalid instruction fetch: 0x\n" ADDRX "\n",
-                      env->spr[SPR_SRR0]);
+            EXCP_DUMP(env, "Invalid instruction fetch: 0x\n" TARGET_FMT_lx
+                      "\n", env->spr[SPR_SRR0]);
             /* XXX: check this */
             switch (env->error_code & 0xFF000000) {
             case 0x40000000:
@@ -1441,6 +1561,15 @@ void cpu_loop(CPUPPCState *env)
 #if 0
             printf("syscall returned 0x%08x (%d)\n", ret, ret);
 #endif
+            break;
+        case POWERPC_EXCP_STCX:
+            if (do_store_exclusive(env)) {
+                info.si_signo = TARGET_SIGSEGV;
+                info.si_errno = 0;
+                info.si_code = TARGET_SEGV_MAPERR;
+                info._sifields._sigfault._addr = env->nip;
+                queue_signal(env, info.si_signo, &info);
+            }
             break;
         case EXCP_DEBUG:
             {
@@ -1802,7 +1931,7 @@ static int do_store_exclusive(CPUMIPSState *env)
     int reg;
     int d;
 
-    addr = env->CP0_LLAddr;
+    addr = env->lladdr;
     page_addr = addr & TARGET_PAGE_MASK;
     start_exclusive();
     mmap_lock();
@@ -1832,7 +1961,7 @@ static int do_store_exclusive(CPUMIPSState *env)
             }
         }
     }
-    env->CP0_LLAddr = -1;
+    env->lladdr = -1;
     if (!segv) {
         env->active_tc.PC += 4;
     }
@@ -2320,6 +2449,9 @@ static void usage(void)
            "-E var=value      sets/modifies targets environment variable(s)\n"
            "-U var            unsets targets environment variable(s)\n"
            "-0 argv0          forces target process argv[0] to be argv0\n"
+#if defined(CONFIG_USE_GUEST_BASE)
+           "-B address        set guest_base address to address\n"
+#endif
            "\n"
            "Debug options:\n"
            "-d options   activate log (logfile=%s)\n"
@@ -2349,7 +2481,7 @@ THREAD CPUState *thread_env;
 void task_settid(TaskState *ts)
 {
     if (ts->ts_tid == 0) {
-#ifdef USE_NPTL
+#ifdef CONFIG_USE_NPTL
         ts->ts_tid = (pid_t)syscall(SYS_gettid);
 #else
         /* when no threads are used, tid becomes pid */
@@ -2495,6 +2627,11 @@ int main(int argc, char **argv, char **envp)
 #endif
                 exit(1);
             }
+#if defined(CONFIG_USE_GUEST_BASE)
+        } else if (!strcmp(r, "B")) {
+           guest_base = strtol(argv[optind++], NULL, 0);
+           have_guest_base = 1;
+#endif
         } else if (!strcmp(r, "drop-ld-preload")) {
             (void) envlist_unsetenv(envlist, "LD_PRELOAD");
         } else if (!strcmp(r, "singlestep")) {
@@ -2547,7 +2684,7 @@ int main(int argc, char **argv, char **envp)
 #endif
 #elif defined(TARGET_PPC)
 #ifdef TARGET_PPC64
-        cpu_model = "970";
+        cpu_model = "970fx";
 #else
         cpu_model = "750";
 #endif
@@ -2563,6 +2700,10 @@ int main(int argc, char **argv, char **envp)
         fprintf(stderr, "Unable to find CPU definition\n");
         exit(1);
     }
+#if defined(TARGET_I386) || defined(TARGET_SPARC) || defined(TARGET_PPC)
+    cpu_reset(env);
+#endif
+
     thread_env = env;
 
     if (getenv("QEMU_STRACE")) {
@@ -2571,6 +2712,35 @@ int main(int argc, char **argv, char **envp)
 
     target_environ = envlist_to_environ(envlist, NULL);
     envlist_free(envlist);
+
+#if defined(CONFIG_USE_GUEST_BASE)
+    /*
+     * Now that page sizes are configured in cpu_init() we can do
+     * proper page alignment for guest_base.
+     */
+    guest_base = HOST_PAGE_ALIGN(guest_base);
+
+    /*
+     * Read in mmap_min_addr kernel parameter.  This value is used
+     * When loading the ELF image to determine whether guest_base
+     * is needed.
+     *
+     * When user has explicitly set the quest base, we skip this
+     * test.
+     */
+    if (!have_guest_base) {
+        FILE *fp;
+
+        if ((fp = fopen("/proc/sys/vm/mmap_min_addr", "r")) != NULL) {
+            unsigned long tmp;
+            if (fscanf(fp, "%lu", &tmp) == 1) {
+                mmap_min_addr = tmp;
+                qemu_log("host mmap_min_addr=0x%lx\n", mmap_min_addr);
+            }
+            fclose(fp);
+        }
+    }
+#endif /* CONFIG_USE_GUEST_BASE */
 
     /*
      * Prepare copy of argv vector for target.
@@ -2622,6 +2792,9 @@ int main(int argc, char **argv, char **envp)
     free(target_environ);
 
     if (qemu_log_enabled()) {
+#if defined(CONFIG_USE_GUEST_BASE)
+        qemu_log("guest_base  0x%lx\n", guest_base);
+#endif
         log_page_dump();
 
         qemu_log("start_brk   0x" TARGET_ABI_FMT_lx "\n", info->start_brk);

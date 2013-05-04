@@ -28,7 +28,6 @@
 #include <fcntl.h>
 #include <time.h>
 #include <limits.h>
-#include <mqueue.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
@@ -57,8 +56,11 @@
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <qemu-common.h>
-#ifdef HAVE_GPROF
+#ifdef TARGET_GPROF
 #include <sys/gmon.h>
+#endif
+#ifdef CONFIG_EVENTFD
+#include <sys/eventfd.h>
 #endif
 
 #define termios host_termios
@@ -77,12 +79,14 @@
 #include <linux/kd.h>
 #include <linux/mtio.h>
 #include <linux/fs.h>
+#include <linux/fb.h>
+#include <linux/vt.h>
 #include "linux_loop.h"
 
 #include "qemu.h"
 #include "qemu-common.h"
 
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
 #define CLONE_NPTL_FLAGS2 (CLONE_SETTLS | \
     CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID)
 #else
@@ -194,9 +198,7 @@ static int gettid(void) {
     return -ENOSYS;
 }
 #endif
-#if TARGET_ABI_BITS == 32
 _syscall3(int, sys_getdents, uint, fd, struct linux_dirent *, dirp, uint, count);
-#endif
 #if defined(TARGET_NR_getdents64) && defined(__NR_getdents64)
 _syscall3(int, sys_getdents64, uint, fd, struct linux_dirent64 *, dirp, uint, count);
 #endif
@@ -219,7 +221,7 @@ _syscall1(int,exit_group,int,error_code)
 #if defined(TARGET_NR_set_tid_address) && defined(__NR_set_tid_address)
 _syscall1(int,set_tid_address,int *,tidptr)
 #endif
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
 #if defined(TARGET_NR_futex) && defined(__NR_futex)
 _syscall6(int,sys_futex,int *,uaddr,int,op,int,val,
           const struct timespec *,timeout,int *,uaddr2,int,val3)
@@ -847,6 +849,9 @@ static inline abi_long copy_to_user_timeval(abi_ulong target_tv_addr,
     return 0;
 }
 
+#if defined(TARGET_NR_mq_open) && defined(__NR_mq_open)
+#include <mqueue.h>
+
 static inline abi_long copy_from_user_mq_attr(struct mq_attr *attr,
                                               abi_ulong target_mq_attr_addr)
 {
@@ -884,6 +889,7 @@ static inline abi_long copy_to_user_mq_attr(abi_ulong target_mq_attr_addr,
 
     return 0;
 }
+#endif
 
 /* do_select() must return target values and target errnos. */
 static abi_long do_select(int n,
@@ -2063,7 +2069,7 @@ static inline abi_long target_to_host_ipc_perm(struct ipc_perm *host_ip,
 
     if (!lock_user_struct(VERIFY_READ, target_sd, target_addr, 1))
         return -TARGET_EFAULT;
-    target_ip=&(target_sd->sem_perm);
+    target_ip = &(target_sd->sem_perm);
     host_ip->__key = tswapl(target_ip->__key);
     host_ip->uid = tswapl(target_ip->uid);
     host_ip->gid = tswapl(target_ip->gid);
@@ -3458,7 +3464,7 @@ static abi_long do_arch_prctl(CPUX86State *env, int code, abi_ulong addr)
 
 #endif /* defined(TARGET_I386) */
 
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
 
 #define NEW_STACK_SIZE PTHREAD_STACK_MIN
 
@@ -3527,7 +3533,7 @@ static int do_fork(CPUState *env, unsigned int flags, abi_ulong newsp,
     TaskState *ts;
     uint8_t *new_stack;
     CPUState *new_env;
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
     unsigned int nptl_flags;
     sigset_t sigmask;
 #endif
@@ -3538,7 +3544,7 @@ static int do_fork(CPUState *env, unsigned int flags, abi_ulong newsp,
 
     if (flags & CLONE_VM) {
         TaskState *parent_ts = (TaskState *)env->opaque;
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
         new_thread_info info;
         pthread_attr_t attr;
 #endif
@@ -3547,12 +3553,15 @@ static int do_fork(CPUState *env, unsigned int flags, abi_ulong newsp,
         new_stack = ts->stack;
         /* we create a new CPU instance. */
         new_env = cpu_copy(env);
+#if defined(TARGET_I386) || defined(TARGET_SPARC) || defined(TARGET_PPC)
+        cpu_reset(new_env);
+#endif
         /* Init regs that differ from the parent.  */
         cpu_clone_regs(new_env, newsp);
         new_env->opaque = ts;
         ts->bprm = parent_ts->bprm;
         ts->info = parent_ts->info;
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
         nptl_flags = flags;
         flags &= ~CLONE_NPTL_FLAGS2;
 
@@ -3621,7 +3630,7 @@ static int do_fork(CPUState *env, unsigned int flags, abi_ulong newsp,
             /* Child Process.  */
             cpu_clone_regs(env, newsp);
             fork_end(1);
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
             /* There is a race condition here.  The parent process could
                theoretically read the TID in the child process before the child
                tid is set.  This would require using either ptrace
@@ -3677,6 +3686,16 @@ static int target_to_host_fcntl_cmd(int cmd)
 	case TARGET_F_SETLKW64:
 	    return F_SETLKW64;
 #endif
+        case TARGET_F_SETLEASE:
+            return F_SETLEASE;
+        case TARGET_F_GETLEASE:
+            return F_GETLEASE;
+#ifdef F_DUPFD_CLOEXEC
+        case TARGET_F_DUPFD_CLOEXEC:
+            return F_DUPFD_CLOEXEC;
+#endif
+        case TARGET_F_NOTIFY:
+            return F_NOTIFY;
 	default:
             return -TARGET_EINVAL;
     }
@@ -3703,7 +3722,7 @@ static abi_long do_fcntl(int fd, int cmd, abi_ulong arg)
         fl.l_whence = tswap16(target_fl->l_whence);
         fl.l_start = tswapl(target_fl->l_start);
         fl.l_len = tswapl(target_fl->l_len);
-        fl.l_pid = tswapl(target_fl->l_pid);
+        fl.l_pid = tswap32(target_fl->l_pid);
         unlock_user_struct(target_fl, arg, 0);
         ret = get_errno(fcntl(fd, host_cmd, &fl));
         if (ret == 0) {
@@ -3713,7 +3732,7 @@ static abi_long do_fcntl(int fd, int cmd, abi_ulong arg)
             target_fl->l_whence = tswap16(fl.l_whence);
             target_fl->l_start = tswapl(fl.l_start);
             target_fl->l_len = tswapl(fl.l_len);
-            target_fl->l_pid = tswapl(fl.l_pid);
+            target_fl->l_pid = tswap32(fl.l_pid);
             unlock_user_struct(target_fl, arg, 1);
         }
         break;
@@ -3726,7 +3745,7 @@ static abi_long do_fcntl(int fd, int cmd, abi_ulong arg)
         fl.l_whence = tswap16(target_fl->l_whence);
         fl.l_start = tswapl(target_fl->l_start);
         fl.l_len = tswapl(target_fl->l_len);
-        fl.l_pid = tswapl(target_fl->l_pid);
+        fl.l_pid = tswap32(target_fl->l_pid);
         unlock_user_struct(target_fl, arg, 0);
         ret = get_errno(fcntl(fd, host_cmd, &fl));
         break;
@@ -3738,7 +3757,7 @@ static abi_long do_fcntl(int fd, int cmd, abi_ulong arg)
         fl64.l_whence = tswap16(target_fl64->l_whence);
         fl64.l_start = tswapl(target_fl64->l_start);
         fl64.l_len = tswapl(target_fl64->l_len);
-        fl64.l_pid = tswap16(target_fl64->l_pid);
+        fl64.l_pid = tswap32(target_fl64->l_pid);
         unlock_user_struct(target_fl64, arg, 0);
         ret = get_errno(fcntl(fd, host_cmd, &fl64));
         if (ret == 0) {
@@ -3748,7 +3767,7 @@ static abi_long do_fcntl(int fd, int cmd, abi_ulong arg)
             target_fl64->l_whence = tswap16(fl64.l_whence);
             target_fl64->l_start = tswapl(fl64.l_start);
             target_fl64->l_len = tswapl(fl64.l_len);
-            target_fl64->l_pid = tswapl(fl64.l_pid);
+            target_fl64->l_pid = tswap32(fl64.l_pid);
             unlock_user_struct(target_fl64, arg, 1);
         }
         break;
@@ -3760,7 +3779,7 @@ static abi_long do_fcntl(int fd, int cmd, abi_ulong arg)
         fl64.l_whence = tswap16(target_fl64->l_whence);
         fl64.l_start = tswapl(target_fl64->l_start);
         fl64.l_len = tswapl(target_fl64->l_len);
-        fl64.l_pid = tswap16(target_fl64->l_pid);
+        fl64.l_pid = tswap32(target_fl64->l_pid);
         unlock_user_struct(target_fl64, arg, 0);
         ret = get_errno(fcntl(fd, host_cmd, &fl64));
         break;
@@ -3780,6 +3799,8 @@ static abi_long do_fcntl(int fd, int cmd, abi_ulong arg)
     case TARGET_F_GETOWN:
     case TARGET_F_SETSIG:
     case TARGET_F_GETSIG:
+    case TARGET_F_SETLEASE:
+    case TARGET_F_GETLEASE:
         ret = get_errno(fcntl(fd, host_cmd, arg));
         break;
 
@@ -4016,7 +4037,7 @@ static inline abi_long host_to_target_stat64(void *cpu_env,
 }
 #endif
 
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
 /* ??? Using host futex calls even when target atomic operations
    are not really atomic probably breaks things.  However implementing
    futexes locally would make futexes shared between multiple processes
@@ -4026,14 +4047,16 @@ static int do_futex(target_ulong uaddr, int op, int val, target_ulong timeout,
                     target_ulong uaddr2, int val3)
 {
     struct timespec ts, *pts;
+    int base_op;
 
     /* ??? We assume FUTEX_* constants are the same on both host
        and target.  */
 #ifdef FUTEX_CMD_MASK
-    switch ((op&FUTEX_CMD_MASK)) {
+    base_op = op & FUTEX_CMD_MASK;
 #else
-    switch (op) {
+    base_op = op;
 #endif
+    switch (base_op) {
     case FUTEX_WAIT:
         if (timeout) {
             pts = &ts;
@@ -4045,16 +4068,22 @@ static int do_futex(target_ulong uaddr, int op, int val, target_ulong timeout,
                          pts, NULL, 0));
     case FUTEX_WAKE:
         return get_errno(sys_futex(g2h(uaddr), op, val, NULL, NULL, 0));
-    case FUTEX_WAKE_OP:
-        return get_errno(sys_futex(g2h(uaddr), op, val, NULL, g2h(uaddr2), val3 ));
     case FUTEX_FD:
         return get_errno(sys_futex(g2h(uaddr), op, val, NULL, NULL, 0));
     case FUTEX_REQUEUE:
-        return get_errno(sys_futex(g2h(uaddr), op, val,
-                         NULL, g2h(uaddr2), 0));
     case FUTEX_CMP_REQUEUE:
-        return get_errno(sys_futex(g2h(uaddr), op, val,
-                         NULL, g2h(uaddr2), tswap32(val3)));
+    case FUTEX_WAKE_OP:
+        /* For FUTEX_REQUEUE, FUTEX_CMP_REQUEUE, and FUTEX_WAKE_OP, the
+           TIMEOUT parameter is interpreted as a uint32_t by the kernel.
+           But the prototype takes a `struct timespec *'; insert casts
+           to satisfy the compiler.  We do not need to tswap TIMEOUT
+           since it's not compared to guest memory.  */
+        pts = (struct timespec *)(uintptr_t) timeout;
+        return get_errno(sys_futex(g2h(uaddr), op, val, pts,
+                                   g2h(uaddr2),
+                                   (base_op == FUTEX_CMP_REQUEUE
+                                    ? tswap32(val3)
+                                    : val3)));
     default:
         return -TARGET_ENOSYS;
     }
@@ -4126,7 +4155,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
 
     switch(num) {
     case TARGET_NR_exit:
-#ifdef USE_NPTL
+#ifdef CONFIG_USE_NPTL
       /* In old applications this may be used to implement _exit(2).
          However in threaded applictions it is used for thread termination,
          and _exit_group is used for application termination.
@@ -4162,7 +4191,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
           pthread_exit(NULL);
       }
 #endif
-#ifdef HAVE_GPROF
+#ifdef TARGET_GPROF
         _mcleanup();
 #endif
         gdb_exit(cpu_env, arg1);
@@ -4437,12 +4466,16 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
 			p3 = lock_user_string(arg3);
                         if (!p || !p2 || !p3)
                             ret = -TARGET_EFAULT;
-                        else
+                        else {
                             /* FIXME - arg5 should be locked, but it isn't clear how to
                              * do that since it's not guaranteed to be a NULL-terminated
                              * string.
                              */
-                            ret = get_errno(mount(p, p2, p3, (unsigned long)arg4, g2h(arg5)));
+                            if ( ! arg5 )
+                                ret = get_errno(mount(p, p2, p3, (unsigned long)arg4, NULL));
+                            else
+                                ret = get_errno(mount(p, p2, p3, (unsigned long)arg4, g2h(arg5)));
+                        }
                         unlock_user(p, arg1, 0);
                         unlock_user(p2, arg2, 0);
                         unlock_user(p3, arg3, 0);
@@ -4722,6 +4755,11 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
     case TARGET_NR_dup2:
         ret = get_errno(dup2(arg1, arg2));
         break;
+#if defined(CONFIG_DUP3) && defined(TARGET_NR_dup3)
+    case TARGET_NR_dup3:
+        ret = get_errno(dup3(arg1, arg2, arg3));
+        break;
+#endif
 #ifdef TARGET_NR_getppid /* not on alpha */
     case TARGET_NR_getppid:
         ret = get_errno(getppid());
@@ -5282,7 +5320,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
         /* libc does special remapping of the return value of
          * sys_getpriority() so it's just easiest to call
          * sys_getpriority() directly rather than through libc. */
-        ret = sys_getpriority(arg1, arg2);
+        ret = get_errno(sys_getpriority(arg1, arg2));
         break;
     case TARGET_NR_setpriority:
         ret = get_errno(setpriority(arg1, arg2, arg3));
@@ -5507,6 +5545,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
 
                 if (!lock_user_struct(VERIFY_WRITE, target_st, arg2, 0))
                     goto efault;
+                memset(target_st, 0, sizeof(*target_st));
                 __put_user(st.st_dev, &target_st->st_dev);
                 __put_user(st.st_ino, &target_st->st_ino);
                 __put_user(st.st_mode, &target_st->st_mode);
@@ -5676,7 +5715,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
 #ifdef __NR_exit_group
         /* new thread calls */
     case TARGET_NR_exit_group:
-#ifdef HAVE_GPROF
+#ifdef TARGET_GPROF
         _mcleanup();
 #endif
         gdb_exit(cpu_env, arg1);
@@ -5771,9 +5810,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
         break;
 #endif
     case TARGET_NR_getdents:
-#if TARGET_ABI_BITS != 32
-        goto unimplemented;
-#elif TARGET_ABI_BITS == 32 && HOST_LONG_BITS == 64
+#if TARGET_ABI_BITS == 32 && HOST_LONG_BITS == 64
         {
             struct target_dirent *target_dirp;
             struct linux_dirent *dirp;
@@ -6100,7 +6137,8 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
         goto unimplemented;
     case TARGET_NR_sigaltstack:
 #if defined(TARGET_I386) || defined(TARGET_ARM) || defined(TARGET_MIPS) || \
-    defined(TARGET_SPARC) || defined(TARGET_PPC) || defined(TARGET_ALPHA)
+    defined(TARGET_SPARC) || defined(TARGET_PPC) || defined(TARGET_ALPHA) || \
+    defined(TARGET_M68K)
         ret = do_sigaltstack(arg1, arg2, get_sp_from_cpustate((CPUState *)cpu_env));
         break;
 #else
@@ -6546,12 +6584,23 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
 		arg4 = temp;
 	}
 #endif
-#if defined(TARGET_NR_fadvise64_64) || defined(TARGET_NR_arm_fadvise64_64)
+#if defined(TARGET_NR_fadvise64_64) || defined(TARGET_NR_arm_fadvise64_64) || defined(TARGET_NR_fadvise64)
 #ifdef TARGET_NR_fadvise64_64
     case TARGET_NR_fadvise64_64:
 #endif
-        /* This is a hint, so ignoring and returning success is ok.  */
-	ret = get_errno(0);
+#ifdef TARGET_NR_fadvise64
+    case TARGET_NR_fadvise64:
+#endif
+#ifdef TARGET_S390X
+        switch (arg4) {
+        case 4: arg4 = POSIX_FADV_NOREUSE + 1; break; /* make sure it's an invalid value */
+        case 5: arg4 = POSIX_FADV_NOREUSE + 2; break; /* ditto */
+        case 6: arg4 = POSIX_FADV_DONTNEED; break;
+        case 7: arg4 = POSIX_FADV_NOREUSE; break;
+        default: break;
+        }
+#endif
+        ret = -posix_fadvise(arg1, arg2, arg3, arg4);
 	break;
 #endif
 #ifdef TARGET_NR_madvise
@@ -6587,7 +6636,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
                 fl.l_whence = tswap16(target_efl->l_whence);
                 fl.l_start = tswap64(target_efl->l_start);
                 fl.l_len = tswap64(target_efl->l_len);
-                fl.l_pid = tswapl(target_efl->l_pid);
+                fl.l_pid = tswap32(target_efl->l_pid);
                 unlock_user_struct(target_efl, arg3, 0);
             } else
 #endif
@@ -6598,7 +6647,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
                 fl.l_whence = tswap16(target_fl->l_whence);
                 fl.l_start = tswap64(target_fl->l_start);
                 fl.l_len = tswap64(target_fl->l_len);
-                fl.l_pid = tswapl(target_fl->l_pid);
+                fl.l_pid = tswap32(target_fl->l_pid);
                 unlock_user_struct(target_fl, arg3, 0);
             }
             ret = get_errno(fcntl(arg1, cmd, &fl));
@@ -6611,7 +6660,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
                     target_efl->l_whence = tswap16(fl.l_whence);
                     target_efl->l_start = tswap64(fl.l_start);
                     target_efl->l_len = tswap64(fl.l_len);
-                    target_efl->l_pid = tswapl(fl.l_pid);
+                    target_efl->l_pid = tswap32(fl.l_pid);
                     unlock_user_struct(target_efl, arg3, 1);
                 } else
 #endif
@@ -6622,7 +6671,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
                     target_fl->l_whence = tswap16(fl.l_whence);
                     target_fl->l_start = tswap64(fl.l_start);
                     target_fl->l_len = tswap64(fl.l_len);
-                    target_fl->l_pid = tswapl(fl.l_pid);
+                    target_fl->l_pid = tswap32(fl.l_pid);
                     unlock_user_struct(target_fl, arg3, 1);
                 }
 	    }
@@ -6638,7 +6687,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
                 fl.l_whence = tswap16(target_efl->l_whence);
                 fl.l_start = tswap64(target_efl->l_start);
                 fl.l_len = tswap64(target_efl->l_len);
-                fl.l_pid = tswapl(target_efl->l_pid);
+                fl.l_pid = tswap32(target_efl->l_pid);
                 unlock_user_struct(target_efl, arg3, 0);
             } else
 #endif
@@ -6649,7 +6698,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
                 fl.l_whence = tswap16(target_fl->l_whence);
                 fl.l_start = tswap64(target_fl->l_start);
                 fl.l_len = tswap64(target_fl->l_len);
-                fl.l_pid = tswapl(target_fl->l_pid);
+                fl.l_pid = tswap32(target_fl->l_pid);
                 unlock_user_struct(target_fl, arg3, 0);
             }
             ret = get_errno(fcntl(arg1, cmd, &fl));
@@ -6828,7 +6877,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
         }
 	break;
 #endif
-#if defined(USE_NPTL)
+#if defined(CONFIG_USE_NPTL)
     case TARGET_NR_futex:
         ret = do_futex(arg1, arg2, arg3, arg4, arg5, arg6);
         break;
@@ -6851,7 +6900,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
         break;
 #endif
 
-#ifdef TARGET_NR_mq_open
+#if defined(TARGET_NR_mq_open) && defined(__NR_mq_open)
     case TARGET_NR_mq_open:
         {
             struct mq_attr posix_mq_attr;
@@ -6966,6 +7015,23 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
         break;
 #endif
 #endif /* CONFIG_SPLICE */
+#ifdef CONFIG_EVENTFD
+#if defined(TARGET_NR_eventfd)
+    case TARGET_NR_eventfd:
+        ret = get_errno(eventfd(arg1, 0));
+        break;
+#endif
+#if defined(TARGET_NR_eventfd2)
+    case TARGET_NR_eventfd2:
+        ret = get_errno(eventfd(arg1, arg2));
+        break;
+#endif
+#endif /* CONFIG_EVENTFD  */
+#if defined(CONFIG_FALLOCATE) && defined(TARGET_NR_fallocate)
+    case TARGET_NR_fallocate:
+        ret = get_errno(fallocate(arg1, arg2, arg3, arg4));
+        break;
+#endif
     default:
     unimplemented:
         gemu_log("qemu: Unsupported syscall: %d\n", num);

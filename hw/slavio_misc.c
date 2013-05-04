@@ -22,7 +22,6 @@
  * THE SOFTWARE.
  */
 
-#include "sun4m.h"
 #include "sysemu.h"
 #include "sysbus.h"
 
@@ -47,10 +46,11 @@
 typedef struct MiscState {
     SysBusDevice busdev;
     qemu_irq irq;
+    uint32_t dummy;
     uint8_t config;
     uint8_t aux1, aux2;
     uint8_t diag, mctrl;
-    uint32_t sysctrl;
+    uint8_t sysctrl;
     uint16_t leds;
     qemu_irq fdc_tc;
 } MiscState;
@@ -62,12 +62,6 @@ typedef struct APCState {
 
 #define MISC_SIZE 1
 #define SYSCTRL_SIZE 4
-
-#define MISC_LEDS 0x01600000
-#define MISC_CFG  0x01800000
-#define MISC_DIAG 0x01a00000
-#define MISC_MDM  0x01b00000
-#define MISC_SYS  0x01f00000
 
 #define AUX1_TC        0x02
 
@@ -93,15 +87,15 @@ static void slavio_misc_update_irq(void *opaque)
     }
 }
 
-static void slavio_misc_reset(void *opaque)
+static void slavio_misc_reset(DeviceState *d)
 {
-    MiscState *s = opaque;
+    MiscState *s = container_of(d, MiscState, busdev.qdev);
 
     // Diagnostic and system control registers not cleared in reset
     s->config = s->aux1 = s->aux2 = s->mctrl = 0;
 }
 
-void slavio_set_power_fail(void *opaque, int power_failing)
+static void slavio_set_power_fail(void *opaque, int irq, int power_failing)
 {
     MiscState *s = opaque;
 
@@ -134,13 +128,13 @@ static uint32_t slavio_cfg_mem_readb(void *opaque, target_phys_addr_t addr)
     return ret;
 }
 
-static CPUReadMemoryFunc *slavio_cfg_mem_read[3] = {
+static CPUReadMemoryFunc * const slavio_cfg_mem_read[3] = {
     slavio_cfg_mem_readb,
     NULL,
     NULL,
 };
 
-static CPUWriteMemoryFunc *slavio_cfg_mem_write[3] = {
+static CPUWriteMemoryFunc * const slavio_cfg_mem_write[3] = {
     slavio_cfg_mem_writeb,
     NULL,
     NULL,
@@ -165,13 +159,13 @@ static uint32_t slavio_diag_mem_readb(void *opaque, target_phys_addr_t addr)
     return ret;
 }
 
-static CPUReadMemoryFunc *slavio_diag_mem_read[3] = {
+static CPUReadMemoryFunc * const slavio_diag_mem_read[3] = {
     slavio_diag_mem_readb,
     NULL,
     NULL,
 };
 
-static CPUWriteMemoryFunc *slavio_diag_mem_write[3] = {
+static CPUWriteMemoryFunc * const slavio_diag_mem_write[3] = {
     slavio_diag_mem_writeb,
     NULL,
     NULL,
@@ -196,13 +190,13 @@ static uint32_t slavio_mdm_mem_readb(void *opaque, target_phys_addr_t addr)
     return ret;
 }
 
-static CPUReadMemoryFunc *slavio_mdm_mem_read[3] = {
+static CPUReadMemoryFunc * const slavio_mdm_mem_read[3] = {
     slavio_mdm_mem_readb,
     NULL,
     NULL,
 };
 
-static CPUWriteMemoryFunc *slavio_mdm_mem_write[3] = {
+static CPUWriteMemoryFunc * const slavio_mdm_mem_write[3] = {
     slavio_mdm_mem_writeb,
     NULL,
     NULL,
@@ -236,13 +230,13 @@ static uint32_t slavio_aux1_mem_readb(void *opaque, target_phys_addr_t addr)
     return ret;
 }
 
-static CPUReadMemoryFunc *slavio_aux1_mem_read[3] = {
+static CPUReadMemoryFunc * const slavio_aux1_mem_read[3] = {
     slavio_aux1_mem_readb,
     NULL,
     NULL,
 };
 
-static CPUWriteMemoryFunc *slavio_aux1_mem_write[3] = {
+static CPUWriteMemoryFunc * const slavio_aux1_mem_write[3] = {
     slavio_aux1_mem_writeb,
     NULL,
     NULL,
@@ -275,13 +269,13 @@ static uint32_t slavio_aux2_mem_readb(void *opaque, target_phys_addr_t addr)
     return ret;
 }
 
-static CPUReadMemoryFunc *slavio_aux2_mem_read[3] = {
+static CPUReadMemoryFunc * const slavio_aux2_mem_read[3] = {
     slavio_aux2_mem_readb,
     NULL,
     NULL,
 };
 
-static CPUWriteMemoryFunc *slavio_aux2_mem_write[3] = {
+static CPUWriteMemoryFunc * const slavio_aux2_mem_write[3] = {
     slavio_aux2_mem_writeb,
     NULL,
     NULL,
@@ -303,13 +297,13 @@ static uint32_t apc_mem_readb(void *opaque, target_phys_addr_t addr)
     return ret;
 }
 
-static CPUReadMemoryFunc *apc_mem_read[3] = {
+static CPUReadMemoryFunc * const apc_mem_read[3] = {
     apc_mem_readb,
     NULL,
     NULL,
 };
 
-static CPUWriteMemoryFunc *apc_mem_write[3] = {
+static CPUWriteMemoryFunc * const apc_mem_write[3] = {
     apc_mem_writeb,
     NULL,
     NULL,
@@ -349,13 +343,13 @@ static void slavio_sysctrl_mem_writel(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *slavio_sysctrl_mem_read[3] = {
+static CPUReadMemoryFunc * const slavio_sysctrl_mem_read[3] = {
     NULL,
     NULL,
     slavio_sysctrl_mem_readl,
 };
 
-static CPUWriteMemoryFunc *slavio_sysctrl_mem_write[3] = {
+static CPUWriteMemoryFunc * const slavio_sysctrl_mem_write[3] = {
     NULL,
     NULL,
     slavio_sysctrl_mem_writel,
@@ -392,98 +386,36 @@ static void slavio_led_mem_writew(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *slavio_led_mem_read[3] = {
+static CPUReadMemoryFunc * const slavio_led_mem_read[3] = {
     NULL,
     slavio_led_mem_readw,
     NULL,
 };
 
-static CPUWriteMemoryFunc *slavio_led_mem_write[3] = {
+static CPUWriteMemoryFunc * const slavio_led_mem_write[3] = {
     NULL,
     slavio_led_mem_writew,
     NULL,
 };
 
-static void slavio_misc_save(QEMUFile *f, void *opaque)
-{
-    MiscState *s = opaque;
-    uint32_t tmp = 0;
-    uint8_t tmp8;
-
-    qemu_put_be32s(f, &tmp); /* ignored, was IRQ.  */
-    qemu_put_8s(f, &s->config);
-    qemu_put_8s(f, &s->aux1);
-    qemu_put_8s(f, &s->aux2);
-    qemu_put_8s(f, &s->diag);
-    qemu_put_8s(f, &s->mctrl);
-    tmp8 = s->sysctrl & 0xff;
-    qemu_put_8s(f, &tmp8);
-}
-
-static int slavio_misc_load(QEMUFile *f, void *opaque, int version_id)
-{
-    MiscState *s = opaque;
-    uint32_t tmp;
-    uint8_t tmp8;
-
-    if (version_id != 1)
-        return -EINVAL;
-
-    qemu_get_be32s(f, &tmp);
-    qemu_get_8s(f, &s->config);
-    qemu_get_8s(f, &s->aux1);
-    qemu_get_8s(f, &s->aux2);
-    qemu_get_8s(f, &s->diag);
-    qemu_get_8s(f, &s->mctrl);
-    qemu_get_8s(f, &tmp8);
-    s->sysctrl = (uint32_t)tmp8;
-    return 0;
-}
-
-void *slavio_misc_init(target_phys_addr_t base,
-                       target_phys_addr_t aux1_base,
-                       target_phys_addr_t aux2_base, qemu_irq irq,
-                       qemu_irq fdc_tc)
-{
-    DeviceState *dev;
-    SysBusDevice *s;
-    MiscState *d;
-
-    dev = qdev_create(NULL, "slavio_misc");
-    qdev_init(dev);
-    s = sysbus_from_qdev(dev);
-    if (base) {
-        /* 8 bit registers */
-        /* Slavio control */
-        sysbus_mmio_map(s, 0, base + MISC_CFG);
-        /* Diagnostics */
-        sysbus_mmio_map(s, 1, base + MISC_DIAG);
-        /* Modem control */
-        sysbus_mmio_map(s, 2, base + MISC_MDM);
-        /* 16 bit registers */
-        /* ss600mp diag LEDs */
-        sysbus_mmio_map(s, 3, base + MISC_LEDS);
-        /* 32 bit registers */
-        /* System control */
-        sysbus_mmio_map(s, 4, base + MISC_SYS);
+static const VMStateDescription vmstate_misc = {
+    .name ="slavio_misc",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField []) {
+        VMSTATE_UINT32(dummy, MiscState),
+        VMSTATE_UINT8(config, MiscState),
+        VMSTATE_UINT8(aux1, MiscState),
+        VMSTATE_UINT8(aux2, MiscState),
+        VMSTATE_UINT8(diag, MiscState),
+        VMSTATE_UINT8(mctrl, MiscState),
+        VMSTATE_UINT8(sysctrl, MiscState),
+        VMSTATE_END_OF_LIST()
     }
-    if (aux1_base) {
-        /* AUX 1 (Misc System Functions) */
-        sysbus_mmio_map(s, 5, aux1_base);
-    }
-    if (aux2_base) {
-        /* AUX 2 (Software Powerdown Control) */
-        sysbus_mmio_map(s, 6, aux2_base);
-    }
-    sysbus_connect_irq(s, 0, irq);
-    sysbus_connect_irq(s, 1, fdc_tc);
+};
 
-    d = FROM_SYSBUS(MiscState, s);
-
-    return d;
-}
-
-static void apc_init1(SysBusDevice *dev)
+static int apc_init1(SysBusDevice *dev)
 {
     APCState *s = FROM_SYSBUS(APCState, dev);
     int io;
@@ -493,22 +425,10 @@ static void apc_init1(SysBusDevice *dev)
     /* Power management (APC) XXX: not a Slavio device */
     io = cpu_register_io_memory(apc_mem_read, apc_mem_write, s);
     sysbus_init_mmio(dev, MISC_SIZE, io);
+    return 0;
 }
 
-void apc_init(target_phys_addr_t power_base, qemu_irq cpu_halt)
-{
-    DeviceState *dev;
-    SysBusDevice *s;
-
-    dev = qdev_create(NULL, "apc");
-    qdev_init(dev);
-    s = sysbus_from_qdev(dev);
-    /* Power management (APC) XXX: not a Slavio device */
-    sysbus_mmio_map(s, 0, power_base);
-    sysbus_connect_irq(s, 0, cpu_halt);
-}
-
-static void slavio_misc_init1(SysBusDevice *dev)
+static int slavio_misc_init1(SysBusDevice *dev)
 {
     MiscState *s = FROM_SYSBUS(MiscState, dev);
     int io;
@@ -554,16 +474,17 @@ static void slavio_misc_init1(SysBusDevice *dev)
                                 slavio_aux2_mem_write, s);
     sysbus_init_mmio(dev, MISC_SIZE, io);
 
-    register_savevm("slavio_misc", -1, 1, slavio_misc_save, slavio_misc_load,
-                    s);
-    qemu_register_reset(slavio_misc_reset, s);
-    slavio_misc_reset(s);
+    qdev_init_gpio_in(&dev->qdev, slavio_set_power_fail, 1);
+
+    return 0;
 }
 
 static SysBusDeviceInfo slavio_misc_info = {
     .init = slavio_misc_init1,
     .qdev.name  = "slavio_misc",
     .qdev.size  = sizeof(MiscState),
+    .qdev.vmsd  = &vmstate_misc,
+    .qdev.reset  = slavio_misc_reset,
 };
 
 static SysBusDeviceInfo apc_info = {

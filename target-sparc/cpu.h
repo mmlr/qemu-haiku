@@ -49,6 +49,7 @@
 #define TT_NCP_INSN 0x24
 #define TT_TRAP     0x80
 #else
+#define TT_POWER_ON_RESET 0x01
 #define TT_TFAULT   0x08
 #define TT_CODE_ACCESS 0x0a
 #define TT_ILL_INSN 0x10
@@ -273,6 +274,24 @@ enum {
 };
 #endif
 
+#define TTE_VALID_BIT       (1ULL << 63)
+#define TTE_USED_BIT        (1ULL << 41)
+#define TTE_LOCKED_BIT      (1ULL <<  6)
+#define TTE_GLOBAL_BIT      (1ULL <<  0)
+
+#define TTE_IS_VALID(tte)   ((tte) & TTE_VALID_BIT)
+#define TTE_IS_USED(tte)    ((tte) & TTE_USED_BIT)
+#define TTE_IS_LOCKED(tte)  ((tte) & TTE_LOCKED_BIT)
+#define TTE_IS_GLOBAL(tte)  ((tte) & TTE_GLOBAL_BIT)
+
+#define TTE_SET_USED(tte)   ((tte) |= TTE_USED_BIT)
+#define TTE_SET_UNUSED(tte) ((tte) &= ~TTE_USED_BIT)
+
+typedef struct SparcTLBEntry {
+    uint64_t tag;
+    uint64_t tte;
+} SparcTLBEntry;
+
 typedef struct CPUSPARCState {
     target_ulong gregs[8]; /* general registers */
     target_ulong *regwptr; /* pointer to current register window */
@@ -319,12 +338,33 @@ typedef struct CPUSPARCState {
     uint64_t lsu;
 #define DMMU_E 0x8
 #define IMMU_E 0x4
-    uint64_t immuregs[16];
-    uint64_t dmmuregs[16];
-    uint64_t itlb_tag[64];
-    uint64_t itlb_tte[64];
-    uint64_t dtlb_tag[64];
-    uint64_t dtlb_tte[64];
+    //typedef struct SparcMMU
+    union {
+        uint64_t immuregs[16];
+        struct {
+            uint64_t tsb_tag_target;
+            uint64_t unused_mmu_primary_context;   // use DMMU
+            uint64_t unused_mmu_secondary_context; // use DMMU
+            uint64_t sfsr;
+            uint64_t sfar;
+            uint64_t tsb;
+            uint64_t tag_access;
+        } immu;
+    };
+    union {
+        uint64_t dmmuregs[16];
+        struct {
+            uint64_t tsb_tag_target;
+            uint64_t mmu_primary_context;
+            uint64_t mmu_secondary_context;
+            uint64_t sfsr;
+            uint64_t sfar;
+            uint64_t tsb;
+            uint64_t tag_access;
+        } dmmu;
+    };
+    SparcTLBEntry itlb[64];
+    SparcTLBEntry dtlb[64];
     uint32_t mmu_version;
 #else
     uint32_t mmuregs[32];
@@ -340,7 +380,6 @@ typedef struct CPUSPARCState {
 #if defined(TARGET_SPARC64)
 #define MAXTL_MAX 8
 #define MAXTL_MASK (MAXTL_MAX - 1)
-    trap_state *tsptr;
     trap_state ts[MAXTL_MAX];
     uint32_t xcc;               /* Extended integer condition codes */
     uint32_t asi;
@@ -376,6 +415,7 @@ void cpu_lock(void);
 void cpu_unlock(void);
 int cpu_sparc_handle_mmu_fault(CPUSPARCState *env1, target_ulong address, int rw,
                                int mmu_idx, int is_softmmu);
+#define cpu_handle_mmu_fault cpu_sparc_handle_mmu_fault
 target_ulong mmu_probe(CPUSPARCState *env, target_ulong address, int mmulev);
 void dump_mmu(CPUSPARCState *env);
 
@@ -402,6 +442,22 @@ int cpu_sparc_exec(CPUSPARCState *s);
 #endif
 
 #ifndef NO_CPU_IO_DEFS
+
+static inline int cpu_cwp_inc(CPUSPARCState *env1, int cwp)
+{
+    if (unlikely(cwp >= env1->nwindows))
+        cwp -= env1->nwindows;
+    return cwp;
+}
+
+static inline int cpu_cwp_dec(CPUSPARCState *env1, int cwp)
+{
+    if (unlikely(cwp < 0))
+        cwp += env1->nwindows;
+    return cwp;
+}
+#endif
+
 static inline void memcpy32(target_ulong *dst, const target_ulong *src)
 {
     dst[0] = src[0];
@@ -426,43 +482,25 @@ static inline void cpu_set_cwp(CPUSPARCState *env1, int new_cwp)
     env1->regwptr = env1->regbase + (new_cwp * 16);
 }
 
-static inline int cpu_cwp_inc(CPUSPARCState *env1, int cwp)
-{
-    if (unlikely(cwp >= env1->nwindows))
-        cwp -= env1->nwindows;
-    return cwp;
-}
+/* sun4m.c, sun4u.c */
+void cpu_check_irqs(CPUSPARCState *env);
 
-static inline int cpu_cwp_dec(CPUSPARCState *env1, int cwp)
+static inline void PUT_PSR(CPUSPARCState *env1, target_ulong val)
 {
-    if (unlikely(cwp < 0))
-        cwp += env1->nwindows;
-    return cwp;
-}
+    env1->psr = val & PSR_ICC;
+    env1->psref = (val & PSR_EF)? 1 : 0;
+    env1->psrpil = (val & PSR_PIL) >> 8;
+#if ((!defined (TARGET_SPARC64)) && !defined(CONFIG_USER_ONLY))
+    cpu_check_irqs(env1);
 #endif
-
+    env1->psrs = (val & PSR_S)? 1 : 0;
+    env1->psrps = (val & PSR_PS)? 1 : 0;
 #if !defined (TARGET_SPARC64)
-#define PUT_PSR(env, val) do { int _tmp = val;                          \
-        env->psr = _tmp & PSR_ICC;                                      \
-        env->psref = (_tmp & PSR_EF)? 1 : 0;                            \
-        env->psrpil = (_tmp & PSR_PIL) >> 8;                            \
-        env->psrs = (_tmp & PSR_S)? 1 : 0;                              \
-        env->psrps = (_tmp & PSR_PS)? 1 : 0;                            \
-        env->psret = (_tmp & PSR_ET)? 1 : 0;                            \
-        cpu_set_cwp(env, _tmp & PSR_CWP);                               \
-        CC_OP = CC_OP_FLAGS;                                            \
-    } while (0)
-#else
-#define PUT_PSR(env, val) do { int _tmp = val;                          \
-        env->psr = _tmp & PSR_ICC;                                      \
-        env->psref = (_tmp & PSR_EF)? 1 : 0;                            \
-        env->psrpil = (_tmp & PSR_PIL) >> 8;                            \
-        env->psrs = (_tmp & PSR_S)? 1 : 0;                              \
-        env->psrps = (_tmp & PSR_PS)? 1 : 0;                            \
-        cpu_set_cwp(env, _tmp & PSR_CWP);                               \
-        CC_OP = CC_OP_FLAGS;                                            \
-    } while (0)
+    env1->psret = (val & PSR_ET)? 1 : 0;
 #endif
+    cpu_set_cwp(env1, val & PSR_CWP);
+    env1->cc_op = CC_OP_FLAGS;
+}
 
 #ifdef TARGET_SPARC64
 #define GET_CCR(env) (((env->xcc >> 20) << 4) | ((env->psr & PSR_ICC) >> 20))
@@ -548,14 +586,12 @@ static inline void cpu_clone_regs(CPUState *env, target_ulong newsp)
 #include "cpu-all.h"
 #include "exec-all.h"
 
-/* sum4m.c, sun4u.c */
-void cpu_check_irqs(CPUSPARCState *env);
-
 #ifdef TARGET_SPARC64
 /* sun4u.c */
 void cpu_tick_set_count(void *opaque, uint64_t count);
 uint64_t cpu_tick_get_count(void *opaque);
 void cpu_tick_set_limit(void *opaque, uint64_t limit);
+trap_state* cpu_tsptr(CPUState* env);
 #endif
 
 static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)

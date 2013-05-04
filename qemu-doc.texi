@@ -80,7 +80,7 @@ For system emulation, the following hardware targets are supported:
 @item MIPS Magnum (64-bit MIPS processor)
 @item ARM Integrator/CP (ARM)
 @item ARM Versatile baseboard (ARM)
-@item ARM RealView Emulation baseboard (ARM)
+@item ARM RealView Emulation/Platform baseboard (ARM)
 @item Spitz, Akita, Borzoi, Terrier and Tosa PDAs (PXA270 processor)
 @item Luminary Micro LM3S811EVB (ARM Cortex-M3)
 @item Luminary Micro LM3S6965EVB (ARM Cortex-M3)
@@ -199,6 +199,20 @@ QEMU uses YM3812 emulation by Tatsuyuki Satoh.
 QEMU uses GUS emulation(GUSEMU32 @url{http://www.deinmeister.de/gusemu/})
 by Tibor "TS" Schütz.
 
+Not that, by default, GUS shares IRQ(7) with parallel ports and so
+qemu must be told to not have parallel ports to have working GUS
+
+@example
+qemu dos.img -soundhw gus -parallel none
+@end example
+
+Alternatively:
+@example
+qemu dos.img -device gus,irq=5
+@end example
+
+Or some other unclaimed IRQ.
+
 CS4231A is the chip used in Windows Sound System and GUSMAX products
 
 @c man end
@@ -240,6 +254,9 @@ During the graphical emulation, you can use the following keys:
 @table @key
 @item Ctrl-Alt-f
 Toggle full screen
+
+@item Ctrl-Alt-u
+Restore the screen's un-scaled dimensions
 
 @item Ctrl-Alt-n
 Switch to virtual console 'n'. Standard console mappings are:
@@ -1325,11 +1342,11 @@ The following options are specific to the PowerPC emulation:
 
 @table @option
 
-@item -g WxH[xDEPTH]
+@item -g @var{W}x@var{H}[x@var{DEPTH}]
 
 Set the initial VGA graphic mode. The default is 800x600x15.
 
-@item -prom-env string
+@item -prom-env @var{string}
 
 Set OpenBIOS variables in NVRAM, for example:
 
@@ -1425,12 +1442,12 @@ The following options are specific to the Sparc32 emulation:
 
 @table @option
 
-@item -g WxHx[xDEPTH]
+@item -g @var{W}x@var{H}x[x@var{DEPTH}]
 
 Set the initial TCX graphic mode. The default is 1024x768x8, currently
 the only other possible mode is 1024x768x24.
 
-@item -prom-env string
+@item -prom-env @var{string}
 
 Set OpenBIOS variables in NVRAM, for example:
 
@@ -1480,7 +1497,7 @@ The following options are specific to the Sparc64 emulation:
 
 @table @option
 
-@item -prom-env string
+@item -prom-env @var{string}
 
 Set OpenBIOS variables in NVRAM, for example:
 
@@ -1642,17 +1659,18 @@ LSI53C895A PCI SCSI Host Bus Adapter with hard disk and CD-ROM devices.
 PL181 MultiMedia Card Interface with SD card.
 @end itemize
 
-The ARM RealView Emulation baseboard is emulated with the following devices:
+The ARM RealView Emulation/Platform baseboard is emulated with the following
+devices:
 
 @itemize @minus
 @item
-ARM926E, ARM1136, ARM11MPCORE(x4) or Cortex-A8 CPU
+ARM926E, ARM1136, ARM11MPCore, Cortex-A8 or Cortex-A9 MPCore CPU
 @item
 ARM AMBA Generic/Distributed Interrupt Controller
 @item
 Four PL011 UARTs
 @item
-SMC 91c111 Ethernet adapter
+SMC 91c111 or SMSC LAN9118 Ethernet adapter
 @item
 PL110 LCD controller
 @item
@@ -2026,7 +2044,7 @@ qemu-i386 /usr/local/qemu-i386/wine/bin/wine \
 @subsection Command line options
 
 @example
-usage: qemu-i386 [-h] [-d] [-L path] [-s size] [-cpu model] [-g port] program [arguments...]
+usage: qemu-i386 [-h] [-d] [-L path] [-s size] [-cpu model] [-g port] [-B offset] program [arguments...]
 @end example
 
 @table @option
@@ -2038,6 +2056,10 @@ Set the x86 elf interpreter prefix (default=/usr/local/qemu-i386)
 Set the x86 stack size in bytes (default=524288)
 @item -cpu model
 Select CPU model (-cpu ? for list and additional feature selection)
+@item -B offset
+Offset guest address by the specified number of bytes.  This is useful when
+the address region rewuired by guest applications is reserved on the host.
+Ths option is currently only supported on some hosts.
 @end table
 
 Debug options:

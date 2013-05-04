@@ -93,13 +93,13 @@ static uint32_t macio_nvram_readb (void *opaque, target_phys_addr_t addr)
     return value;
 }
 
-static CPUWriteMemoryFunc *nvram_write[] = {
+static CPUWriteMemoryFunc * const nvram_write[] = {
     &macio_nvram_writeb,
     &macio_nvram_writeb,
     &macio_nvram_writeb,
 };
 
-static CPUReadMemoryFunc *nvram_read[] = {
+static CPUReadMemoryFunc * const nvram_read[] = {
     &macio_nvram_readb,
     &macio_nvram_readb,
     &macio_nvram_readb,
@@ -143,7 +143,6 @@ MacIONVRAMState *macio_nvram_init (int *mem_index, target_phys_addr_t size,
     register_savevm("macio_nvram", -1, 1, macio_nvram_save, macio_nvram_load,
                     s);
     qemu_register_reset(macio_nvram_reset, s);
-    macio_nvram_reset(s);
 
     return s;
 }

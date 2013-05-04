@@ -32,6 +32,8 @@
 #include "boards.h"
 #include "device_tree.h"
 #include "xilinx.h"
+#include "loader.h"
+#include "elf.h"
 
 #define LMB_BRAM_SIZE  (128 * 1024)
 #define FLASH_SIZE     (16 * 1024 * 1024)
@@ -52,14 +54,12 @@ static int petalogix_load_device_tree(target_phys_addr_t addr,
                                       target_phys_addr_t initrd_size,
                                       const char *kernel_cmdline)
 {
-#ifdef HAVE_FDT
-    void *fdt;
-    int r;
-#endif
     char *path;
     int fdt_size;
+#ifdef CONFIG_FDT
+    void *fdt;
+    int r;
 
-#ifdef HAVE_FDT
     /* Try the local "mb.dtb" override.  */
     fdt = load_device_tree("mb.dtb", &fdt_size);
     if (!fdt) {
@@ -106,6 +106,7 @@ petalogix_s3adsp1800_init(ram_addr_t ram_size,
     DeviceState *dev;
     CPUState *env;
     int kernel_size;
+    DriveInfo *dinfo;
     int i;
     target_phys_addr_t ddr_base = 0x90000000;
     ram_addr_t phys_lmb_bram;
@@ -131,9 +132,9 @@ petalogix_s3adsp1800_init(ram_addr_t ram_size,
     cpu_register_physical_memory(ddr_base, ram_size, phys_ram | IO_MEM_RAM);
 
     phys_flash = qemu_ram_alloc(FLASH_SIZE);
-    i = drive_get_index(IF_PFLASH, 0, 0);
+    dinfo = drive_get(IF_PFLASH, 0, 0);
     pflash_cfi02_register(0xa0000000, phys_flash,
-                          i != -1 ? drives_table[i].bdrv : NULL, (64 * 1024),
+                          dinfo ? dinfo->bdrv : NULL, (64 * 1024),
                           FLASH_SIZE >> 16,
                           1, 1, 0x0000, 0x0000, 0x0000, 0x0000,
                           0x555, 0x2aa);
@@ -156,11 +157,13 @@ petalogix_s3adsp1800_init(ram_addr_t ram_size,
 
         /* Boots a kernel elf binary.  */
         kernel_size = load_elf(kernel_filename, 0,
-                               &entry, &low, &high);
+                               &entry, &low, &high,
+                               1, ELF_MACHINE, 0);
         base32 = entry;
         if (base32 == 0xc0000000) {
             kernel_size = load_elf(kernel_filename, -0x30000000LL,
-                                   &entry, NULL, NULL);
+                                   &entry, NULL, NULL,
+                                   1, ELF_MACHINE, 0);
         }
         /* Always boot into physical ram.  */
         bootstrap_pc = ddr_base + (entry & 0x0fffffff);
@@ -171,9 +174,9 @@ petalogix_s3adsp1800_init(ram_addr_t ram_size,
             bootstrap_pc = ddr_base;
         }
 
-        env->regs[5] = ddr_base + kernel_size;
+        env->regs[5] = ddr_base + kernel_size + 8192;
         if (kernel_cmdline && (kcmdline_len = strlen(kernel_cmdline))) {
-            pstrcpy_targphys(env->regs[5], 256, kernel_cmdline);
+            pstrcpy_targphys("cmdline", env->regs[5], 256, kernel_cmdline);
         }
         env->regs[6] = 0;
         /* Provide a device-tree.  */

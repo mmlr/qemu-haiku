@@ -912,6 +912,11 @@ static inline void save_npc(DisasContext *dc, TCGv cond)
 static inline void save_state(DisasContext *dc, TCGv cond)
 {
     tcg_gen_movi_tl(cpu_pc, dc->pc);
+    /* flush pending conditional evaluations before exposing cpu state */
+    if (dc->cc_op != CC_OP_FLAGS) {
+        dc->cc_op = CC_OP_FLAGS;
+        gen_helper_compute_psr();
+    }
     save_npc(dc, cond);
 }
 
@@ -1129,6 +1134,7 @@ static void do_branch(DisasContext *dc, int32_t offset, uint32_t insn, int cc,
         } else {
             dc->pc = dc->npc;
             dc->npc = target;
+            tcg_gen_mov_tl(cpu_pc, cpu_npc);
         }
     } else {
         flush_cond(dc, r_cond);
@@ -1169,6 +1175,7 @@ static void do_fbranch(DisasContext *dc, int32_t offset, uint32_t insn, int cc,
         } else {
             dc->pc = dc->npc;
             dc->npc = target;
+            tcg_gen_mov_tl(cpu_pc, cpu_npc);
         }
     } else {
         flush_cond(dc, r_cond);
@@ -1653,6 +1660,33 @@ static inline TCGv get_src2(unsigned int insn, TCGv def)
     return r_rs2;
 }
 
+#ifdef TARGET_SPARC64
+static inline void gen_load_trap_state_at_tl(TCGv_ptr r_tsptr, TCGv_ptr cpu_env)
+{
+    TCGv r_tl = tcg_temp_new();
+
+    /* load env->tl into r_tl */
+    {
+        TCGv_i32 r_tl_tmp = tcg_temp_new_i32();
+        tcg_gen_ld_i32(r_tl_tmp, cpu_env, offsetof(CPUSPARCState, tl));
+        tcg_gen_ext_i32_tl(r_tl, r_tl_tmp);
+        tcg_temp_free_i32(r_tl_tmp);
+    }
+
+    /* tl = [0 ... MAXTL_MASK] where MAXTL_MASK must be power of 2 */
+    tcg_gen_andi_tl(r_tl, r_tl, MAXTL_MASK);
+
+    /* calculate offset to current trap state from env->ts, reuse r_tl */
+    tcg_gen_muli_tl(r_tl, r_tl, sizeof (trap_state));
+    tcg_gen_addi_ptr(r_tsptr, cpu_env, offsetof(CPUState, ts));
+
+    /* tsptr = env->ts[env->tl & MAXTL_MASK] */
+    tcg_gen_add_ptr(r_tsptr, r_tsptr, r_tl);
+
+    tcg_temp_free(r_tl);
+}
+#endif
+
 #define CHECK_IU_FEATURE(dc, FEATURE)                      \
     if (!((dc)->def->features & CPU_FEATURE_ ## FEATURE))  \
         goto illegal_insn;
@@ -1978,8 +2012,7 @@ static void disas_sparc_insn(DisasContext * dc)
                         TCGv_ptr r_tsptr;
 
                         r_tsptr = tcg_temp_new_ptr();
-                        tcg_gen_ld_ptr(r_tsptr, cpu_env,
-                                       offsetof(CPUState, tsptr));
+                        gen_load_trap_state_at_tl(r_tsptr, cpu_env);
                         tcg_gen_ld_tl(cpu_tmp0, r_tsptr,
                                       offsetof(trap_state, tpc));
                         tcg_temp_free_ptr(r_tsptr);
@@ -1990,8 +2023,7 @@ static void disas_sparc_insn(DisasContext * dc)
                         TCGv_ptr r_tsptr;
 
                         r_tsptr = tcg_temp_new_ptr();
-                        tcg_gen_ld_ptr(r_tsptr, cpu_env,
-                                       offsetof(CPUState, tsptr));
+                        gen_load_trap_state_at_tl(r_tsptr, cpu_env);
                         tcg_gen_ld_tl(cpu_tmp0, r_tsptr,
                                       offsetof(trap_state, tnpc));
                         tcg_temp_free_ptr(r_tsptr);
@@ -2002,8 +2034,7 @@ static void disas_sparc_insn(DisasContext * dc)
                         TCGv_ptr r_tsptr;
 
                         r_tsptr = tcg_temp_new_ptr();
-                        tcg_gen_ld_ptr(r_tsptr, cpu_env,
-                                       offsetof(CPUState, tsptr));
+                        gen_load_trap_state_at_tl(r_tsptr, cpu_env);
                         tcg_gen_ld_tl(cpu_tmp0, r_tsptr,
                                       offsetof(trap_state, tstate));
                         tcg_temp_free_ptr(r_tsptr);
@@ -2014,8 +2045,7 @@ static void disas_sparc_insn(DisasContext * dc)
                         TCGv_ptr r_tsptr;
 
                         r_tsptr = tcg_temp_new_ptr();
-                        tcg_gen_ld_ptr(r_tsptr, cpu_env,
-                                       offsetof(CPUState, tsptr));
+                        gen_load_trap_state_at_tl(r_tsptr, cpu_env);
                         tcg_gen_ld_i32(cpu_tmp32, r_tsptr,
                                        offsetof(trap_state, tt));
                         tcg_temp_free_ptr(r_tsptr);
@@ -3122,6 +3152,7 @@ static void disas_sparc_insn(DisasContext * dc)
                                 break;
                             case 0x3: /* V9 wrasi */
                                 tcg_gen_xor_tl(cpu_dst, cpu_src1, cpu_src2);
+                                tcg_gen_andi_tl(cpu_dst, cpu_dst, 0xff);
                                 tcg_gen_trunc_tl_i32(cpu_asi, cpu_dst);
                                 break;
                             case 0x6: /* V9 wrfprs */
@@ -3271,8 +3302,7 @@ static void disas_sparc_insn(DisasContext * dc)
                                     TCGv_ptr r_tsptr;
 
                                     r_tsptr = tcg_temp_new_ptr();
-                                    tcg_gen_ld_ptr(r_tsptr, cpu_env,
-                                                   offsetof(CPUState, tsptr));
+                                    gen_load_trap_state_at_tl(r_tsptr, cpu_env);
                                     tcg_gen_st_tl(cpu_tmp0, r_tsptr,
                                                   offsetof(trap_state, tpc));
                                     tcg_temp_free_ptr(r_tsptr);
@@ -3283,8 +3313,7 @@ static void disas_sparc_insn(DisasContext * dc)
                                     TCGv_ptr r_tsptr;
 
                                     r_tsptr = tcg_temp_new_ptr();
-                                    tcg_gen_ld_ptr(r_tsptr, cpu_env,
-                                                   offsetof(CPUState, tsptr));
+                                    gen_load_trap_state_at_tl(r_tsptr, cpu_env);
                                     tcg_gen_st_tl(cpu_tmp0, r_tsptr,
                                                   offsetof(trap_state, tnpc));
                                     tcg_temp_free_ptr(r_tsptr);
@@ -3295,8 +3324,7 @@ static void disas_sparc_insn(DisasContext * dc)
                                     TCGv_ptr r_tsptr;
 
                                     r_tsptr = tcg_temp_new_ptr();
-                                    tcg_gen_ld_ptr(r_tsptr, cpu_env,
-                                                   offsetof(CPUState, tsptr));
+                                    gen_load_trap_state_at_tl(r_tsptr, cpu_env);
                                     tcg_gen_st_tl(cpu_tmp0, r_tsptr,
                                                   offsetof(trap_state,
                                                            tstate));
@@ -3308,8 +3336,7 @@ static void disas_sparc_insn(DisasContext * dc)
                                     TCGv_ptr r_tsptr;
 
                                     r_tsptr = tcg_temp_new_ptr();
-                                    tcg_gen_ld_ptr(r_tsptr, cpu_env,
-                                                   offsetof(CPUState, tsptr));
+                                    gen_load_trap_state_at_tl(r_tsptr, cpu_env);
                                     tcg_gen_trunc_tl_i32(cpu_tmp32, cpu_tmp0);
                                     tcg_gen_st_i32(cpu_tmp32, r_tsptr,
                                                    offsetof(trap_state, tt));
@@ -4091,6 +4118,12 @@ static void disas_sparc_insn(DisasContext * dc)
         {
             unsigned int xop = GET_FIELD(insn, 7, 12);
 
+            /* flush pending conditional evaluations before exposing
+               cpu state */
+            if (dc->cc_op != CC_OP_FLAGS) {
+                dc->cc_op = CC_OP_FLAGS;
+                gen_helper_compute_psr();
+            }
             cpu_src1 = get_src1(insn, cpu_src1);
             if (xop == 0x3c || xop == 0x3e) { // V9 casa/casxa
                 rs2 = GET_FIELD(insn, 27, 31);
@@ -4674,8 +4707,8 @@ static inline void gen_intermediate_code_internal(TranslationBlock * tb,
         max_insns = CF_COUNT_MASK;
     gen_icount_start();
     do {
-        if (unlikely(!TAILQ_EMPTY(&env->breakpoints))) {
-            TAILQ_FOREACH(bp, &env->breakpoints, entry) {
+        if (unlikely(!QTAILQ_EMPTY(&env->breakpoints))) {
+            QTAILQ_FOREACH(bp, &env->breakpoints, entry) {
                 if (bp->pc == dc->pc) {
                     if (dc->pc != pc_start)
                         save_state(dc, cpu_cond);

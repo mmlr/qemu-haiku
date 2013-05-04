@@ -21,12 +21,11 @@
 #include <ctype.h>
 #include <errno.h>
 #include <sys/time.h>
+#include <getopt.h>
 
 #include "cmd.h"
 
 #define _(x)	x	/* not gettext support yet */
-
-extern int optind;
 
 /* from libxcmd/command.c */
 
@@ -288,9 +287,9 @@ static char *qemu_strsep(char **input, const char *delim)
 {
     char *result = *input;
     if (result != NULL) {
-    char *p = result;
-    for (p = result; *p != '\0'; p++) {
-        if (strchr(delim, *p)) {
+        char *p = result;
+        for (p = result; *p != '\0'; p++) {
+            if (strchr(delim, *p)) {
                 break;
             }
         }

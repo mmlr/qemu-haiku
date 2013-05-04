@@ -379,7 +379,7 @@ static void init_mbr(BDRVVVFATState* s)
 {
     /* TODO: if the files mbr.img and bootsect.img exist, use them */
     mbr_t* real_mbr=(mbr_t*)s->first_sectors;
-    partition_t* partition=&(real_mbr->partition[0]);
+    partition_t* partition = &(real_mbr->partition[0]);
     int lba;
 
     memset(s->first_sectors,0,512);
@@ -526,7 +526,7 @@ static uint16_t fat_datetime(time_t time,int return_time) {
     t=localtime(&time); /* this is not thread safe */
 #else
     struct tm t1;
-    t=&t1;
+    t = &t1;
     localtime_r(&time,t);
 #endif
     if(return_time)
@@ -868,7 +868,8 @@ static int init_directories(BDRVVVFATState* s,
     {
 	direntry_t* entry=array_get_next(&(s->directory));
 	entry->attributes=0x28; /* archive | volume label */
-	snprintf((char*)entry->name,11,"QEMU VVFAT");
+	memcpy(entry->name,"QEMU VVF",8);
+	memcpy(entry->extension,"AT ",3);
     }
 
     /* Now build FAT, and write back information into directory */
@@ -882,7 +883,7 @@ static int init_directories(BDRVVVFATState* s,
     mapping->dir_index = 0;
     mapping->info.dir.parent_mapping_index = -1;
     mapping->first_mapping_index = -1;
-    mapping->path = strdup(dirname);
+    mapping->path = qemu_strdup(dirname);
     i = strlen(mapping->path);
     if (i > 0 && mapping->path[i - 1] == '/')
 	mapping->path[i - 1] = '\0';
@@ -1632,10 +1633,10 @@ static uint32_t get_cluster_count_for_direntry(BDRVVVFATState* s,
 
 	    /* rename */
 	    if (strcmp(basename, basename2))
-		schedule_rename(s, cluster_num, strdup(path));
+		schedule_rename(s, cluster_num, qemu_strdup(path));
 	} else if (is_file(direntry))
 	    /* new file */
-	    schedule_new_file(s, strdup(path), cluster_num);
+	    schedule_new_file(s, qemu_strdup(path), cluster_num);
 	else {
 	    assert(0);
 	    return 0;
@@ -1752,10 +1753,10 @@ static int check_directory_consistency(BDRVVVFATState *s,
 	mapping->mode &= ~MODE_DELETED;
 
 	if (strcmp(basename, basename2))
-	    schedule_rename(s, cluster_num, strdup(path));
+	    schedule_rename(s, cluster_num, qemu_strdup(path));
     } else
 	/* new directory */
-	schedule_mkdir(s, cluster_num, strdup(path));
+	schedule_mkdir(s, cluster_num, qemu_strdup(path));
 
     lfn_init(&lfn);
     do {
@@ -2256,7 +2257,11 @@ static int commit_one_file(BDRVVVFATState* s,
 	c = c1;
     }
 
-    ftruncate(fd, size);
+    if (ftruncate(fd, size)) {
+        perror("ftruncate()");
+        close(fd);
+        return -4;
+    }
     close(fd);
 
     return commit_mappings(s, first_cluster, dir_index);

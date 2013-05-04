@@ -36,8 +36,8 @@
 #define PROM_ADDR         0xfff00000
 
 #define KERNEL_LOAD_ADDR 0x01000000
-#define CMDLINE_ADDR     0x017ff000
-#define INITRD_LOAD_ADDR 0x01800000
+#define CMDLINE_ADDR     0x027ff000
+#define INITRD_LOAD_ADDR 0x02800000
 
 #define ESCC_CLOCK 3686400
 
@@ -48,10 +48,6 @@ void cuda_init (int *cuda_mem_index, qemu_irq irq);
 void macio_init (PCIBus *bus, int device_id, int is_oldworld, int pic_mem_index,
                  int dbdma_mem_index, int cuda_mem_index, void *nvram,
                  int nb_ide, int *ide_mem_index, int escc_mem_index);
-
-/* NewWorld PowerMac IDE */
-int pmac_ide_init (BlockDriverState **hd_table, qemu_irq irq,
-                   void *dbdma, int channel, qemu_irq dma_irq);
 
 /* Heathrow PIC */
 qemu_irq *heathrow_pic_init(int *pmem_index,

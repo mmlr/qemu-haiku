@@ -69,7 +69,7 @@ typedef struct SH7750State {
     struct intc_desc intc;
 } SH7750State;
 
-static int inline has_bcr3_and_bcr4(SH7750State * s)
+static inline int has_bcr3_and_bcr4(SH7750State * s)
 {
 	return (s->cpu->features & SH_FEATURE_BCR3_AND_BCR4);
 }
@@ -396,8 +396,11 @@ static void sh7750_mem_writel(void *opaque, target_phys_addr_t addr,
 	portb_changed(s, temp);
 	return;
     case SH7750_MMUCR_A7:
-	s->cpu->mmucr = mem_value;
-	return;
+        if (mem_value & MMUCR_TI) {
+            cpu_sh4_invalidate_tlb(s->cpu);
+        }
+        s->cpu->mmucr = mem_value & ~MMUCR_TI;
+        return;
     case SH7750_PTEH_A7:
         /* If asid changes, clear all registered tlb entries. */
 	if ((s->cpu->pteh & 0xff) != (mem_value & 0xff))
@@ -434,13 +437,13 @@ static void sh7750_mem_writel(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *sh7750_mem_read[] = {
+static CPUReadMemoryFunc * const sh7750_mem_read[] = {
     sh7750_mem_readb,
     sh7750_mem_readw,
     sh7750_mem_readl
 };
 
-static CPUWriteMemoryFunc *sh7750_mem_write[] = {
+static CPUWriteMemoryFunc * const sh7750_mem_write[] = {
     sh7750_mem_writeb,
     sh7750_mem_writew,
     sh7750_mem_writel
@@ -688,13 +691,13 @@ static void sh7750_mmct_writel(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *sh7750_mmct_read[] = {
+static CPUReadMemoryFunc * const sh7750_mmct_read[] = {
     invalid_read,
     invalid_read,
     sh7750_mmct_readl
 };
 
-static CPUWriteMemoryFunc *sh7750_mmct_write[] = {
+static CPUWriteMemoryFunc * const sh7750_mmct_write[] = {
     invalid_write,
     invalid_write,
     sh7750_mmct_writel

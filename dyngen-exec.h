@@ -39,7 +39,7 @@
 /* XXX: This may be wrong for 64-bit ILP32 hosts.  */
 typedef void * host_reg_t;
 
-#ifdef HOST_BSD
+#ifdef CONFIG_BSD
 typedef struct __sFILE FILE;
 #else
 typedef struct FILE FILE;
@@ -47,8 +47,6 @@ typedef struct FILE FILE;
 extern int fprintf(FILE *, const char *, ...);
 extern int fputs(const char *, FILE *);
 extern int printf(const char *, ...);
-#undef NULL
-#define NULL 0
 
 #if defined(__i386__)
 #define AREG0 "ebp"
@@ -71,11 +69,11 @@ extern int printf(const char *, ...);
 #define AREG1 "r14"
 #define AREG2 "r15"
 #elif defined(__mips__)
-#define AREG0 "fp"
-#define AREG1 "s0"
-#define AREG2 "s1"
+#define AREG0 "s0"
+#define AREG1 "s1"
+#define AREG2 "fp"
 #elif defined(__sparc__)
-#ifdef HOST_SOLARIS
+#ifdef CONFIG_SOLARIS
 #define AREG0 "g2"
 #define AREG1 "g3"
 #define AREG2 "g4"
@@ -119,7 +117,7 @@ extern int printf(const char *, ...);
 
 /* The return address may point to the start of the next instruction.
    Subtracting one gets us the call instruction itself.  */
-#if defined(__s390__)
+#if defined(__s390__) && !defined(__s390x__)
 # define GETPC() ((void*)(((unsigned long)__builtin_return_address(0) & 0x7fffffffUL) - 1))
 #elif defined(__arm__)
 /* Thumb return addresses have the low bit set, so we need to subtract two.

@@ -32,12 +32,17 @@
 #include "flash.h"
 #include "mips.h"
 #include "pci.h"
+#include "usb-uhci.h"
+#include "vmware_vga.h"
 #include "qemu-char.h"
 #include "sysemu.h"
 #include "audio/audio.h"
 #include "boards.h"
 #include "qemu-log.h"
 #include "mips-bios.h"
+#include "ide.h"
+#include "loader.h"
+#include "elf.h"
 
 //#define DEBUG_BOARD_INIT
 
@@ -129,7 +134,7 @@ struct _eeprom24c0x_t {
 typedef struct _eeprom24c0x_t eeprom24c0x_t;
 
 static eeprom24c0x_t eeprom = {
-    contents: {
+    .contents = {
         /* 00000000: */ 0x80,0x08,0x04,0x0D,0x0A,0x01,0x40,0x00,
         /* 00000008: */ 0x01,0x75,0x54,0x00,0x82,0x08,0x00,0x01,
         /* 00000010: */ 0x8F,0x04,0x02,0x01,0x01,0x00,0x0E,0x00,
@@ -227,7 +232,7 @@ static uint32_t malta_fpga_readl(void *opaque, target_phys_addr_t addr)
     /* SWITCH Register */
     case 0x00200:
         val = 0x00000000;		/* All switches closed */
-	break;
+        break;
 
     /* STATUS Register */
     case 0x00208:
@@ -294,7 +299,7 @@ static uint32_t malta_fpga_readl(void *opaque, target_phys_addr_t addr)
     default:
 #if 0
         printf ("malta_fpga_read: Bad register offset 0x" TARGET_FMT_lx "\n",
-		addr);
+                addr);
 #endif
         break;
     }
@@ -381,19 +386,19 @@ static void malta_fpga_writel(void *opaque, target_phys_addr_t addr,
     default:
 #if 0
         printf ("malta_fpga_write: Bad register offset 0x" TARGET_FMT_lx "\n",
-		addr);
+                addr);
 #endif
         break;
     }
 }
 
-static CPUReadMemoryFunc *malta_fpga_read[] = {
+static CPUReadMemoryFunc * const malta_fpga_read[] = {
    malta_fpga_readl,
    malta_fpga_readl,
    malta_fpga_readl
 };
 
-static CPUWriteMemoryFunc *malta_fpga_write[] = {
+static CPUWriteMemoryFunc * const malta_fpga_write[] = {
    malta_fpga_writel,
    malta_fpga_writel,
    malta_fpga_writel
@@ -486,7 +491,7 @@ static void network_init(void)
             /* The malta board has a PCNet card using PCI SLOT 11 */
             default_devaddr = "0b";
 
-        pci_nic_init(nd, "pcnet", default_devaddr);
+        pci_nic_init_nofail(nd, "pcnet", default_devaddr);
     }
 }
 
@@ -652,44 +657,47 @@ static void write_bootloader (CPUState *env, uint8_t *base,
 
 }
 
-static void prom_set(int index, const char *string, ...)
+static void prom_set(uint32_t* prom_buf, int index, const char *string, ...)
 {
-    char buf[ENVP_ENTRY_SIZE];
-    target_phys_addr_t p;
     va_list ap;
     int32_t table_addr;
 
     if (index >= ENVP_NB_ENTRIES)
         return;
 
-    p = ENVP_ADDR + VIRT_TO_PHYS_ADDEND + index * 4;
-
     if (string == NULL) {
-        stl_phys(p, 0);
+        prom_buf[index] = 0;
         return;
     }
 
-    table_addr = ENVP_ADDR + sizeof(int32_t) * ENVP_NB_ENTRIES
-                 + index * ENVP_ENTRY_SIZE;
-    stl_phys(p, table_addr);
+    table_addr = sizeof(int32_t) * ENVP_NB_ENTRIES + index * ENVP_ENTRY_SIZE;
+    prom_buf[index] = tswap32(ENVP_ADDR + table_addr);
 
     va_start(ap, string);
-    vsnprintf(buf, ENVP_ENTRY_SIZE, string, ap);
+    vsnprintf((char *)prom_buf + table_addr, ENVP_ENTRY_SIZE, string, ap);
     va_end(ap);
-    pstrcpy_targphys(table_addr + VIRT_TO_PHYS_ADDEND, ENVP_ENTRY_SIZE, buf);
 }
 
 /* Kernel */
-static int64_t load_kernel (CPUState *env)
+static int64_t load_kernel (void)
 {
     int64_t kernel_entry, kernel_low, kernel_high;
-    int index = 0;
     long initrd_size;
     ram_addr_t initrd_offset;
+    int big_endian;
+    uint32_t *prom_buf;
+    long prom_size;
+    int prom_index = 0;
+
+#ifdef TARGET_WORDS_BIGENDIAN
+    big_endian = 1;
+#else
+    big_endian = 0;
+#endif
 
     if (load_elf(loaderparams.kernel_filename, VIRT_TO_PHYS_ADDEND,
                  (uint64_t *)&kernel_entry, (uint64_t *)&kernel_low,
-                 (uint64_t *)&kernel_high) < 0) {
+                 (uint64_t *)&kernel_high, big_endian, ELF_MACHINE, 1) < 0) {
         fprintf(stderr, "qemu: could not load kernel '%s'\n",
                 loaderparams.kernel_filename);
         exit(1);
@@ -719,21 +727,27 @@ static int64_t load_kernel (CPUState *env)
         }
     }
 
-    /* Store command line.  */
-    prom_set(index++, loaderparams.kernel_filename);
-    if (initrd_size > 0)
-        prom_set(index++, "rd_start=0x" TARGET_FMT_lx " rd_size=%li %s",
+    /* Setup prom parameters. */
+    prom_size = ENVP_NB_ENTRIES * (sizeof(int32_t) + ENVP_ENTRY_SIZE);
+    prom_buf = qemu_malloc(prom_size);
+
+    prom_set(prom_buf, prom_index++, loaderparams.kernel_filename);
+    if (initrd_size > 0) {
+        prom_set(prom_buf, prom_index++, "rd_start=0x" TARGET_FMT_lx " rd_size=%li %s",
                  PHYS_TO_VIRT(initrd_offset), initrd_size,
                  loaderparams.kernel_cmdline);
-    else
-        prom_set(index++, loaderparams.kernel_cmdline);
+    } else {
+        prom_set(prom_buf, prom_index++, loaderparams.kernel_cmdline);
+    }
 
-    /* Setup minimum environment variables */
-    prom_set(index++, "memsize");
-    prom_set(index++, "%i", loaderparams.ram_size);
-    prom_set(index++, "modetty0");
-    prom_set(index++, "38400n8r");
-    prom_set(index++, NULL);
+    prom_set(prom_buf, prom_index++, "memsize");
+    prom_set(prom_buf, prom_index++, "%i", loaderparams.ram_size);
+    prom_set(prom_buf, prom_index++, "modetty0");
+    prom_set(prom_buf, prom_index++, "38400n8r");
+    prom_set(prom_buf, prom_index++, NULL);
+
+    rom_add_blob_fixed("prom", prom_buf, prom_size,
+                       ENVP_ADDR + VIRT_TO_PHYS_ADDEND);
 
     return kernel_entry;
 }
@@ -748,7 +762,6 @@ static void main_cpu_reset(void *opaque)
        location does not change. */
     if (loaderparams.kernel_filename) {
         env->CP0_Status &= ~((1 << CP0St_BEV) | (1 << CP0St_ERL));
-        load_kernel (env);
     }
 }
 
@@ -764,6 +777,7 @@ void mips_malta_init (ram_addr_t ram_size,
     target_long bios_size;
     int64_t kernel_entry;
     PCIBus *pci_bus;
+    ISADevice *isa_dev;
     CPUState *env;
     RTCState *rtc_state;
     fdctrl_t *floppy_controller;
@@ -773,11 +787,20 @@ void mips_malta_init (ram_addr_t ram_size,
     uint8_t *eeprom_buf;
     i2c_bus *smbus;
     int i;
-    int index;
-    BlockDriverState *hd[MAX_IDE_BUS * MAX_IDE_DEVS];
-    BlockDriverState *fd[MAX_FD];
+    DriveInfo *dinfo;
+    DriveInfo *hd[MAX_IDE_BUS * MAX_IDE_DEVS];
+    DriveInfo *fd[MAX_FD];
     int fl_idx = 0;
     int fl_sectors = 0;
+
+    /* Make sure the first 3 serial ports are associated with a device. */
+    for(i = 0; i < 3; i++) {
+        if (!serial_hds[i]) {
+            char label[32];
+            snprintf(label, sizeof(label), "serial%d", i);
+            serial_hds[i] = qemu_chr_open(label, "null", NULL);
+        }
+    }
 
     /* init CPUs */
     if (cpu_model == NULL) {
@@ -823,12 +846,11 @@ void mips_malta_init (ram_addr_t ram_size,
         loaderparams.kernel_filename = kernel_filename;
         loaderparams.kernel_cmdline = kernel_cmdline;
         loaderparams.initrd_filename = initrd_filename;
-        kernel_entry = load_kernel(env);
-        env->CP0_Status &= ~((1 << CP0St_BEV) | (1 << CP0St_ERL));
+        kernel_entry = load_kernel();
         write_bootloader(env, qemu_get_ram_ptr(bios_offset), kernel_entry);
     } else {
-        index = drive_get_index(IF_PFLASH, 0, fl_idx);
-        if (index != -1) {
+        dinfo = drive_get(IF_PFLASH, 0, fl_idx);
+        if (dinfo) {
             /* Load firmware from flash. */
             bios_size = 0x400000;
             fl_sectors = bios_size >> 16;
@@ -836,10 +858,10 @@ void mips_malta_init (ram_addr_t ram_size,
             printf("Register parallel flash %d size " TARGET_FMT_lx " at "
                    "offset %08lx addr %08llx '%s' %x\n",
                    fl_idx, bios_size, bios_offset, 0x1e000000LL,
-                   bdrv_get_device_name(drives_table[index].bdrv), fl_sectors);
+                   bdrv_get_device_name(dinfo->bdrv), fl_sectors);
 #endif
             pflash_cfi01_register(0x1e000000LL, bios_offset,
-                                  drives_table[index].bdrv, 65536, fl_sectors,
+                                  dinfo->bdrv, 65536, fl_sectors,
                                   4, 0x0000, 0x0000, 0x0000, 0x0000);
             fl_idx++;
         } else {
@@ -898,44 +920,38 @@ void mips_malta_init (ram_addr_t ram_size,
     }
 
     for(i = 0; i < MAX_IDE_BUS * MAX_IDE_DEVS; i++) {
-        index = drive_get_index(IF_IDE, i / MAX_IDE_DEVS, i % MAX_IDE_DEVS);
-        if (index != -1)
-            hd[i] = drives_table[index].bdrv;
-        else
-            hd[i] = NULL;
+        hd[i] = drive_get(IF_IDE, i / MAX_IDE_DEVS, i % MAX_IDE_DEVS);
     }
 
     piix4_devfn = piix4_init(pci_bus, 80);
-    pci_piix4_ide_init(pci_bus, hd, piix4_devfn + 1, i8259);
+    isa_bus_irqs(i8259);
+    pci_piix4_ide_init(pci_bus, hd, piix4_devfn + 1);
     usb_uhci_piix4_init(pci_bus, piix4_devfn + 2);
-    smbus = piix4_pm_init(pci_bus, piix4_devfn + 3, 0x1100, i8259[9]);
+    smbus = piix4_pm_init(pci_bus, piix4_devfn + 3, 0x1100, isa_reserve_irq(9));
     eeprom_buf = qemu_mallocz(8 * 256); /* XXX: make this persistent */
     for (i = 0; i < 8; i++) {
         /* TODO: Populate SPD eeprom data.  */
         DeviceState *eeprom;
         eeprom = qdev_create((BusState *)smbus, "smbus-eeprom");
-        qdev_prop_set_uint32(eeprom, "address", 0x50 + i);
+        qdev_prop_set_uint8(eeprom, "address", 0x50 + i);
         qdev_prop_set_ptr(eeprom, "data", eeprom_buf + (i * 256));
-        qdev_init(eeprom);
+        qdev_init_nofail(eeprom);
     }
-    pit = pit_init(0x40, i8259[0]);
+    pit = pit_init(0x40, isa_reserve_irq(0));
     DMA_init(0);
 
     /* Super I/O */
-    i8042_init(i8259[1], i8259[12], 0x60);
-    rtc_state = rtc_init(0x70, i8259[8], 2000);
-    serial_init(0x3f8, i8259[4], 115200, serial_hds[0]);
-    serial_init(0x2f8, i8259[3], 115200, serial_hds[1]);
+    isa_dev = isa_create_simple("i8042");
+ 
+    rtc_state = rtc_init(2000);
+    serial_isa_init(0, serial_hds[0]);
+    serial_isa_init(1, serial_hds[1]);
     if (parallel_hds[0])
-        parallel_init(0x378, i8259[7], parallel_hds[0]);
+        parallel_init(0, parallel_hds[0]);
     for(i = 0; i < MAX_FD; i++) {
-        index = drive_get_index(IF_FLOPPY, 0, i);
-       if (index != -1)
-           fd[i] = drives_table[index].bdrv;
-       else
-           fd[i] = NULL;
+        fd[i] = drive_get(IF_FLOPPY, 0, i);
     }
-    floppy_controller = fdctrl_init(i8259[6], 2, 0, 0x3f0, fd);
+    floppy_controller = fdctrl_init_isa(fd);
 
     /* Sound card */
 #ifdef HAS_AUDIO

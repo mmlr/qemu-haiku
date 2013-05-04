@@ -202,70 +202,38 @@ static void dma_mem_writel(void *opaque, target_phys_addr_t addr, uint32_t val)
     s->dmaregs[saddr] = val;
 }
 
-static CPUReadMemoryFunc *dma_mem_read[3] = {
+static CPUReadMemoryFunc * const dma_mem_read[3] = {
     NULL,
     NULL,
     dma_mem_readl,
 };
 
-static CPUWriteMemoryFunc *dma_mem_write[3] = {
+static CPUWriteMemoryFunc * const dma_mem_write[3] = {
     NULL,
     NULL,
     dma_mem_writel,
 };
 
-static void dma_reset(void *opaque)
+static void dma_reset(DeviceState *d)
 {
-    DMAState *s = opaque;
+    DMAState *s = container_of(d, DMAState, busdev.qdev);
 
     memset(s->dmaregs, 0, DMA_SIZE);
     s->dmaregs[0] = DMA_VER;
 }
 
-static void dma_save(QEMUFile *f, void *opaque)
-{
-    DMAState *s = opaque;
-    unsigned int i;
+static const VMStateDescription vmstate_dma = {
+    .name ="sparc32_dma",
+    .version_id = 2,
+    .minimum_version_id = 2,
+    .minimum_version_id_old = 2,
+    .fields      = (VMStateField []) {
+        VMSTATE_UINT32_ARRAY(dmaregs, DMAState, DMA_REGS),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
-    for (i = 0; i < DMA_REGS; i++)
-        qemu_put_be32s(f, &s->dmaregs[i]);
-}
-
-static int dma_load(QEMUFile *f, void *opaque, int version_id)
-{
-    DMAState *s = opaque;
-    unsigned int i;
-
-    if (version_id != 2)
-        return -EINVAL;
-    for (i = 0; i < DMA_REGS; i++)
-        qemu_get_be32s(f, &s->dmaregs[i]);
-
-    return 0;
-}
-
-void *sparc32_dma_init(target_phys_addr_t daddr, qemu_irq parent_irq,
-                       void *iommu, qemu_irq *dev_irq, qemu_irq **reset)
-{
-    DeviceState *dev;
-    SysBusDevice *s;
-    DMAState *d;
-
-    dev = qdev_create(NULL, "sparc32_dma");
-    qdev_prop_set_ptr(dev, "iommu_opaque", iommu);
-    qdev_init(dev);
-    s = sysbus_from_qdev(dev);
-    sysbus_connect_irq(s, 0, parent_irq);
-    *dev_irq = qdev_get_gpio_in(dev, 0);
-    sysbus_mmio_map(s, 0, daddr);
-
-    d = FROM_SYSBUS(DMAState, s);
-    *reset = &d->dev_reset;
-
-    return d;
-}
-
-static void sparc32_dma_init1(SysBusDevice *dev)
+static int sparc32_dma_init1(SysBusDevice *dev)
 {
     DMAState *s = FROM_SYSBUS(DMAState, dev);
     int dma_io_memory;
@@ -275,23 +243,21 @@ static void sparc32_dma_init1(SysBusDevice *dev)
     dma_io_memory = cpu_register_io_memory(dma_mem_read, dma_mem_write, s);
     sysbus_init_mmio(dev, DMA_SIZE, dma_io_memory);
 
-    register_savevm("sparc32_dma", -1, 2, dma_save, dma_load, s);
-    qemu_register_reset(dma_reset, s);
-
     qdev_init_gpio_in(&dev->qdev, dma_set_irq, 1);
+    qdev_init_gpio_out(&dev->qdev, &s->dev_reset, 1);
+
+    return 0;
 }
 
 static SysBusDeviceInfo sparc32_dma_info = {
     .init = sparc32_dma_init1,
     .qdev.name  = "sparc32_dma",
     .qdev.size  = sizeof(DMAState),
+    .qdev.vmsd  = &vmstate_dma,
+    .qdev.reset = dma_reset,
     .qdev.props = (Property[]) {
-        {
-            .name = "iommu_opaque",
-            .info = &qdev_prop_ptr,
-            .offset = offsetof(DMAState, iommu),
-        },
-        {/* end of property list */}
+        DEFINE_PROP_PTR("iommu_opaque", DMAState, iommu),
+        DEFINE_PROP_END_OF_LIST(),
     }
 };
 

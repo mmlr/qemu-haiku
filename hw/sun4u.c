@@ -23,6 +23,7 @@
  */
 #include "hw.h"
 #include "pci.h"
+#include "apb_pci.h"
 #include "pc.h"
 #include "nvram.h"
 #include "fdc.h"
@@ -32,6 +33,10 @@
 #include "boards.h"
 #include "firmware_abi.h"
 #include "fw_cfg.h"
+#include "sysbus.h"
+#include "ide.h"
+#include "loader.h"
+#include "elf.h"
 
 //#define DEBUG_IRQ
 
@@ -54,6 +59,9 @@
 #define NVRAM_SIZE           0x2000
 #define MAX_IDE_BUS          2
 #define BIOS_CFG_IOPORT      0x510
+#define FW_CFG_SPARC64_WIDTH (FW_CFG_ARCH_LOCAL + 0x00)
+#define FW_CFG_SPARC64_HEIGHT (FW_CFG_ARCH_LOCAL + 0x01)
+#define FW_CFG_SPARC64_DEPTH (FW_CFG_ARCH_LOCAL + 0x02)
 
 #define MAX_PILS 16
 
@@ -147,6 +155,65 @@ static int sun4u_NVRAM_set_params (m48t59_t *nvram, uint16_t NVRAM_size,
 
     return 0;
 }
+static unsigned long sun4u_load_kernel(const char *kernel_filename,
+                                       const char *initrd_filename,
+                                       ram_addr_t RAM_size, long *initrd_size)
+{
+    int linux_boot;
+    unsigned int i;
+    long kernel_size;
+
+    linux_boot = (kernel_filename != NULL);
+
+    kernel_size = 0;
+    if (linux_boot) {
+        int bswap_needed;
+
+#ifdef BSWAP_NEEDED
+        bswap_needed = 1;
+#else
+        bswap_needed = 0;
+#endif
+        kernel_size = load_elf(kernel_filename, 0, NULL, NULL, NULL,
+                               1, ELF_MACHINE, 0);
+        if (kernel_size < 0)
+            kernel_size = load_aout(kernel_filename, KERNEL_LOAD_ADDR,
+                                    RAM_size - KERNEL_LOAD_ADDR, bswap_needed,
+                                    TARGET_PAGE_SIZE);
+        if (kernel_size < 0)
+            kernel_size = load_image_targphys(kernel_filename,
+                                              KERNEL_LOAD_ADDR,
+                                              RAM_size - KERNEL_LOAD_ADDR);
+        if (kernel_size < 0) {
+            fprintf(stderr, "qemu: could not load kernel '%s'\n",
+                    kernel_filename);
+            exit(1);
+        }
+
+        /* load initrd */
+        *initrd_size = 0;
+        if (initrd_filename) {
+            *initrd_size = load_image_targphys(initrd_filename,
+                                               INITRD_LOAD_ADDR,
+                                               RAM_size - INITRD_LOAD_ADDR);
+            if (*initrd_size < 0) {
+                fprintf(stderr, "qemu: could not load initial ram disk '%s'\n",
+                        initrd_filename);
+                exit(1);
+            }
+        }
+        if (*initrd_size > 0) {
+            for (i = 0; i < 64 * TARGET_PAGE_SIZE; i += TARGET_PAGE_SIZE) {
+                if (ldl_phys(KERNEL_LOAD_ADDR + i) == 0x48647253) { // HdrS
+                    stl_phys(KERNEL_LOAD_ADDR + i + 16, INITRD_LOAD_ADDR);
+                    stl_phys(KERNEL_LOAD_ADDR + i + 20, *initrd_size);
+                    break;
+                }
+            }
+        }
+    }
+    return kernel_size;
+}
 
 void pic_info(Monitor *mon)
 {
@@ -200,19 +267,16 @@ static void cpu_set_irq(void *opaque, int irq, int level)
     }
 }
 
-void qemu_system_powerdown(void)
-{
-}
-
 typedef struct ResetData {
     CPUState *env;
-    uint64_t reset_addr;
+    uint64_t prom_addr;
 } ResetData;
 
 static void main_cpu_reset(void *opaque)
 {
     ResetData *s = (ResetData *)opaque;
     CPUState *env = s->env;
+    static unsigned int nr_resets;
 
     cpu_reset(env);
     env->tick_cmpr = TICK_INT_DIS | 0;
@@ -227,7 +291,12 @@ static void main_cpu_reset(void *opaque)
     env->gregs[1] = 0; // Memory start
     env->gregs[2] = ram_size; // Memory size
     env->gregs[3] = 0; // Machine description XXX
-    env->pc = s->reset_addr;
+    if (nr_resets++ == 0) {
+        /* Power on reset */
+        env->pc = s->prom_addr + 0x20ULL;
+    } else {
+        env->pc = s->prom_addr + 0x40ULL;
+    }
     env->npc = env->pc + 4;
 }
 
@@ -275,20 +344,8 @@ void cpu_tick_set_limit(void *opaque, uint64_t limit)
     ptimer_set_limit(opaque, -limit, 0);
 }
 
-static const int ide_iobase[2] = { 0x1f0, 0x170 };
-static const int ide_iobase2[2] = { 0x3f6, 0x376 };
-static const int ide_irq[2] = { 14, 15 };
-
-static const int serial_io[MAX_SERIAL_PORTS] = { 0x3f8, 0x2f8, 0x3e8, 0x2e8 };
-static const int serial_irq[MAX_SERIAL_PORTS] = { 4, 3, 4, 3 };
-
-static const int parallel_io[MAX_PARALLEL_PORTS] = { 0x378, 0x278, 0x3bc };
-static const int parallel_irq[MAX_PARALLEL_PORTS] = { 7, 7, 7 };
-
-static fdctrl_t *floppy_controller;
-
 static void ebus_mmio_mapfunc(PCIDevice *pci_dev, int region_num,
-                              uint32_t addr, uint32_t size, int type)
+                              pcibus_t addr, pcibus_t size, int type)
 {
     DPRINTF("Mapping region %d registers at %08x\n", region_num, addr);
     switch (region_num) {
@@ -301,16 +358,26 @@ static void ebus_mmio_mapfunc(PCIDevice *pci_dev, int region_num,
     }
 }
 
+static void dummy_isa_irq_handler(void *opaque, int n, int level)
+{
+}
+
 /* EBUS (Eight bit bus) bridge */
 static void
 pci_ebus_init(PCIBus *bus, int devfn)
 {
+    qemu_irq *isa_irq;
+
     pci_create_simple(bus, devfn, "ebus");
+    isa_irq = qemu_allocate_irqs(dummy_isa_irq_handler, NULL, 16);
+    isa_bus_irqs(isa_irq);
 }
 
-static void
+static int
 pci_ebus_init1(PCIDevice *s)
 {
+    isa_bus_new(&s->qdev);
+
     pci_config_set_vendor_id(s->config, PCI_VENDOR_ID_SUN);
     pci_config_set_device_id(s->config, PCI_DEVICE_ID_SUN_EBUS);
     s->config[0x04] = 0x06; // command = bus master, pci mem
@@ -323,10 +390,11 @@ pci_ebus_init1(PCIDevice *s)
     s->config[0x0D] = 0x0a; // latency_timer
     s->config[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL; // header_type
 
-    pci_register_bar(s, 0, 0x1000000, PCI_ADDRESS_SPACE_MEM,
+    pci_register_bar(s, 0, 0x1000000, PCI_BASE_ADDRESS_SPACE_MEMORY,
                            ebus_mmio_mapfunc);
-    pci_register_bar(s, 1, 0x800000,  PCI_ADDRESS_SPACE_MEM,
+    pci_register_bar(s, 1, 0x800000,  PCI_BASE_ADDRESS_SPACE_MEMORY,
                            ebus_mmio_mapfunc);
+    return 0;
 }
 
 static PCIDeviceInfo ebus_info = {
@@ -342,34 +410,128 @@ static void pci_ebus_register(void)
 
 device_init(pci_ebus_register);
 
-static void sun4uv_init(ram_addr_t RAM_size,
-                        const char *boot_devices,
-                        const char *kernel_filename, const char *kernel_cmdline,
-                        const char *initrd_filename, const char *cpu_model,
-                        const struct hwdef *hwdef)
+/* Boot PROM (OpenBIOS) */
+static void prom_init(target_phys_addr_t addr, const char *bios_name)
+{
+    DeviceState *dev;
+    SysBusDevice *s;
+    char *filename;
+    int ret;
+
+    dev = qdev_create(NULL, "openprom");
+    qdev_init_nofail(dev);
+    s = sysbus_from_qdev(dev);
+
+    sysbus_mmio_map(s, 0, addr);
+
+    /* load boot prom */
+    if (bios_name == NULL) {
+        bios_name = PROM_FILENAME;
+    }
+    filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+    if (filename) {
+        ret = load_elf(filename, addr - PROM_VADDR, NULL, NULL, NULL,
+                       1, ELF_MACHINE, 0);
+        if (ret < 0 || ret > PROM_SIZE_MAX) {
+            ret = load_image_targphys(filename, addr, PROM_SIZE_MAX);
+        }
+        qemu_free(filename);
+    } else {
+        ret = -1;
+    }
+    if (ret < 0 || ret > PROM_SIZE_MAX) {
+        fprintf(stderr, "qemu: could not load prom '%s'\n", bios_name);
+        exit(1);
+    }
+}
+
+static int prom_init1(SysBusDevice *dev)
+{
+    ram_addr_t prom_offset;
+
+    prom_offset = qemu_ram_alloc(PROM_SIZE_MAX);
+    sysbus_init_mmio(dev, PROM_SIZE_MAX, prom_offset | IO_MEM_ROM);
+    return 0;
+}
+
+static SysBusDeviceInfo prom_info = {
+    .init = prom_init1,
+    .qdev.name  = "openprom",
+    .qdev.size  = sizeof(SysBusDevice),
+    .qdev.props = (Property[]) {
+        {/* end of property list */}
+    }
+};
+
+static void prom_register_devices(void)
+{
+    sysbus_register_withprop(&prom_info);
+}
+
+device_init(prom_register_devices);
+
+
+typedef struct RamDevice
+{
+    SysBusDevice busdev;
+    uint64_t size;
+} RamDevice;
+
+/* System RAM */
+static int ram_init1(SysBusDevice *dev)
+{
+    ram_addr_t RAM_size, ram_offset;
+    RamDevice *d = FROM_SYSBUS(RamDevice, dev);
+
+    RAM_size = d->size;
+
+    ram_offset = qemu_ram_alloc(RAM_size);
+    sysbus_init_mmio(dev, RAM_size, ram_offset);
+    return 0;
+}
+
+static void ram_init(target_phys_addr_t addr, ram_addr_t RAM_size)
+{
+    DeviceState *dev;
+    SysBusDevice *s;
+    RamDevice *d;
+
+    /* allocate RAM */
+    dev = qdev_create(NULL, "memory");
+    s = sysbus_from_qdev(dev);
+
+    d = FROM_SYSBUS(RamDevice, s);
+    d->size = RAM_size;
+    qdev_init_nofail(dev);
+
+    sysbus_mmio_map(s, 0, addr);
+}
+
+static SysBusDeviceInfo ram_info = {
+    .init = ram_init1,
+    .qdev.name  = "memory",
+    .qdev.size  = sizeof(RamDevice),
+    .qdev.props = (Property[]) {
+        DEFINE_PROP_UINT64("size", RamDevice, size, 0),
+        DEFINE_PROP_END_OF_LIST(),
+    }
+};
+
+static void ram_register_devices(void)
+{
+    sysbus_register_withprop(&ram_info);
+}
+
+device_init(ram_register_devices);
+
+static CPUState *cpu_devinit(const char *cpu_model, const struct hwdef *hwdef)
 {
     CPUState *env;
-    char *filename;
-    m48t59_t *nvram;
-    int ret, linux_boot;
-    unsigned int i;
-    ram_addr_t ram_offset, prom_offset;
-    long initrd_size, kernel_size;
-    PCIBus *pci_bus, *pci_bus2, *pci_bus3;
     QEMUBH *bh;
-    qemu_irq *irq;
-    int drive_index;
-    BlockDriverState *hd[MAX_IDE_BUS * MAX_IDE_DEVS];
-    BlockDriverState *fd[MAX_FD];
-    void *fw_cfg;
     ResetData *reset_info;
 
-    linux_boot = (kernel_filename != NULL);
-
-    /* init CPUs */
     if (!cpu_model)
         cpu_model = hwdef->default_cpu_model;
-
     env = cpu_init(cpu_model);
     if (!env) {
         fprintf(stderr, "Unable to find Sparc CPU definition\n");
@@ -389,83 +551,36 @@ static void sun4uv_init(ram_addr_t RAM_size,
 
     reset_info = qemu_mallocz(sizeof(ResetData));
     reset_info->env = env;
-    reset_info->reset_addr = hwdef->prom_addr + 0x40ULL;
+    reset_info->prom_addr = hwdef->prom_addr;
     qemu_register_reset(main_cpu_reset, reset_info);
-    main_cpu_reset(reset_info);
-    // Override warm reset address with cold start address
-    env->pc = hwdef->prom_addr + 0x20ULL;
-    env->npc = env->pc + 4;
 
-    /* allocate RAM */
-    ram_offset = qemu_ram_alloc(RAM_size);
-    cpu_register_physical_memory(0, RAM_size, ram_offset);
+    return env;
+}
 
-    prom_offset = qemu_ram_alloc(PROM_SIZE_MAX);
-    cpu_register_physical_memory(hwdef->prom_addr,
-                                 (PROM_SIZE_MAX + TARGET_PAGE_SIZE) &
-                                 TARGET_PAGE_MASK,
-                                 prom_offset | IO_MEM_ROM);
+static void sun4uv_init(ram_addr_t RAM_size,
+                        const char *boot_devices,
+                        const char *kernel_filename, const char *kernel_cmdline,
+                        const char *initrd_filename, const char *cpu_model,
+                        const struct hwdef *hwdef)
+{
+    CPUState *env;
+    m48t59_t *nvram;
+    unsigned int i;
+    long initrd_size, kernel_size;
+    PCIBus *pci_bus, *pci_bus2, *pci_bus3;
+    qemu_irq *irq;
+    DriveInfo *hd[MAX_IDE_BUS * MAX_IDE_DEVS];
+    DriveInfo *fd[MAX_FD];
+    void *fw_cfg;
 
-    if (bios_name == NULL)
-        bios_name = PROM_FILENAME;
-    filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
-    if (filename) {
-        ret = load_elf(filename, hwdef->prom_addr - PROM_VADDR,
-                       NULL, NULL, NULL);
-        if (ret < 0) {
-            ret = load_image_targphys(filename, hwdef->prom_addr,
-                                      (PROM_SIZE_MAX + TARGET_PAGE_SIZE) &
-                                  TARGET_PAGE_MASK);
-        }
-        qemu_free(filename);
-    } else {
-        ret = -1;
-    }
-    if (ret < 0) {
-        fprintf(stderr, "qemu: could not load prom '%s'\n",
-                bios_name);
-        exit(1);
-    }
+    /* init CPUs */
+    env = cpu_devinit(cpu_model, hwdef);
 
-    kernel_size = 0;
-    initrd_size = 0;
-    if (linux_boot) {
-        /* XXX: put correct offset */
-        kernel_size = load_elf(kernel_filename, 0, NULL, NULL, NULL);
-        if (kernel_size < 0)
-            kernel_size = load_aout(kernel_filename, KERNEL_LOAD_ADDR,
-                                    ram_size - KERNEL_LOAD_ADDR);
-        if (kernel_size < 0)
-            kernel_size = load_image_targphys(kernel_filename,
-                                              KERNEL_LOAD_ADDR,
-                                              ram_size - KERNEL_LOAD_ADDR);
-        if (kernel_size < 0) {
-            fprintf(stderr, "qemu: could not load kernel '%s'\n",
-                    kernel_filename);
-            exit(1);
-        }
+    /* set up devices */
+    ram_init(0, RAM_size);
 
-        /* load initrd */
-        if (initrd_filename) {
-            initrd_size = load_image_targphys(initrd_filename,
-                                              INITRD_LOAD_ADDR,
-                                              ram_size - INITRD_LOAD_ADDR);
-            if (initrd_size < 0) {
-                fprintf(stderr, "qemu: could not load initial ram disk '%s'\n",
-                        initrd_filename);
-                exit(1);
-            }
-        }
-        if (initrd_size > 0) {
-            for (i = 0; i < 64 * TARGET_PAGE_SIZE; i += TARGET_PAGE_SIZE) {
-                if (ldl_phys(KERNEL_LOAD_ADDR + i) == 0x48647253) { // HdrS
-                    stl_phys(KERNEL_LOAD_ADDR + i + 16, INITRD_LOAD_ADDR);
-                    stl_phys(KERNEL_LOAD_ADDR + i + 20, initrd_size);
-                    break;
-                }
-            }
-        }
-    }
+    prom_init(hwdef->prom_addr, bios_name);
+
 
     irq = qemu_allocate_irqs(cpu_set_irq, env, MAX_PILS);
     pci_bus = pci_apb_init(APB_SPECIAL_BASE, APB_MEM_BASE, irq, &pci_bus2,
@@ -484,47 +599,41 @@ static void sun4uv_init(ram_addr_t RAM_size,
     }
     for(; i < MAX_SERIAL_PORTS; i++) {
         if (serial_hds[i]) {
-            serial_init(serial_io[i], NULL/*serial_irq[i]*/, 115200,
-                        serial_hds[i]);
+            serial_isa_init(i, serial_hds[i]);
         }
     }
 
     for(i = 0; i < MAX_PARALLEL_PORTS; i++) {
         if (parallel_hds[i]) {
-            parallel_init(parallel_io[i], NULL/*parallel_irq[i]*/,
-                          parallel_hds[i]);
+            parallel_init(i, parallel_hds[i]);
         }
     }
 
     for(i = 0; i < nb_nics; i++)
-        pci_nic_init(&nd_table[i], "ne2k_pci", NULL);
+        pci_nic_init_nofail(&nd_table[i], "ne2k_pci", NULL);
 
     if (drive_get_max_bus(IF_IDE) >= MAX_IDE_BUS) {
         fprintf(stderr, "qemu: too many IDE bus\n");
         exit(1);
     }
     for(i = 0; i < MAX_IDE_BUS * MAX_IDE_DEVS; i++) {
-        drive_index = drive_get_index(IF_IDE, i / MAX_IDE_DEVS,
-                                      i % MAX_IDE_DEVS);
-       if (drive_index != -1)
-           hd[i] = drives_table[drive_index].bdrv;
-       else
-           hd[i] = NULL;
+        hd[i] = drive_get(IF_IDE, i / MAX_IDE_DEVS,
+                          i % MAX_IDE_DEVS);
     }
 
     pci_cmd646_ide_init(pci_bus, hd, 1);
 
-    /* FIXME: wire up interrupts.  */
-    i8042_init(NULL/*1*/, NULL/*12*/, 0x60);
+    isa_create_simple("i8042");
     for(i = 0; i < MAX_FD; i++) {
-        drive_index = drive_get_index(IF_FLOPPY, 0, i);
-       if (drive_index != -1)
-           fd[i] = drives_table[drive_index].bdrv;
-       else
-           fd[i] = NULL;
+        fd[i] = drive_get(IF_FLOPPY, 0, i);
     }
-    floppy_controller = fdctrl_init(NULL/*6*/, 2, 0, 0x3f0, fd);
-    nvram = m48t59_init(NULL/*8*/, 0, 0x0074, NVRAM_SIZE, 59);
+    fdctrl_init_isa(fd);
+    nvram = m48t59_init_isa(0x0074, NVRAM_SIZE, 59);
+
+    initrd_size = 0;
+    kernel_size = sun4u_load_kernel(kernel_filename, initrd_filename,
+                                    ram_size, &initrd_size);
+
     sun4u_NVRAM_set_params(nvram, NVRAM_SIZE, "Sun4u", RAM_size, boot_devices,
                            KERNEL_LOAD_ADDR, kernel_size,
                            kernel_cmdline,
@@ -542,13 +651,18 @@ static void sun4uv_init(ram_addr_t RAM_size,
     fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_SIZE, kernel_size);
     if (kernel_cmdline) {
         fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_CMDLINE, CMDLINE_ADDR);
-        pstrcpy_targphys(CMDLINE_ADDR, TARGET_PAGE_SIZE, kernel_cmdline);
+        pstrcpy_targphys("cmdline", CMDLINE_ADDR, TARGET_PAGE_SIZE, kernel_cmdline);
     } else {
         fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_CMDLINE, 0);
     }
     fw_cfg_add_i32(fw_cfg, FW_CFG_INITRD_ADDR, INITRD_LOAD_ADDR);
     fw_cfg_add_i32(fw_cfg, FW_CFG_INITRD_SIZE, initrd_size);
     fw_cfg_add_i16(fw_cfg, FW_CFG_BOOT_DEVICE, boot_devices[0]);
+
+    fw_cfg_add_i16(fw_cfg, FW_CFG_SPARC64_WIDTH, graphic_width);
+    fw_cfg_add_i16(fw_cfg, FW_CFG_SPARC64_HEIGHT, graphic_height);
+    fw_cfg_add_i16(fw_cfg, FW_CFG_SPARC64_DEPTH, graphic_depth);
+
     qemu_register_boot_set(fw_cfg_boot_set, fw_cfg);
 }
 

@@ -23,6 +23,7 @@
 #include "kvm.h"
 #include "cpu.h"
 #include "gdbstub.h"
+#include "host-utils.h"
 
 //#define DEBUG_KVM
 
@@ -33,6 +34,9 @@
 #define dprintf(fmt, ...) \
     do { } while (0)
 #endif
+
+#define MSR_KVM_WALL_CLOCK  0x11
+#define MSR_KVM_SYSTEM_TIME 0x12
 
 #ifdef KVM_CAP_EXT_CPUID
 
@@ -221,6 +225,14 @@ int kvm_arch_init_vcpu(CPUState *env)
     return kvm_vcpu_ioctl(env, KVM_SET_CPUID2, &cpuid_data);
 }
 
+void kvm_arch_reset_vcpu(CPUState *env)
+{
+    env->exception_injected = -1;
+    env->interrupt_injected = -1;
+    env->nmi_injected = 0;
+    env->nmi_pending = 0;
+}
+
 static int kvm_has_msr_star(CPUState *env)
 {
     static int has_msr_star;
@@ -236,9 +248,9 @@ static int kvm_has_msr_star(CPUState *env)
          * save/restore */
         msr_list.nmsrs = 0;
         ret = kvm_ioctl(env->kvm_state, KVM_GET_MSR_INDEX_LIST, &msr_list);
-        if (ret < 0)
+        if (ret < 0 && ret != -E2BIG) {
             return 0;
-
+        }
         /* Old kernel modules had a bug and could write beyond the provided
            memory. Allocate at least a safe amount of 1K. */
         kvm_msr_list = qemu_mallocz(MAX(1024, sizeof(msr_list) +
@@ -407,9 +419,11 @@ static int kvm_put_sregs(CPUState *env)
 {
     struct kvm_sregs sregs;
 
-    memcpy(sregs.interrupt_bitmap,
-           env->interrupt_bitmap,
-           sizeof(sregs.interrupt_bitmap));
+    memset(sregs.interrupt_bitmap, 0, sizeof(sregs.interrupt_bitmap));
+    if (env->interrupt_injected >= 0) {
+        sregs.interrupt_bitmap[env->interrupt_injected / 64] |=
+                (uint64_t)1 << (env->interrupt_injected % 64);
+    }
 
     if ((env->eflags & VM_MASK)) {
 	    set_v8086_seg(&sregs.cs, &env->segs[R_CS]);
@@ -484,6 +498,9 @@ static int kvm_put_msrs(CPUState *env)
     kvm_msr_entry_set(&msrs[n++], MSR_FMASK, env->fmask);
     kvm_msr_entry_set(&msrs[n++], MSR_LSTAR, env->lstar);
 #endif
+    kvm_msr_entry_set(&msrs[n++], MSR_KVM_SYSTEM_TIME,  env->system_time_msr);
+    kvm_msr_entry_set(&msrs[n++], MSR_KVM_WALL_CLOCK,  env->wall_clock_msr);
+
     msr_data.info.nmsrs = n;
 
     return kvm_vcpu_ioctl(env, KVM_SET_MSRS, &msr_data);
@@ -516,15 +533,22 @@ static int kvm_get_sregs(CPUState *env)
 {
     struct kvm_sregs sregs;
     uint32_t hflags;
-    int ret;
+    int bit, i, ret;
 
     ret = kvm_vcpu_ioctl(env, KVM_GET_SREGS, &sregs);
     if (ret < 0)
         return ret;
 
-    memcpy(env->interrupt_bitmap, 
-           sregs.interrupt_bitmap,
-           sizeof(sregs.interrupt_bitmap));
+    /* There can only be one pending IRQ set in the bitmap at a time, so try
+       to find it and save its number instead (-1 for none). */
+    env->interrupt_injected = -1;
+    for (i = 0; i < ARRAY_SIZE(sregs.interrupt_bitmap); i++) {
+        if (sregs.interrupt_bitmap[i]) {
+            bit = ctz64(sregs.interrupt_bitmap[i]);
+            env->interrupt_injected = i * 64 + bit;
+            break;
+        }
+    }
 
     get_seg(&env->segs[R_CS], &sregs.cs);
     get_seg(&env->segs[R_DS], &sregs.ds);
@@ -617,6 +641,9 @@ static int kvm_get_msrs(CPUState *env)
     msrs[n++].index = MSR_FMASK;
     msrs[n++].index = MSR_LSTAR;
 #endif
+    msrs[n++].index = MSR_KVM_SYSTEM_TIME;
+    msrs[n++].index = MSR_KVM_WALL_CLOCK;
+
     msr_data.info.nmsrs = n;
     ret = kvm_vcpu_ioctl(env, KVM_GET_MSRS, &msr_data);
     if (ret < 0)
@@ -653,6 +680,12 @@ static int kvm_get_msrs(CPUState *env)
         case MSR_IA32_TSC:
             env->tsc = msrs[i].data;
             break;
+        case MSR_KVM_SYSTEM_TIME:
+            env->system_time_msr = msrs[i].data;
+            break;
+        case MSR_KVM_WALL_CLOCK:
+            env->wall_clock_msr = msrs[i].data;
+            break;
         }
     }
 
@@ -676,6 +709,73 @@ static int kvm_get_mp_state(CPUState *env)
         return ret;
     }
     env->mp_state = mp_state.mp_state;
+    return 0;
+}
+
+static int kvm_put_vcpu_events(CPUState *env)
+{
+#ifdef KVM_CAP_VCPU_EVENTS
+    struct kvm_vcpu_events events;
+
+    if (!kvm_has_vcpu_events()) {
+        return 0;
+    }
+
+    events.exception.injected = (env->exception_injected >= 0);
+    events.exception.nr = env->exception_injected;
+    events.exception.has_error_code = env->has_error_code;
+    events.exception.error_code = env->error_code;
+
+    events.interrupt.injected = (env->interrupt_injected >= 0);
+    events.interrupt.nr = env->interrupt_injected;
+    events.interrupt.soft = env->soft_interrupt;
+
+    events.nmi.injected = env->nmi_injected;
+    events.nmi.pending = env->nmi_pending;
+    events.nmi.masked = !!(env->hflags2 & HF2_NMI_MASK);
+
+    events.sipi_vector = env->sipi_vector;
+
+    return kvm_vcpu_ioctl(env, KVM_SET_VCPU_EVENTS, &events);
+#else
+    return 0;
+#endif
+}
+
+static int kvm_get_vcpu_events(CPUState *env)
+{
+#ifdef KVM_CAP_VCPU_EVENTS
+    struct kvm_vcpu_events events;
+    int ret;
+
+    if (!kvm_has_vcpu_events()) {
+        return 0;
+    }
+
+    ret = kvm_vcpu_ioctl(env, KVM_GET_VCPU_EVENTS, &events);
+    if (ret < 0) {
+       return ret;
+    }
+    env->exception_injected =
+       events.exception.injected ? events.exception.nr : -1;
+    env->has_error_code = events.exception.has_error_code;
+    env->error_code = events.exception.error_code;
+
+    env->interrupt_injected =
+        events.interrupt.injected ? events.interrupt.nr : -1;
+    env->soft_interrupt = events.interrupt.soft;
+
+    env->nmi_injected = events.nmi.injected;
+    env->nmi_pending = events.nmi.pending;
+    if (events.nmi.masked) {
+        env->hflags2 |= HF2_NMI_MASK;
+    } else {
+        env->hflags2 &= ~HF2_NMI_MASK;
+    }
+
+    env->sipi_vector = events.sipi_vector;
+#endif
+
     return 0;
 }
 
@@ -703,7 +803,7 @@ int kvm_arch_put_registers(CPUState *env)
     if (ret < 0)
         return ret;
 
-    ret = kvm_get_mp_state(env);
+    ret = kvm_put_vcpu_events(env);
     if (ret < 0)
         return ret;
 
@@ -727,6 +827,14 @@ int kvm_arch_get_registers(CPUState *env)
         return ret;
 
     ret = kvm_get_msrs(env);
+    if (ret < 0)
+        return ret;
+
+    ret = kvm_get_mp_state(env);
+    if (ret < 0)
+        return ret;
+
+    ret = kvm_get_vcpu_events(env);
     if (ret < 0)
         return ret;
 
@@ -810,7 +918,7 @@ int kvm_arch_handle_exit(CPUState *env, struct kvm_run *run)
 #ifdef KVM_CAP_SET_GUEST_DEBUG
 int kvm_arch_insert_sw_breakpoint(CPUState *env, struct kvm_sw_breakpoint *bp)
 {
-    const static uint8_t int3 = 0xcc;
+    static const uint8_t int3 = 0xcc;
 
     if (cpu_memory_rw_debug(env, bp->pc, (uint8_t *)&bp->saved_insn, 1, 0) ||
         cpu_memory_rw_debug(env, bp->pc, (uint8_t *)&int3, 1, 1))

@@ -90,8 +90,8 @@ do { printf("usb-serial: " fmt , ## __VA_ARGS__); } while (0)
 
 typedef struct {
     USBDevice dev;
-    uint16_t vendorid;
-    uint16_t productid;
+    uint32_t vendorid;
+    uint32_t productid;
     uint8_t recv_buf[RECV_BUF];
     uint16_t recv_ptr;
     uint16_t recv_used;
@@ -486,7 +486,6 @@ static void usb_serial_handle_destroy(USBDevice *dev)
     USBSerialState *s = (USBSerialState *)dev;
 
     qemu_chr_close(s->cs);
-    qemu_free(s);
 }
 
 static int usb_serial_can_read(void *opaque)
@@ -498,12 +497,28 @@ static int usb_serial_can_read(void *opaque)
 static void usb_serial_read(void *opaque, const uint8_t *buf, int size)
 {
     USBSerialState *s = opaque;
-    int first_size = RECV_BUF - s->recv_ptr;
-    if (first_size > size)
-        first_size = size;
-    memcpy(s->recv_buf + s->recv_ptr + s->recv_used, buf, first_size);
-    if (size > first_size)
-        memcpy(s->recv_buf, buf + first_size, size - first_size);
+    int first_size, start;
+
+    /* room in the buffer? */
+    if (size > (RECV_BUF - s->recv_used))
+        size = RECV_BUF - s->recv_used;
+
+    start = s->recv_ptr + s->recv_used;
+    if (start < RECV_BUF) {
+        /* copy data to end of buffer */
+        first_size = RECV_BUF - start;
+        if (first_size > size)
+            first_size = size;
+
+        memcpy(s->recv_buf + start, buf, first_size);
+
+        /* wrap around to front if needed */
+        if (size > first_size)
+            memcpy(s->recv_buf, buf + first_size, size - first_size);
+    } else {
+        start -= RECV_BUF;
+        memcpy(s->recv_buf + start, buf, size);
+    }
     s->recv_used += size;
 }
 
@@ -517,18 +532,29 @@ static void usb_serial_event(void *opaque, int event)
             break;
         case CHR_EVENT_FOCUS:
             break;
-        case CHR_EVENT_RESET:
+        case CHR_EVENT_OPENED:
             usb_serial_reset(s);
             /* TODO: Reset USB port */
             break;
     }
 }
 
-USBDevice *usb_serial_init(const char *filename)
+static int usb_serial_initfn(USBDevice *dev)
 {
-    USBSerialState *s;
+    USBSerialState *s = DO_UPCAST(USBSerialState, dev, dev);
+    s->dev.speed = USB_SPEED_FULL;
+
+    qemu_chr_add_handlers(s->cs, usb_serial_can_read, usb_serial_read,
+                          usb_serial_event, s);
+    usb_serial_handle_reset(dev);
+    return 0;
+}
+
+static USBDevice *usb_serial_init(const char *filename)
+{
+    USBDevice *dev;
     CharDriverState *cdrv;
-    unsigned short vendorid = 0x0403, productid = 0x6001;
+    uint32_t vendorid = 0, productid = 0;
     char label[32];
     static int index;
 
@@ -538,55 +564,108 @@ USBDevice *usb_serial_init(const char *filename)
         if (strstart(filename, "vendorid=", &p)) {
             vendorid = strtol(p, &e, 16);
             if (e == p || (*e && *e != ',' && *e != ':')) {
-                printf("bogus vendor ID %s\n", p);
+                qemu_error("bogus vendor ID %s\n", p);
                 return NULL;
             }
             filename = e;
         } else if (strstart(filename, "productid=", &p)) {
             productid = strtol(p, &e, 16);
             if (e == p || (*e && *e != ',' && *e != ':')) {
-                printf("bogus product ID %s\n", p);
+                qemu_error("bogus product ID %s\n", p);
                 return NULL;
             }
             filename = e;
         } else {
-            printf("unrecognized serial USB option %s\n", filename);
+            qemu_error("unrecognized serial USB option %s\n", filename);
             return NULL;
         }
         while(*filename == ',')
             filename++;
     }
     if (!*filename) {
-        printf("character device specification needed\n");
+        qemu_error("character device specification needed\n");
         return NULL;
     }
     filename++;
-    s = qemu_mallocz(sizeof(USBSerialState));
 
     snprintf(label, sizeof(label), "usbserial%d", index++);
     cdrv = qemu_chr_open(label, filename, NULL);
     if (!cdrv)
-        goto fail;
-    s->cs = cdrv;
-    qemu_chr_add_handlers(cdrv, usb_serial_can_read, usb_serial_read, usb_serial_event, s);
+        return NULL;
 
-    s->dev.speed = USB_SPEED_FULL;
-    s->dev.handle_packet = usb_generic_handle_packet;
+    dev = usb_create(NULL /* FIXME */, "usb-serial");
+    if (!dev) {
+        return NULL;
+    }
+    qdev_prop_set_chr(&dev->qdev, "chardev", cdrv);
+    if (vendorid)
+        qdev_prop_set_uint16(&dev->qdev, "vendorid", vendorid);
+    if (productid)
+        qdev_prop_set_uint16(&dev->qdev, "productid", productid);
+    qdev_init_nofail(&dev->qdev);
 
-    s->dev.handle_reset = usb_serial_handle_reset;
-    s->dev.handle_control = usb_serial_handle_control;
-    s->dev.handle_data = usb_serial_handle_data;
-    s->dev.handle_destroy = usb_serial_handle_destroy;
-
-    s->vendorid = vendorid;
-    s->productid = productid;
-
-    snprintf(s->dev.devname, sizeof(s->dev.devname), "QEMU USB Serial(%.16s)",
-             filename);
-
-    usb_serial_handle_reset((USBDevice *)s);
-    return (USBDevice *)s;
- fail:
-    qemu_free(s);
-    return NULL;
+    return dev;
 }
+
+static USBDevice *usb_braille_init(const char *unused)
+{
+    USBDevice *dev;
+    CharDriverState *cdrv;
+
+    cdrv = qemu_chr_open("braille", "braille", NULL);
+    if (!cdrv)
+        return NULL;
+
+    dev = usb_create(NULL /* FIXME */, "usb-braille");
+    qdev_prop_set_chr(&dev->qdev, "chardev", cdrv);
+    qdev_init_nofail(&dev->qdev);
+
+    return dev;
+}
+
+static struct USBDeviceInfo serial_info = {
+    .product_desc   = "QEMU USB Serial",
+    .qdev.name      = "usb-serial",
+    .qdev.size      = sizeof(USBSerialState),
+    .init           = usb_serial_initfn,
+    .handle_packet  = usb_generic_handle_packet,
+    .handle_reset   = usb_serial_handle_reset,
+    .handle_control = usb_serial_handle_control,
+    .handle_data    = usb_serial_handle_data,
+    .handle_destroy = usb_serial_handle_destroy,
+    .usbdevice_name = "serial",
+    .usbdevice_init = usb_serial_init,
+    .qdev.props     = (Property[]) {
+        DEFINE_PROP_CHR("chardev",     USBSerialState, cs),
+        DEFINE_PROP_HEX32("vendorid",  USBSerialState, vendorid,  0x0403),
+        DEFINE_PROP_HEX32("productid", USBSerialState, productid, 0x6001),
+        DEFINE_PROP_END_OF_LIST(),
+    },
+};
+
+static struct USBDeviceInfo braille_info = {
+    .product_desc   = "QEMU USB Braille",
+    .qdev.name      = "usb-braille",
+    .qdev.size      = sizeof(USBSerialState),
+    .init           = usb_serial_initfn,
+    .handle_packet  = usb_generic_handle_packet,
+    .handle_reset   = usb_serial_handle_reset,
+    .handle_control = usb_serial_handle_control,
+    .handle_data    = usb_serial_handle_data,
+    .handle_destroy = usb_serial_handle_destroy,
+    .usbdevice_name = "braille",
+    .usbdevice_init = usb_braille_init,
+    .qdev.props     = (Property[]) {
+        DEFINE_PROP_CHR("chardev",     USBSerialState, cs),
+        DEFINE_PROP_HEX32("vendorid",  USBSerialState, vendorid,  0x0403),
+        DEFINE_PROP_HEX32("productid", USBSerialState, productid, 0xfe72),
+        DEFINE_PROP_END_OF_LIST(),
+    },
+};
+
+static void usb_serial_register_devices(void)
+{
+    usb_qdev_register(&serial_info);
+    usb_qdev_register(&braille_info);
+}
+device_init(usb_serial_register_devices)
