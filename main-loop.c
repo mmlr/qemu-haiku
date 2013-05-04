@@ -145,7 +145,9 @@ static int qemu_signal_init(void)
     pthread_sigmask(SIG_BLOCK, &set, NULL);
 
     sigemptyset(&set);
+#ifdef SIGIO
     sigaddset(&set, SIGIO);
+#endif
     sigaddset(&set, SIGALRM);
     sigaddset(&set, SIGBUS);
     pthread_sigmask(SIG_BLOCK, &set, NULL);
