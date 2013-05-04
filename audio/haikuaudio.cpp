@@ -173,7 +173,7 @@ haiku_init_out(HWVoiceOut *hw, struct audsettings *as)
 	BufferInfo *info = new BufferInfo;
 	//info->size = hw->samples * (format.format & 0x0f) * format.channel_count;
 	info->size = (hw->samples << hw->info.shift) * 4;
-	info->buffer = (uint8 *)qemu_malloc(info->size);
+	info->buffer = (uint8 *)g_malloc(info->size);
 	info->read_position = 0;
 	info->write_position = 0;
 	info->valid = 0;

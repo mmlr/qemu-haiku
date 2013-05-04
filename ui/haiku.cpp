@@ -64,7 +64,6 @@ static const uint32 kInvalidationRequest = 'ival';
 // QEMU C interface
 extern "C" {
 #include "qemu-common.h"
-#include "sysemu.h"
 #include "console.h"
 
 static	void	haiku_update(DisplayState *ds, int x, int y, int w, int h);
@@ -824,7 +823,7 @@ haiku_display_init(DisplayState *ds, int fullScreen)
 	sAbsoluteMouse = kbd_mouse_is_absolute();
 
 	DisplayChangeListener *displayChangeListener
-		= (DisplayChangeListener *)qemu_mallocz(sizeof(DisplayChangeListener));
+		= (DisplayChangeListener *)g_malloc0(sizeof(DisplayChangeListener));
 	displayChangeListener->dpy_update = haiku_update;
 	displayChangeListener->dpy_resize = haiku_resize;
 	displayChangeListener->dpy_refresh = haiku_refresh;
