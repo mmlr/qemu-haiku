@@ -11,11 +11,9 @@
  */
 
 #include <sys/ioctl.h>
-#include <sys/eventfd.h>
 #include "vhost.h"
 #include "hw/hw.h"
-/* For range_get_last */
-#include "pci.h"
+#include "range.h"
 #include <linux/vhost.h>
 
 static void vhost_dev_sync_region(struct vhost_dev *dev,
@@ -39,6 +37,7 @@ static void vhost_dev_sync_region(struct vhost_dev *dev,
         /* We first check with non-atomic: much cheaper,
          * and we expect non-dirty to be the common case. */
         if (!*from) {
+            addr += VHOST_LOG_CHUNK;
             continue;
         }
         /* Data must be read atomically. We don't really
@@ -48,8 +47,10 @@ static void vhost_dev_sync_region(struct vhost_dev *dev,
         log = __sync_fetch_and_and(from, 0);
         while ((bit = sizeof(log) > sizeof(int) ?
                 ffsll(log) : ffs(log))) {
+            ram_addr_t ram_addr;
             bit -= 1;
-            cpu_physical_memory_set_dirty(addr + bit * VHOST_LOG_PAGE);
+            ram_addr = cpu_get_physical_page_desc(addr + bit * VHOST_LOG_PAGE);
+            cpu_physical_memory_set_dirty(ram_addr);
             log &= ~(0x1ull << bit);
         }
         addr += VHOST_LOG_CHUNK;
@@ -582,7 +583,7 @@ static void vhost_virtqueue_cleanup(struct vhost_dev *dev,
                               0, virtio_queue_get_desc_size(vdev, idx));
 }
 
-int vhost_dev_init(struct vhost_dev *hdev, int devfd)
+int vhost_dev_init(struct vhost_dev *hdev, int devfd, bool force)
 {
     uint64_t features;
     int r;
@@ -614,6 +615,7 @@ int vhost_dev_init(struct vhost_dev *hdev, int devfd)
     hdev->log_enabled = false;
     hdev->started = false;
     cpu_register_phys_memory_client(&hdev->client);
+    hdev->force = force;
     return 0;
 fail:
     r = -errno;
@@ -626,6 +628,13 @@ void vhost_dev_cleanup(struct vhost_dev *hdev)
     cpu_unregister_phys_memory_client(&hdev->client);
     qemu_free(hdev->mem);
     close(hdev->control);
+}
+
+bool vhost_dev_query(struct vhost_dev *hdev, VirtIODevice *vdev)
+{
+    return !vdev->binding->query_guest_notifiers ||
+        vdev->binding->query_guest_notifiers(vdev->binding_opaque) ||
+        hdev->force;
 }
 
 int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)

@@ -715,12 +715,12 @@ static int hpet_init(SysBusDevice *dev)
     s->capability |= (s->num_timers - 1) << HPET_ID_NUM_TIM_SHIFT;
     s->capability |= ((HPET_CLK_PERIOD) << 32);
 
-    isa_reserve_irq(RTC_ISA_IRQ);
     qdev_init_gpio_in(&dev->qdev, hpet_handle_rtc_irq, 1);
 
     /* HPET Area */
     iomemtype = cpu_register_io_memory(hpet_ram_read,
-                                       hpet_ram_write, s);
+                                       hpet_ram_write, s,
+                                       DEVICE_NATIVE_ENDIAN);
     sysbus_init_mmio(dev, 0x400, iomemtype);
     return 0;
 }

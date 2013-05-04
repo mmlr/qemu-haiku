@@ -600,7 +600,7 @@ static void lsi_queue_command(LSIState *s)
 {
     lsi_request *p = s->current;
 
-    DPRINTF("Queueing tag=0x%x\n", s->current_tag);
+    DPRINTF("Queueing tag=0x%x\n", p->tag);
     assert(s->current != NULL);
     assert(s->current->dma_len == 0);
     QTAILQ_INSERT_TAIL(&s->queue, s->current, next);
@@ -842,10 +842,29 @@ static uint8_t lsi_get_msgbyte(LSIState *s)
     return data;
 }
 
+/* Skip the next n bytes during a MSGOUT phase. */
+static void lsi_skip_msgbytes(LSIState *s, unsigned int n)
+{
+    s->dnad += n;
+    s->dbc  -= n;
+}
+
 static void lsi_do_msgout(LSIState *s)
 {
     uint8_t msg;
     int len;
+    uint32_t current_tag;
+    SCSIDevice *current_dev;
+    lsi_request *p, *p_next;
+    int id;
+
+    if (s->current) {
+        current_tag = s->current->tag;
+    } else {
+        current_tag = s->select_tag;
+    }
+    id = (current_tag >> 8) & 0xf;
+    current_dev = s->bus.devs[id];
 
     DPRINTF("MSG out len=%d\n", s->dbc);
     while (s->dbc) {
@@ -864,15 +883,16 @@ static void lsi_do_msgout(LSIState *s)
         case 0x01:
             len = lsi_get_msgbyte(s);
             msg = lsi_get_msgbyte(s);
+            (void)len; /* avoid a warning about unused variable*/
             DPRINTF("Extended message 0x%x (len %d)\n", msg, len);
             switch (msg) {
             case 1:
                 DPRINTF("SDTR (ignored)\n");
-                s->dbc -= 2;
+                lsi_skip_msgbytes(s, 2);
                 break;
             case 3:
                 DPRINTF("WDTR (ignored)\n");
-                s->dbc -= 1;
+                lsi_skip_msgbytes(s, 1);
                 break;
             default:
                 goto bad;
@@ -880,7 +900,7 @@ static void lsi_do_msgout(LSIState *s)
             break;
         case 0x20: /* SIMPLE queue */
             s->select_tag |= lsi_get_msgbyte(s) | LSI_TAG_VALID;
-            DPRINTF("SIMPLE queue tag=0x%x\n", s->current_tag & 0xff);
+            DPRINTF("SIMPLE queue tag=0x%x\n", s->select_tag & 0xff);
             break;
         case 0x21: /* HEAD of queue */
             BADF("HEAD queue not implemented\n");
@@ -889,6 +909,51 @@ static void lsi_do_msgout(LSIState *s)
         case 0x22: /* ORDERED queue */
             BADF("ORDERED queue not implemented\n");
             s->select_tag |= lsi_get_msgbyte(s) | LSI_TAG_VALID;
+            break;
+        case 0x0d:
+            /* The ABORT TAG message clears the current I/O process only. */
+            DPRINTF("MSG: ABORT TAG tag=0x%x\n", current_tag);
+            current_dev->info->cancel_io(current_dev, current_tag);
+            lsi_disconnect(s);
+            break;
+        case 0x06:
+        case 0x0e:
+        case 0x0c:
+            /* The ABORT message clears all I/O processes for the selecting
+               initiator on the specified logical unit of the target. */
+            if (msg == 0x06) {
+                DPRINTF("MSG: ABORT tag=0x%x\n", current_tag);
+            }
+            /* The CLEAR QUEUE message clears all I/O processes for all
+               initiators on the specified logical unit of the target. */
+            if (msg == 0x0e) {
+                DPRINTF("MSG: CLEAR QUEUE tag=0x%x\n", current_tag);
+            }
+            /* The BUS DEVICE RESET message clears all I/O processes for all
+               initiators on all logical units of the target. */
+            if (msg == 0x0c) {
+                DPRINTF("MSG: BUS DEVICE RESET tag=0x%x\n", current_tag);
+            }
+
+            /* clear the current I/O process */
+            current_dev->info->cancel_io(current_dev, current_tag);
+
+            /* As the current implemented devices scsi_disk and scsi_generic
+               only support one LUN, we don't need to keep track of LUNs.
+               Clearing I/O processes for other initiators could be possible
+               for scsi_generic by sending a SG_SCSI_RESET to the /dev/sgX
+               device, but this is currently not implemented (and seems not
+               to be really necessary). So let's simply clear all queued
+               commands for the current device: */
+            id = current_tag & 0x0000ff00;
+            QTAILQ_FOREACH_SAFE(p, &s->queue, next, p_next) {
+                if ((p->tag & 0x0000ff00) == id) {
+                    current_dev->info->cancel_io(current_dev, p->tag);
+                    QTAILQ_REMOVE(&s->queue, p, next);
+                }
+            }
+
+            lsi_disconnect(s);
             break;
         default:
             if ((msg & 0x80) == 0) {
@@ -1929,7 +1994,7 @@ static uint32_t lsi_ram_readw(void *opaque, target_phys_addr_t addr)
     val = s->script_ram[addr >> 2];
     if (addr & 2)
         val >>= 16;
-    return le16_to_cpu(val);
+    return val;
 }
 
 static uint32_t lsi_ram_readl(void *opaque, target_phys_addr_t addr)
@@ -1937,7 +2002,7 @@ static uint32_t lsi_ram_readl(void *opaque, target_phys_addr_t addr)
     LSIState *s = opaque;
 
     addr &= 0x1fff;
-    return le32_to_cpu(s->script_ram[addr >> 2]);
+    return s->script_ram[addr >> 2];
 }
 
 static CPUReadMemoryFunc * const lsi_ram_readfn[3] = {
@@ -2172,16 +2237,17 @@ static int lsi_scsi_init(PCIDevice *dev)
     pci_conf[PCI_INTERRUPT_PIN] = 0x01;
 
     s->mmio_io_addr = cpu_register_io_memory(lsi_mmio_readfn,
-                                             lsi_mmio_writefn, s);
+                                             lsi_mmio_writefn, s,
+                                             DEVICE_NATIVE_ENDIAN);
     s->ram_io_addr = cpu_register_io_memory(lsi_ram_readfn,
-                                            lsi_ram_writefn, s);
+                                            lsi_ram_writefn, s,
+                                            DEVICE_NATIVE_ENDIAN);
 
-    /* TODO: use dev and get rid of cast below */
-    pci_register_bar((struct PCIDevice *)s, 0, 256,
+    pci_register_bar(&s->dev, 0, 256,
                            PCI_BASE_ADDRESS_SPACE_IO, lsi_io_mapfunc);
-    pci_register_bar((struct PCIDevice *)s, 1, 0x400,
+    pci_register_bar(&s->dev, 1, 0x400,
                            PCI_BASE_ADDRESS_SPACE_MEMORY, lsi_mmio_mapfunc);
-    pci_register_bar((struct PCIDevice *)s, 2, 0x2000,
+    pci_register_bar(&s->dev, 2, 0x2000,
                            PCI_BASE_ADDRESS_SPACE_MEMORY, lsi_ram_mapfunc);
     QTAILQ_INIT(&s->queue);
 
