@@ -31,11 +31,13 @@ typedef struct NICConf {
 typedef enum {
     NET_CLIENT_TYPE_NONE,
     NET_CLIENT_TYPE_NIC,
-    NET_CLIENT_TYPE_SLIRP,
+    NET_CLIENT_TYPE_USER,
     NET_CLIENT_TYPE_TAP,
     NET_CLIENT_TYPE_SOCKET,
     NET_CLIENT_TYPE_VDE,
-    NET_CLIENT_TYPE_DUMP
+    NET_CLIENT_TYPE_DUMP,
+
+    NET_CLIENT_TYPE_MAX
 } net_client_type;
 
 typedef void (NetPoll)(VLANClientState *, bool enable);
@@ -127,13 +129,14 @@ int do_set_link(Monitor *mon, const QDict *qdict, QObject **ret_data);
 #define MAX_NICS 8
 
 struct NICInfo {
-    uint8_t macaddr[6];
+    MACAddr macaddr;
     char *model;
     char *name;
     char *devaddr;
     VLANState *vlan;
     VLANClientState *netdev;
-    int used;
+    int used;         /* is this slot in nd_table[] being used? */
+    int instantiated; /* does this NICInfo correspond to an instantiated NIC? */
     int nvectors;
 };
 
@@ -171,11 +174,6 @@ int do_netdev_del(Monitor *mon, const QDict *qdict, QObject **ret_data);
 
 #define DEFAULT_NETWORK_SCRIPT "/etc/qemu-ifup"
 #define DEFAULT_NETWORK_DOWN_SCRIPT "/etc/qemu-ifdown"
-#ifdef __sun__
-#define SMBD_COMMAND "/usr/sfw/sbin/smbd"
-#else
-#define SMBD_COMMAND "/usr/sbin/smbd"
-#endif
 
 void qdev_set_nic_properties(DeviceState *dev, NICInfo *nd);
 
