@@ -382,15 +382,15 @@ AIX)
   make="gmake"
 ;;
 Haiku)
-haiku="yes"
-kvm="no"
-curses="no"
-aio="no"
-sdl="no"
-bluez="no"
-audio_drv_list="haiku"
-audio_possible_drivers="haiku"
-LIBS="-lnetwork -lbe -lgame -lmedia -lstdc++"
+  haiku="yes"
+  kvm="no"
+  curses="no"
+  aio="no"
+  sdl="no"
+  bluez="no"
+  audio_drv_list="haiku"
+  audio_possible_drivers="haiku"
+  LIBS="-lnetwork -lbe -lgame -lmedia -lstdc++"
 ;;
 *)
   audio_drv_list="oss"
