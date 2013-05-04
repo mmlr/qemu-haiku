@@ -23,37 +23,39 @@
  */
 
 #include "net/tap.h"
-
-#include "sysemu.h"
-#include "qemu-common.h"
-#include "qemu-error.h"
+#include <stdio.h>
 
 int tap_open(char *ifname, int ifname_size, int *vnet_hdr, int vnet_hdr_required)
 {
-    fprintf(stderr, "warning: no virtual network emulation support on Haiku yet\n");
+    fprintf(stderr, "no tap on Haiku\n");
     return -1;
 }
 
 int tap_set_sndbuf(int fd, QemuOpts *opts)
 {
-    error_report("tap_set_sndbuf: unsupported on Haiku\n");
-    return -1;
+    return 0;
 }
 
 int tap_probe_vnet_hdr(int fd)
 {
-    error_report("tap_probe_vnet_hdr: unsupported on Haiku\n");
     return 0;
 }
 
 int tap_probe_has_ufo(int fd)
 {
-    error_report("tap_probe_has_ufo: unsupported on Haiku\n");
     return 0;
+}
+
+int tap_probe_vnet_hdr_len(int fd, int len)
+{
+    return 0;
+}
+
+void tap_fd_set_vnet_hdr_len(int fd, int len)
+{
 }
 
 void tap_fd_set_offload(int fd, int csum, int tso4,
                         int tso6, int ecn, int ufo)
 {
-    error_report("tap_fd_set_offload: unsupported on Haiku\n");
 }
