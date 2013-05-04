@@ -157,6 +157,9 @@ haiku_init_out(HWVoiceOut *hw, struct audsettings *as)
 		case AUD_FMT_S16:
 			format.format = media_raw_audio_format::B_AUDIO_SHORT;
 			break;
+		case AUD_FMT_S32:
+			format.format = media_raw_audio_format::B_AUDIO_INT;
+			break;
 		case AUD_FMT_U16:
 			printf("Audio Format not supported!\n");
 			return 1;
