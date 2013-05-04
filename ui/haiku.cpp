@@ -746,7 +746,7 @@ QEMUView::UpdateFrameBuffer(int width, int height, uchar *bits,
 				fColorSpace = B_CMAP8;
 				break;
 			default:
-				printf("unsupported display depth %ld\n", bitsPerPixel);
+				printf("unsupported display depth %d\n", bitsPerPixel);
 				break;
 		}
 
