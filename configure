@@ -466,7 +466,7 @@ Haiku)
   bindir="${prefix}"
   confsuffix=""
   QEMU_CFLAGS="-DB_USE_POSITIVE_POSIX_ERRORS $QEMU_CFLAGS"
-  LIBS="-lposix_error_mapper -lnetwork -lbe -lgame -lmedia -lstdc++ $LIBS"
+  LIBS="-lposix_error_mapper -lnetwork -lbe -lbsd -lgame -lmedia -lstdc++ $LIBS"
 ;;
 *)
   audio_drv_list="oss"
