@@ -1,5 +1,5 @@
 %.o: %.cpp
-	$(CC) -I. -c -o $@ $<
+	$(CC) -Wall -Werror -I. -c -o $@ $<
 
 # Don't use implicit rules or variables
 # we have explicit rules for everything
