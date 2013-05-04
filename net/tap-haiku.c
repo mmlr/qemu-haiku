@@ -26,6 +26,7 @@
 
 #include "sysemu.h"
 #include "qemu-common.h"
+#include "qemu-error.h"
 
 int tap_open(char *ifname, int ifname_size, int *vnet_hdr, int vnet_hdr_required)
 {
@@ -35,24 +36,24 @@ int tap_open(char *ifname, int ifname_size, int *vnet_hdr, int vnet_hdr_required
 
 int tap_set_sndbuf(int fd, QemuOpts *opts)
 {
-    qemu_error("tap_set_sndbuf: unsupported on Haiku\n");
+    error_report("tap_set_sndbuf: unsupported on Haiku\n");
     return -1;
 }
 
 int tap_probe_vnet_hdr(int fd)
 {
-    qemu_error("tap_probe_vnet_hdr: unsupported on Haiku\n");
+    error_report("tap_probe_vnet_hdr: unsupported on Haiku\n");
     return 0;
 }
 
 int tap_probe_has_ufo(int fd)
 {
-    qemu_error("tap_probe_has_ufo: unsupported on Haiku\n");
+    error_report("tap_probe_has_ufo: unsupported on Haiku\n");
     return 0;
 }
 
 void tap_fd_set_offload(int fd, int csum, int tso4,
                         int tso6, int ecn, int ufo)
 {
-    qemu_error("tap_fd_set_offload: unsupported on Haiku\n");
+    error_report("tap_fd_set_offload: unsupported on Haiku\n");
 }
