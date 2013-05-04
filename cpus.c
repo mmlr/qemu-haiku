@@ -417,7 +417,9 @@ static int qemu_signal_init(void)
          * We need to process timer signals synchronously to avoid a race
          * between exit_request check and KVM vcpu entry.
          */
+#ifdef SIGIO
         sigaddset(&set, SIGIO);
+#endif
         sigaddset(&set, SIGALRM);
     }
 #endif
@@ -459,12 +461,16 @@ static void qemu_kvm_init_cpu_signals(CPUState *env)
 #else
     sigemptyset(&set);
     sigaddset(&set, SIG_IPI);
+#ifdef SIGIO
     sigaddset(&set, SIGIO);
+#endif
     sigaddset(&set, SIGALRM);
     pthread_sigmask(SIG_BLOCK, &set, NULL);
 
     pthread_sigmask(SIG_BLOCK, NULL, &set);
+#ifdef SIGIO
     sigdelset(&set, SIGIO);
+#endif
     sigdelset(&set, SIGALRM);
 #endif
     sigdelset(&set, SIG_IPI);
