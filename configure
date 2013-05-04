@@ -451,10 +451,12 @@ Haiku)
   audio_drv_list="haiku"
   audio_possible_drivers="haiku"
   prefix="/boot/apps/QEMU"
-  mansuffix="/share/man"
-  datasuffix="/share/qemu"
-  docsuffix="/share/doc/qemu"
-  binsuffix=""
+  mandir="${prefix}/share/man"
+  datadir="${prefix}/share/qemu"
+  docdir="${prefix}/share/doc/qemu"
+  sysconfdir="${prefix}/etc"
+  bindir="${prefix}"
+  confsuffix=""
   LIBS="-lnetwork -lbe -lgame -lmedia -lstdc++"
 ;;
 *)
