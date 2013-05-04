@@ -25,10 +25,8 @@
 #include "hw.h"
 #include "mips.h"
 #include "pci.h"
-#include "pc.h"
-
-typedef target_phys_addr_t pci_addr_t;
 #include "pci_host.h"
+#include "pc.h"
 
 //#define DEBUG
 
@@ -854,13 +852,13 @@ static uint32_t gt64120_readl (void *opaque,
     return val;
 }
 
-static CPUWriteMemoryFunc *gt64120_write[] = {
+static CPUWriteMemoryFunc * const gt64120_write[] = {
     &gt64120_writel,
     &gt64120_writel,
     &gt64120_writel,
 };
 
-static CPUReadMemoryFunc *gt64120_read[] = {
+static CPUReadMemoryFunc * const gt64120_read[] = {
     &gt64120_readl,
     &gt64120_readl,
     &gt64120_readl,
@@ -893,9 +891,10 @@ static int pci_gt64120_map_irq(PCIDevice *pci_dev, int irq_num)
 
 static int pci_irq_levels[4];
 
-static void pci_gt64120_set_irq(qemu_irq *pic, int irq_num, int level)
+static void pci_gt64120_set_irq(void *opaque, int irq_num, int level)
 {
     int i, pic_irq, pic_level;
+    qemu_irq *pic = opaque;
 
     pci_irq_levels[irq_num] = level;
 
@@ -1117,13 +1116,6 @@ PCIBus *pci_gt64120_init(qemu_irq *pic)
 {
     GT64120State *s;
     PCIDevice *d;
-
-    (void)&pci_host_data_writeb; /* avoid warning */
-    (void)&pci_host_data_writew; /* avoid warning */
-    (void)&pci_host_data_writel; /* avoid warning */
-    (void)&pci_host_data_readb; /* avoid warning */
-    (void)&pci_host_data_readw; /* avoid warning */
-    (void)&pci_host_data_readl; /* avoid warning */
 
     s = qemu_mallocz(sizeof(GT64120State));
     s->pci = qemu_mallocz(sizeof(GT64120PCIState));

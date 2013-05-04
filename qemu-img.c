@@ -71,16 +71,10 @@ static void help(void)
            "\n"
            "Command parameters:\n"
            "  'filename' is a disk image filename\n"
-           "  'base_image' is the read-only disk image which is used as base for a copy on\n"
-           "    write image; the copy on write image only stores the modified data\n"
-           "  'output_base_image' forces the output image to be created as a copy on write\n"
-           "    image of the specified base image; 'output_base_image' should have the same\n"
-           "    content as the input's base image, however the path, image format, etc may\n"
-           "    differ\n"
            "  'fmt' is the disk image format. It is guessed automatically in most cases\n"
-           "  'size' is the disk image size in kilobytes. Optional suffixes\n"
-           "    'M' (megabyte, 1024 * 1024) and 'G' (gigabyte, 1024 * 1024 * 1024) are\n"
-           "    supported any 'k' or 'K' is ignored\n"
+           "  'size' is the disk image size in bytes. Optional suffixes\n"
+           "    'k' or 'K' (kilobyte, 1024), 'M' (megabyte, 1024k), 'G' (gigabyte, 1024M)\n"
+           "    and T (terabyte, 1024G) are supported. 'b' is ignored.\n"
            "  'output_filename' is the destination disk image filename\n"
            "  'output_fmt' is the destination format\n"
            "  'options' is a comma separated list of format specific options in a\n"
@@ -297,13 +291,16 @@ static int img_create(int argc, char **argv)
         return 0;
     }
 
+    /* Create parameter list with default values */
+    param = parse_option_parameters("", drv->create_options, param);
+    set_option_parameter_int(param, BLOCK_OPT_SIZE, -1);
+
+    /* Parse -o options */
     if (options) {
         param = parse_option_parameters(options, drv->create_options, param);
         if (param == NULL) {
             error("Invalid options for file format '%s'.", fmt);
         }
-    } else {
-        param = parse_option_parameters("", drv->create_options, param);
     }
 
     /* Get the filename */
@@ -321,7 +318,7 @@ static int img_create(int argc, char **argv)
 
     // The size for the image must always be specified, with one exception:
     // If we are using a backing file, we can obtain the size from there
-    if (get_option_parameter(param, BLOCK_OPT_SIZE)->value.n == 0) {
+    if (get_option_parameter(param, BLOCK_OPT_SIZE)->value.n == -1) {
 
         QEMUOptionParameter *backing_file =
             get_option_parameter(param, BLOCK_OPT_BACKING_FILE);
@@ -530,7 +527,7 @@ static int is_allocated_sectors(const uint8_t *buf, int n, int *pnum)
     return v;
 }
 
-#define IO_BUF_SIZE 65536
+#define IO_BUF_SIZE (2 * 1024 * 1024)
 
 static int img_convert(int argc, char **argv)
 {
@@ -540,7 +537,7 @@ static int img_convert(int argc, char **argv)
     BlockDriverState **bs, *out_bs;
     int64_t total_sectors, nb_sectors, sector_num, bs_offset;
     uint64_t bs_sectors;
-    uint8_t buf[IO_BUF_SIZE];
+    uint8_t * buf;
     const uint8_t *buf1;
     BlockDriverInfo bdi;
     QEMUOptionParameter *param = NULL;
@@ -610,6 +607,7 @@ static int img_convert(int argc, char **argv)
 
     if (options && !strcmp(options, "?")) {
         print_option_help(drv->create_options);
+        free(bs);
         return 0;
     }
 
@@ -658,6 +656,7 @@ static int img_convert(int argc, char **argv)
     bs_i = 0;
     bs_offset = 0;
     bdrv_get_geometry(bs[0], &bs_sectors);
+    buf = qemu_malloc(IO_BUF_SIZE);
 
     if (flags & BLOCK_FLAG_COMPRESS) {
         if (bdrv_get_info(out_bs, &bdi) < 0)
@@ -746,7 +745,7 @@ static int img_convert(int argc, char **argv)
             if (n > bs_offset + bs_sectors - sector_num)
                 n = bs_offset + bs_sectors - sector_num;
 
-            if (strcmp(drv->format_name, "host_device")) {
+            if (!drv->no_zero_init) {
                 /* If the output image is being created as a copy on write image,
                    assume that sectors which are unallocated in the input image
                    are present in both the output's and input's base images (no
@@ -779,7 +778,7 @@ static int img_convert(int argc, char **argv)
                    If the output is to a host device, we also write out
                    sectors that are entirely 0, since whatever data was
                    already there is garbage, not 0s. */
-                if (strcmp(drv->format_name, "host_device") == 0 || out_baseimg ||
+                if (drv->no_zero_init || out_baseimg ||
                     is_allocated_sectors(buf1, n, &n1)) {
                     if (bdrv_write(out_bs, sector_num, buf1, n1) < 0)
                         error("error while writing");
@@ -790,6 +789,7 @@ static int img_convert(int argc, char **argv)
             }
         }
     }
+    qemu_free(buf);
     bdrv_delete(out_bs);
     for (bs_i = 0; bs_i < bs_n; bs_i++)
         bdrv_delete(bs[bs_i]);

@@ -32,7 +32,7 @@ these four paragraphs for those parts of this code that are retained.
 #ifndef SOFTFLOAT_H
 #define SOFTFLOAT_H
 
-#if defined(HOST_SOLARIS) && defined(NEEDS_LIBSUNMATH)
+#if defined(CONFIG_SOLARIS) && defined(CONFIG_NEEDS_LIBSUNMATH)
 #include <sunmath.h>
 #endif
 
@@ -90,7 +90,7 @@ typedef int64_t sbits64;
 #define FLOAT128
 #else
 /* native float support */
-#if (defined(__i386__) || defined(__x86_64__)) && !defined(HOST_BSD)
+#if (defined(__i386__) || defined(__x86_64__)) && !defined(CONFIG_BSD)
 #define FLOATX80
 #endif
 #endif /* !CONFIG_SOFTFLOAT */
@@ -146,7 +146,7 @@ typedef struct {
 #endif
 #ifdef FLOAT128
 typedef struct {
-#ifdef WORDS_BIGENDIAN
+#ifdef HOST_WORDS_BIGENDIAN
     uint64_t high, low;
 #else
     uint64_t low, high;
@@ -241,6 +241,12 @@ floatx80 int64_to_floatx80( int64_t STATUS_PARAM );
 #ifdef FLOAT128
 float128 int64_to_float128( int64_t STATUS_PARAM );
 #endif
+
+/*----------------------------------------------------------------------------
+| Software half-precision conversion routines.
+*----------------------------------------------------------------------------*/
+bits16 float32_to_float16( float32, flag STATUS_PARAM );
+float32 float16_to_float32( bits16, flag STATUS_PARAM );
 
 /*----------------------------------------------------------------------------
 | Software IEC/IEEE single-precision conversion routines.

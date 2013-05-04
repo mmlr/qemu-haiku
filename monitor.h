@@ -3,6 +3,7 @@
 
 #include "qemu-common.h"
 #include "qemu-char.h"
+#include "qdict.h"
 #include "block.h"
 
 extern Monitor *cur_mon;
@@ -10,7 +11,19 @@ extern Monitor *cur_mon;
 /* flags for monitor_init */
 #define MONITOR_IS_DEFAULT    0x01
 #define MONITOR_USE_READLINE  0x02
+#define MONITOR_USE_CONTROL   0x04
 
+/* QMP events */
+typedef enum MonitorEvent {
+    QEVENT_DEBUG,
+    QEVENT_SHUTDOWN,
+    QEVENT_RESET,
+    QEVENT_POWERDOWN,
+    QEVENT_STOP,
+    QEVENT_MAX,
+} MonitorEvent;
+
+void monitor_protocol_event(MonitorEvent event, QObject *data);
 void monitor_init(CharDriverState *chr, int flags);
 
 int monitor_suspend(Monitor *mon);

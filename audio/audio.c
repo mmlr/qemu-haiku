@@ -34,11 +34,17 @@
 /* #define DEBUG_LIVE */
 /* #define DEBUG_OUT */
 /* #define DEBUG_CAPTURE */
+/* #define DEBUG_POLL */
 
 #define SW_NAME(sw) (sw)->name ? (sw)->name : "unknown"
 
+
+/* Order of CONFIG_AUDIO_DRIVERS is import.
+   The 1st one is the one used by default, that is the reason
+    that we generate the list.
+*/
 static struct audio_driver *drvtab[] = {
-    AUDIO_DRIVERS
+    CONFIG_AUDIO_DRIVERS
     &no_audio_driver,
     &wav_audio_driver
 };
@@ -59,65 +65,52 @@ static struct {
     } period;
     int plive;
     int log_to_monitor;
+    int try_poll_in;
+    int try_poll_out;
 } conf = {
-    {                           /* DAC fixed settings */
-        1,                      /* enabled */
-        1,                      /* nb_voices */
-        1,                      /* greedy */
-        {
-            44100,              /* freq */
-            2,                  /* nchannels */
-            AUD_FMT_S16,        /* fmt */
-            AUDIO_HOST_ENDIANNESS
+    .fixed_out = { /* DAC fixed settings */
+        .enabled = 1,
+        .nb_voices = 1,
+        .greedy = 1,
+        .settings = {
+            .freq = 44100,
+            .nchannels = 2,
+            .fmt = AUD_FMT_S16,
+            .endianness =  AUDIO_HOST_ENDIANNESS,
         }
     },
 
-    {                           /* ADC fixed settings */
-        1,                      /* enabled */
-        1,                      /* nb_voices */
-        1,                      /* greedy */
-        {
-            44100,              /* freq */
-            2,                  /* nchannels */
-            AUD_FMT_S16,        /* fmt */
-            AUDIO_HOST_ENDIANNESS
+    .fixed_in = { /* ADC fixed settings */
+        .enabled = 1,
+        .nb_voices = 1,
+        .greedy = 1,
+        .settings = {
+            .freq = 44100,
+            .nchannels = 2,
+            .fmt = AUD_FMT_S16,
+            .endianness = AUDIO_HOST_ENDIANNESS,
         }
     },
 
-    { 250 },                    /* period */
-    0,                          /* plive */
-    0                           /* log_to_monitor */
+    .period = { .hertz = 250 },
+    .plive = 0,
+    .log_to_monitor = 0,
+    .try_poll_in = 1,
+    .try_poll_out = 1,
 };
 
 static AudioState glob_audio_state;
 
 struct mixeng_volume nominal_volume = {
-    0,
+    .mute = 0,
 #ifdef FLOAT_MIXENG
-    1.0,
-    1.0
+    .r = 1.0,
+    .l = 1.0,
 #else
-    1ULL << 32,
-    1ULL << 32
+    .r = 1ULL << 32,
+    .l = 1ULL << 32,
 #endif
 };
-
-/* http://www.df.lth.se/~john_e/gems/gem002d.html */
-/* http://www.multi-platforms.com/Tips/PopCount.htm */
-uint32_t popcount (uint32_t u)
-{
-    u = ((u&0x55555555) + ((u>>1)&0x55555555));
-    u = ((u&0x33333333) + ((u>>2)&0x33333333));
-    u = ((u&0x0f0f0f0f) + ((u>>4)&0x0f0f0f0f));
-    u = ((u&0x00ff00ff) + ((u>>8)&0x00ff00ff));
-    u = ( u&0x0000ffff) + (u>>16);
-    return u;
-}
-
-inline uint32_t lsbindex (uint32_t u)
-{
-    return popcount ((u&-u)-1);
-}
 
 #ifdef AUDIO_IS_FLAWLESS_AND_NO_CHECKS_ARE_REQURIED
 #error No its not
@@ -131,7 +124,7 @@ int audio_bug (const char *funcname, int cond)
         if (!shown) {
             shown = 1;
             AUD_log (NULL, "Save all your work and restart without audio\n");
-            AUD_log (NULL, "Please send bug report to malc@pulsesoft.com\n");
+            AUD_log (NULL, "Please send bug report to av1474@comtv.ru\n");
             AUD_log (NULL, "I am sorry\n");
         }
         AUD_log (NULL, "Context:\n");
@@ -773,8 +766,8 @@ static void audio_detach_capture (HWVoiceOut *hw)
             sw->rate = NULL;
         }
 
-        LIST_REMOVE (sw, entries);
-        LIST_REMOVE (sc, entries);
+        QLIST_REMOVE (sw, entries);
+        QLIST_REMOVE (sc, entries);
         qemu_free (sc);
         if (was_active) {
             /* We have removed soft voice from the capture:
@@ -818,8 +811,8 @@ static int audio_attach_capture (HWVoiceOut *hw)
             qemu_free (sw);
             return -1;
         }
-        LIST_INSERT_HEAD (&hw_cap->sw_head, sw, entries);
-        LIST_INSERT_HEAD (&hw->cap_head, sc, entries);
+        QLIST_INSERT_HEAD (&hw_cap->sw_head, sw, entries);
+        QLIST_INSERT_HEAD (&hw->cap_head, sc, entries);
 #ifdef DEBUG_CAPTURE
         asprintf (&sw->name, "for %p %d,%d,%d",
                   hw, sw->info.freq, sw->info.bits, sw->info.nchannels);
@@ -856,6 +849,28 @@ int audio_pcm_hw_get_live_in (HWVoiceIn *hw)
         return 0;
     }
     return live;
+}
+
+int audio_pcm_hw_clip_out (HWVoiceOut *hw, void *pcm_buf,
+                           int live, int pending)
+{
+    int left = hw->samples - pending;
+    int len = audio_MIN (left, live);
+    int clipped = 0;
+
+    while (len) {
+        struct st_sample *src = hw->mix_buf + hw->rpos;
+        uint8_t *dst = advance (pcm_buf, hw->rpos << hw->info.shift);
+        int samples_till_end_of_buf = hw->samples - hw->rpos;
+        int samples_to_clip = audio_MIN (len, samples_till_end_of_buf);
+
+        hw->clip (dst, src, samples_to_clip);
+
+        hw->rpos = (hw->rpos + samples_to_clip) % hw->samples;
+        len -= samples_to_clip;
+        clipped += samples_to_clip;
+    }
+    return clipped;
 }
 
 /*
@@ -954,16 +969,17 @@ static int audio_pcm_hw_find_min_out (HWVoiceOut *hw, int *nb_livep)
     return m;
 }
 
-int audio_pcm_hw_get_live_out2 (HWVoiceOut *hw, int *nb_live)
+static int audio_pcm_hw_get_live_out (HWVoiceOut *hw, int *nb_live)
 {
     int smin;
+    int nb_live1;
 
-    smin = audio_pcm_hw_find_min_out (hw, nb_live);
-
-    if (!*nb_live) {
-        return 0;
+    smin = audio_pcm_hw_find_min_out (hw, &nb_live1);
+    if (nb_live) {
+        *nb_live = nb_live1;
     }
-    else {
+
+    if (nb_live1) {
         int live = smin;
 
         if (audio_bug (AUDIO_FUNC, live < 0 || live > hw->samples)) {
@@ -972,19 +988,7 @@ int audio_pcm_hw_get_live_out2 (HWVoiceOut *hw, int *nb_live)
         }
         return live;
     }
-}
-
-int audio_pcm_hw_get_live_out (HWVoiceOut *hw)
-{
-    int nb_live;
-    int live;
-
-    live = audio_pcm_hw_get_live_out2 (hw, &nb_live);
-    if (audio_bug (AUDIO_FUNC, live < 0 || live > hw->samples)) {
-        dolog ("live=%d hw->samples=%d\n", live, hw->samples);
-        return 0;
-    }
-    return live;
+    return 0;
 }
 
 /*
@@ -1077,6 +1081,47 @@ static void audio_pcm_print_info (const char *cap, struct audio_pcm_info *info)
 #undef DAC
 #include "audio_template.h"
 
+/*
+ * Timer
+ */
+static void audio_timer (void *opaque)
+{
+    AudioState *s = opaque;
+
+    audio_run ("timer");
+    qemu_mod_timer (s->ts, qemu_get_clock (vm_clock) + conf.period.ticks);
+}
+
+
+static int audio_is_timer_needed (void)
+{
+    HWVoiceIn *hwi = NULL;
+    HWVoiceOut *hwo = NULL;
+
+    while ((hwo = audio_pcm_hw_find_any_enabled_out (hwo))) {
+        if (!hwo->poll_mode) return 1;
+    }
+    while ((hwi = audio_pcm_hw_find_any_enabled_in (hwi))) {
+        if (!hwi->poll_mode) return 1;
+    }
+    return 0;
+}
+
+static void audio_reset_timer (void)
+{
+    AudioState *s = &glob_audio_state;
+
+    if (audio_is_timer_needed ()) {
+        qemu_mod_timer (s->ts, qemu_get_clock (vm_clock) + 1);
+    }
+    else {
+        qemu_del_timer (s->ts);
+    }
+}
+
+/*
+ * Public API
+ */
 int AUD_write (SWVoiceOut *sw, void *buf, int size)
 {
     int bytes;
@@ -1137,7 +1182,8 @@ void AUD_set_active_out (SWVoiceOut *sw, int on)
             if (!hw->enabled) {
                 hw->enabled = 1;
                 if (s->vm_running) {
-                    hw->pcm_ops->ctl_out (hw, VOICE_ENABLE);
+                    hw->pcm_ops->ctl_out (hw, VOICE_ENABLE, conf.try_poll_out);
+                    audio_reset_timer ();
                 }
             }
         }
@@ -1181,7 +1227,7 @@ void AUD_set_active_in (SWVoiceIn *sw, int on)
             if (!hw->enabled) {
                 hw->enabled = 1;
                 if (s->vm_running) {
-                    hw->pcm_ops->ctl_in (hw, VOICE_ENABLE);
+                    hw->pcm_ops->ctl_in (hw, VOICE_ENABLE, conf.try_poll_in);
                 }
             }
             sw->total_hw_samples_acquired = hw->total_samples_captured;
@@ -1300,7 +1346,7 @@ static void audio_run_out (AudioState *s)
         int played;
         int live, free, nb_live, cleanup_required, prev_rpos;
 
-        live = audio_pcm_hw_get_live_out2 (hw, &nb_live);
+        live = audio_pcm_hw_get_live_out (hw, &nb_live);
         if (!nb_live) {
             live = 0;
         }
@@ -1338,7 +1384,7 @@ static void audio_run_out (AudioState *s)
         }
 
         prev_rpos = hw->rpos;
-        played = hw->pcm_ops->run_out (hw);
+        played = hw->pcm_ops->run_out (hw, live);
         if (audio_bug (AUDIO_FUNC, hw->rpos >= hw->samples)) {
             dolog ("hw->rpos=%d hw->samples=%d played=%d\n",
                    hw->rpos, hw->samples, played);
@@ -1437,7 +1483,7 @@ static void audio_run_capture (AudioState *s)
         HWVoiceOut *hw = &cap->hw;
         SWVoiceOut *sw;
 
-        captured = live = audio_pcm_hw_get_live_out (hw);
+        captured = live = audio_pcm_hw_get_live_out (hw, NULL);
         rpos = hw->rpos;
         while (live) {
             int left = hw->samples - rpos;
@@ -1475,61 +1521,126 @@ static void audio_run_capture (AudioState *s)
     }
 }
 
-static void audio_timer (void *opaque)
+void audio_run (const char *msg)
 {
-    AudioState *s = opaque;
+    AudioState *s = &glob_audio_state;
 
     audio_run_out (s);
     audio_run_in (s);
     audio_run_capture (s);
+#ifdef DEBUG_POLL
+    {
+        static double prevtime;
+        double currtime;
+        struct timeval tv;
 
-    qemu_mod_timer (s->ts, qemu_get_clock (vm_clock) + conf.period.ticks);
+        if (gettimeofday (&tv, NULL)) {
+            perror ("audio_run: gettimeofday");
+            return;
+        }
+
+        currtime = tv.tv_sec + tv.tv_usec * 1e-6;
+        dolog ("Elapsed since last %s: %f\n", msg, currtime - prevtime);
+        prevtime = currtime;
+    }
+#endif
 }
 
 static struct audio_option audio_options[] = {
     /* DAC */
-    {"DAC_FIXED_SETTINGS", AUD_OPT_BOOL, &conf.fixed_out.enabled,
-     "Use fixed settings for host DAC", NULL, 0},
-
-    {"DAC_FIXED_FREQ", AUD_OPT_INT, &conf.fixed_out.settings.freq,
-     "Frequency for fixed host DAC", NULL, 0},
-
-    {"DAC_FIXED_FMT", AUD_OPT_FMT, &conf.fixed_out.settings.fmt,
-     "Format for fixed host DAC", NULL, 0},
-
-    {"DAC_FIXED_CHANNELS", AUD_OPT_INT, &conf.fixed_out.settings.nchannels,
-     "Number of channels for fixed DAC (1 - mono, 2 - stereo)", NULL, 0},
-
-    {"DAC_VOICES", AUD_OPT_INT, &conf.fixed_out.nb_voices,
-     "Number of voices for DAC", NULL, 0},
-
+    {
+        .name  = "DAC_FIXED_SETTINGS",
+        .tag   = AUD_OPT_BOOL,
+        .valp  = &conf.fixed_out.enabled,
+        .descr = "Use fixed settings for host DAC"
+    },
+    {
+        .name  = "DAC_FIXED_FREQ",
+        .tag   = AUD_OPT_INT,
+        .valp  = &conf.fixed_out.settings.freq,
+        .descr = "Frequency for fixed host DAC"
+    },
+    {
+        .name  = "DAC_FIXED_FMT",
+        .tag   = AUD_OPT_FMT,
+        .valp  = &conf.fixed_out.settings.fmt,
+        .descr = "Format for fixed host DAC"
+    },
+    {
+        .name  = "DAC_FIXED_CHANNELS",
+        .tag   = AUD_OPT_INT,
+        .valp  = &conf.fixed_out.settings.nchannels,
+        .descr = "Number of channels for fixed DAC (1 - mono, 2 - stereo)"
+    },
+    {
+        .name  = "DAC_VOICES",
+        .tag   = AUD_OPT_INT,
+        .valp  = &conf.fixed_out.nb_voices,
+        .descr = "Number of voices for DAC"
+    },
+    {
+        .name  = "DAC_TRY_POLL",
+        .tag   = AUD_OPT_BOOL,
+        .valp  = &conf.try_poll_out,
+        .descr = "Attempt using poll mode for DAC"
+    },
     /* ADC */
-    {"ADC_FIXED_SETTINGS", AUD_OPT_BOOL, &conf.fixed_in.enabled,
-     "Use fixed settings for host ADC", NULL, 0},
-
-    {"ADC_FIXED_FREQ", AUD_OPT_INT, &conf.fixed_in.settings.freq,
-     "Frequency for fixed host ADC", NULL, 0},
-
-    {"ADC_FIXED_FMT", AUD_OPT_FMT, &conf.fixed_in.settings.fmt,
-     "Format for fixed host ADC", NULL, 0},
-
-    {"ADC_FIXED_CHANNELS", AUD_OPT_INT, &conf.fixed_in.settings.nchannels,
-     "Number of channels for fixed ADC (1 - mono, 2 - stereo)", NULL, 0},
-
-    {"ADC_VOICES", AUD_OPT_INT, &conf.fixed_in.nb_voices,
-     "Number of voices for ADC", NULL, 0},
-
+    {
+        .name  = "ADC_FIXED_SETTINGS",
+        .tag   = AUD_OPT_BOOL,
+        .valp  = &conf.fixed_in.enabled,
+        .descr = "Use fixed settings for host ADC"
+    },
+    {
+        .name  = "ADC_FIXED_FREQ",
+        .tag   = AUD_OPT_INT,
+        .valp  = &conf.fixed_in.settings.freq,
+        .descr = "Frequency for fixed host ADC"
+    },
+    {
+        .name  = "ADC_FIXED_FMT",
+        .tag   = AUD_OPT_FMT,
+        .valp  = &conf.fixed_in.settings.fmt,
+        .descr = "Format for fixed host ADC"
+    },
+    {
+        .name  = "ADC_FIXED_CHANNELS",
+        .tag   = AUD_OPT_INT,
+        .valp  = &conf.fixed_in.settings.nchannels,
+        .descr = "Number of channels for fixed ADC (1 - mono, 2 - stereo)"
+    },
+    {
+        .name  = "ADC_VOICES",
+        .tag   = AUD_OPT_INT,
+        .valp  = &conf.fixed_in.nb_voices,
+        .descr = "Number of voices for ADC"
+    },
+    {
+        .name  = "ADC_TRY_POLL",
+        .tag   = AUD_OPT_BOOL,
+        .valp  = &conf.try_poll_in,
+        .descr = "Attempt using poll mode for ADC"
+    },
     /* Misc */
-    {"TIMER_PERIOD", AUD_OPT_INT, &conf.period.hertz,
-     "Timer period in HZ (0 - use lowest possible)", NULL, 0},
-
-    {"PLIVE", AUD_OPT_BOOL, &conf.plive,
-     "(undocumented)", NULL, 0},
-
-    {"LOG_TO_MONITOR", AUD_OPT_BOOL, &conf.log_to_monitor,
-     "print logging messages to monitor instead of stderr", NULL, 0},
-
-    {NULL, 0, NULL, NULL, NULL, 0}
+    {
+        .name  = "TIMER_PERIOD",
+        .tag   = AUD_OPT_INT,
+        .valp  = &conf.period.hertz,
+        .descr = "Timer period in HZ (0 - use lowest possible)"
+    },
+    {
+        .name  = "PLIVE",
+        .tag   = AUD_OPT_BOOL,
+        .valp  = &conf.plive,
+        .descr = "(undocumented)"
+    },
+    {
+        .name  = "LOG_TO_MONITOR",
+        .tag   = AUD_OPT_BOOL,
+        .valp  = &conf.log_to_monitor,
+        .descr = "Print logging messages to monitor instead of stderr"
+    },
+    { /* End of list */ }
 };
 
 static void audio_pp_nb_voices (const char *typ, int nb)
@@ -1632,12 +1743,13 @@ static void audio_vm_change_state_handler (void *opaque, int running,
 
     s->vm_running = running;
     while ((hwo = audio_pcm_hw_find_any_enabled_out (hwo))) {
-        hwo->pcm_ops->ctl_out (hwo, op);
+        hwo->pcm_ops->ctl_out (hwo, op, conf.try_poll_out);
     }
 
     while ((hwi = audio_pcm_hw_find_any_enabled_in (hwi))) {
-        hwi->pcm_ops->ctl_in (hwi, op);
+        hwi->pcm_ops->ctl_in (hwi, op, conf.try_poll_in);
     }
+    audio_reset_timer ();
 }
 
 static void audio_atexit (void)
@@ -1672,38 +1784,31 @@ static void audio_atexit (void)
     }
 }
 
-static void audio_save (QEMUFile *f, void *opaque)
-{
-    (void) f;
-    (void) opaque;
-}
-
-static int audio_load (QEMUFile *f, void *opaque, int version_id)
-{
-    (void) f;
-    (void) opaque;
-
-    if (version_id != 1) {
-        return -EINVAL;
+static const VMStateDescription vmstate_audio = {
+    .name = "audio",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField []) {
+        VMSTATE_END_OF_LIST()
     }
-
-    return 0;
-}
+};
 
 static void audio_init (void)
 {
     size_t i;
     int done = 0;
     const char *drvname;
+    VMChangeStateEntry *e;
     AudioState *s = &glob_audio_state;
 
     if (s->drv) {
         return;
     }
 
-    LIST_INIT (&s->hw_head_out);
-    LIST_INIT (&s->hw_head_in);
-    LIST_INIT (&s->cap_head);
+    QLIST_INIT (&s->hw_head_out);
+    QLIST_INIT (&s->hw_head_in);
+    QLIST_INIT (&s->cap_head);
     atexit (audio_atexit);
 
     s->ts = qemu_new_timer (vm_clock, audio_timer, s);
@@ -1768,8 +1873,6 @@ static void audio_init (void)
         }
     }
 
-    VMChangeStateEntry *e;
-
     if (conf.period.hertz <= 0) {
         if (conf.period.hertz < 0) {
             dolog ("warning: Timer period is negative - %d "
@@ -1778,7 +1881,8 @@ static void audio_init (void)
         }
         conf.period.ticks = 1;
     } else {
-        conf.period.ticks = ticks_per_sec / conf.period.hertz;
+        conf.period.ticks =
+            muldiv64 (1, get_ticks_per_sec (), conf.period.hertz);
     }
 
     e = qemu_add_vm_change_state_handler (audio_vm_change_state_handler, s);
@@ -1787,9 +1891,8 @@ static void audio_init (void)
                "(Audio can continue looping even after stopping the VM)\n");
     }
 
-    LIST_INIT (&s->card_head);
-    register_savevm ("audio", 0, 1, audio_save, audio_load, s);
-    qemu_mod_timer (s->ts, qemu_get_clock (vm_clock) + conf.period.ticks);
+    QLIST_INIT (&s->card_head);
+    vmstate_register (0, &vmstate_audio, s);
 }
 
 void AUD_register_card (const char *name, QEMUSoundCard *card)
@@ -1797,12 +1900,12 @@ void AUD_register_card (const char *name, QEMUSoundCard *card)
     audio_init ();
     card->name = qemu_strdup (name);
     memset (&card->entries, 0, sizeof (card->entries));
-    LIST_INSERT_HEAD (&glob_audio_state.card_head, card, entries);
+    QLIST_INSERT_HEAD (&glob_audio_state.card_head, card, entries);
 }
 
 void AUD_remove_card (QEMUSoundCard *card)
 {
-    LIST_REMOVE (card, entries);
+    QLIST_REMOVE (card, entries);
     qemu_free (card->name);
 }
 
@@ -1834,7 +1937,7 @@ CaptureVoiceOut *AUD_add_capture (
 
     cap = audio_pcm_capture_find_specific (as);
     if (cap) {
-        LIST_INSERT_HEAD (&cap->cb_head, cb, entries);
+        QLIST_INSERT_HEAD (&cap->cb_head, cb, entries);
         return cap;
     }
     else {
@@ -1849,8 +1952,8 @@ CaptureVoiceOut *AUD_add_capture (
         }
 
         hw = &cap->hw;
-        LIST_INIT (&hw->sw_head);
-        LIST_INIT (&cap->cb_head);
+        QLIST_INIT (&hw->sw_head);
+        QLIST_INIT (&cap->cb_head);
 
         /* XXX find a more elegant way */
         hw->samples = 4096 * 4;
@@ -1878,8 +1981,8 @@ CaptureVoiceOut *AUD_add_capture (
             [hw->info.swap_endianness]
             [audio_bits_to_index (hw->info.bits)];
 
-        LIST_INSERT_HEAD (&s->cap_head, cap, entries);
-        LIST_INSERT_HEAD (&cap->cb_head, cb, entries);
+        QLIST_INSERT_HEAD (&s->cap_head, cap, entries);
+        QLIST_INSERT_HEAD (&cap->cb_head, cb, entries);
 
         hw = NULL;
         while ((hw = audio_pcm_hw_find_any_out (hw))) {
@@ -1905,7 +2008,7 @@ void AUD_del_capture (CaptureVoiceOut *cap, void *cb_opaque)
     for (cb = cap->cb_head.lh_first; cb; cb = cb->entries.le_next) {
         if (cb->opaque == cb_opaque) {
             cb->ops.destroy (cb_opaque);
-            LIST_REMOVE (cb, entries);
+            QLIST_REMOVE (cb, entries);
             qemu_free (cb);
 
             if (!cap->cb_head.lh_first) {
@@ -1922,12 +2025,12 @@ void AUD_del_capture (CaptureVoiceOut *cap, void *cb_opaque)
                         st_rate_stop (sw->rate);
                         sw->rate = NULL;
                     }
-                    LIST_REMOVE (sw, entries);
-                    LIST_REMOVE (sc, entries);
+                    QLIST_REMOVE (sw, entries);
+                    QLIST_REMOVE (sc, entries);
                     qemu_free (sc);
                     sw = sw1;
                 }
-                LIST_REMOVE (cap, entries);
+                QLIST_REMOVE (cap, entries);
                 qemu_free (cap);
             }
             return;

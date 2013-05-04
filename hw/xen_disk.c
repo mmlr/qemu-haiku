@@ -77,7 +77,7 @@ struct ioreq {
     int                 aio_errors;
 
     struct XenBlkDev    *blkdev;
-    LIST_ENTRY(ioreq)   list;
+    QLIST_ENTRY(ioreq)   list;
 };
 
 struct XenBlkDev {
@@ -99,15 +99,15 @@ struct XenBlkDev {
     int                 cnt_map;
 
     /* request lists */
-    LIST_HEAD(inflight_head, ioreq) inflight;
-    LIST_HEAD(finished_head, ioreq) finished;
-    LIST_HEAD(freelist_head, ioreq) freelist;
+    QLIST_HEAD(inflight_head, ioreq) inflight;
+    QLIST_HEAD(finished_head, ioreq) finished;
+    QLIST_HEAD(freelist_head, ioreq) freelist;
     int                 requests_total;
     int                 requests_inflight;
     int                 requests_finished;
 
     /* qemu block driver */
-    int                 index;
+    DriveInfo           *dinfo;
     BlockDriverState    *bs;
     QEMUBH              *bh;
 };
@@ -118,7 +118,7 @@ static struct ioreq *ioreq_start(struct XenBlkDev *blkdev)
 {
     struct ioreq *ioreq = NULL;
 
-    if (LIST_EMPTY(&blkdev->freelist)) {
+    if (QLIST_EMPTY(&blkdev->freelist)) {
 	if (blkdev->requests_total >= max_requests)
 	    goto out;
 	/* allocate new struct */
@@ -128,11 +128,11 @@ static struct ioreq *ioreq_start(struct XenBlkDev *blkdev)
         qemu_iovec_init(&ioreq->v, BLKIF_MAX_SEGMENTS_PER_REQUEST);
     } else {
 	/* get one from freelist */
-	ioreq = LIST_FIRST(&blkdev->freelist);
-	LIST_REMOVE(ioreq, list);
+	ioreq = QLIST_FIRST(&blkdev->freelist);
+	QLIST_REMOVE(ioreq, list);
         qemu_iovec_reset(&ioreq->v);
     }
-    LIST_INSERT_HEAD(&blkdev->inflight, ioreq, list);
+    QLIST_INSERT_HEAD(&blkdev->inflight, ioreq, list);
     blkdev->requests_inflight++;
 
 out:
@@ -143,8 +143,8 @@ static void ioreq_finish(struct ioreq *ioreq)
 {
     struct XenBlkDev *blkdev = ioreq->blkdev;
 
-    LIST_REMOVE(ioreq, list);
-    LIST_INSERT_HEAD(&blkdev->finished, ioreq, list);
+    QLIST_REMOVE(ioreq, list);
+    QLIST_INSERT_HEAD(&blkdev->finished, ioreq, list);
     blkdev->requests_inflight--;
     blkdev->requests_finished++;
 }
@@ -153,10 +153,10 @@ static void ioreq_release(struct ioreq *ioreq)
 {
     struct XenBlkDev *blkdev = ioreq->blkdev;
 
-    LIST_REMOVE(ioreq, list);
+    QLIST_REMOVE(ioreq, list);
     memset(ioreq, 0, sizeof(*ioreq));
     ioreq->blkdev = blkdev;
-    LIST_INSERT_HEAD(&blkdev->freelist, ioreq, list);
+    QLIST_INSERT_HEAD(&blkdev->freelist, ioreq, list);
     blkdev->requests_finished--;
 }
 
@@ -476,8 +476,8 @@ static void blk_send_response_all(struct XenBlkDev *blkdev)
     struct ioreq *ioreq;
     int send_notify = 0;
 
-    while (!LIST_EMPTY(&blkdev->finished)) {
-        ioreq = LIST_FIRST(&blkdev->finished);
+    while (!QLIST_EMPTY(&blkdev->finished)) {
+        ioreq = QLIST_FIRST(&blkdev->finished);
 	send_notify += blk_send_response_one(ioreq);
 	ioreq_release(ioreq);
     }
@@ -564,9 +564,9 @@ static void blk_alloc(struct XenDevice *xendev)
 {
     struct XenBlkDev *blkdev = container_of(xendev, struct XenBlkDev, xendev);
 
-    LIST_INIT(&blkdev->inflight);
-    LIST_INIT(&blkdev->finished);
-    LIST_INIT(&blkdev->freelist);
+    QLIST_INIT(&blkdev->inflight);
+    QLIST_INIT(&blkdev->finished);
+    QLIST_INIT(&blkdev->freelist);
     blkdev->bh = qemu_bh_new(blk_bh, blkdev);
     if (xen_mode != XEN_EMULATE)
         batch_maps = 1;
@@ -575,7 +575,7 @@ static void blk_alloc(struct XenDevice *xendev)
 static int blk_init(struct XenDevice *xendev)
 {
     struct XenBlkDev *blkdev = container_of(xendev, struct XenBlkDev, xendev);
-    int mode, qflags, have_barriers, info = 0;
+    int index, mode, qflags, have_barriers, info = 0;
     char *h;
 
     /* read xenstore entries */
@@ -622,15 +622,16 @@ static int blk_init(struct XenDevice *xendev)
 	info  |= VDISK_CDROM;
 
     /* init qemu block driver */
-    blkdev->index = (blkdev->xendev.dev - 202 * 256) / 16;
-    blkdev->index = drive_get_index(IF_XEN, 0, blkdev->index);
-    if (blkdev->index == -1) {
+    index = (blkdev->xendev.dev - 202 * 256) / 16;
+    blkdev->dinfo = drive_get(IF_XEN, 0, index);
+    if (!blkdev->dinfo) {
         /* setup via xenbus -> create new block driver instance */
         xen_be_printf(&blkdev->xendev, 2, "create new bdrv (xenbus setup)\n");
 	blkdev->bs = bdrv_new(blkdev->dev);
 	if (blkdev->bs) {
 	    if (bdrv_open2(blkdev->bs, blkdev->filename, qflags,
-                           bdrv_find_format(blkdev->fileproto)) != 0) {
+                           bdrv_find_whitelisted_format(blkdev->fileproto))
+                != 0) {
 		bdrv_delete(blkdev->bs);
 		blkdev->bs = NULL;
 	    }
@@ -640,7 +641,7 @@ static int blk_init(struct XenDevice *xendev)
     } else {
         /* setup via qemu cmdline -> already setup for us */
         xen_be_printf(&blkdev->xendev, 2, "get configured bdrv (cmdline setup)\n");
-	blkdev->bs = drives_table[blkdev->index].bdrv;
+	blkdev->bs = blkdev->dinfo->bdrv;
     }
     blkdev->file_blk  = BLOCK_SIZE;
     blkdev->file_size = bdrv_getlength(blkdev->bs);
@@ -729,7 +730,7 @@ static void blk_disconnect(struct XenDevice *xendev)
     struct XenBlkDev *blkdev = container_of(xendev, struct XenBlkDev, xendev);
 
     if (blkdev->bs) {
-        if (blkdev->index == -1) {
+        if (!blkdev->dinfo) {
             /* close/delete only if we created it ourself */
             bdrv_close(blkdev->bs);
             bdrv_delete(blkdev->bs);
@@ -750,9 +751,9 @@ static int blk_free(struct XenDevice *xendev)
     struct XenBlkDev *blkdev = container_of(xendev, struct XenBlkDev, xendev);
     struct ioreq *ioreq;
 
-    while (!LIST_EMPTY(&blkdev->freelist)) {
-	ioreq = LIST_FIRST(&blkdev->freelist);
-        LIST_REMOVE(ioreq, list);
+    while (!QLIST_EMPTY(&blkdev->freelist)) {
+	ioreq = QLIST_FIRST(&blkdev->freelist);
+        QLIST_REMOVE(ioreq, list);
         qemu_iovec_destroy(&ioreq->v);
 	qemu_free(ioreq);
     }

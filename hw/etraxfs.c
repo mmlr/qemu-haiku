@@ -28,6 +28,8 @@
 #include "net.h"
 #include "flash.h"
 #include "etraxfs.h"
+#include "loader.h"
+#include "elf.h"
 
 #define FLASH_SIZE 0x2000000
 #define INTMEM_SIZE (128 * 1024)
@@ -55,6 +57,7 @@ void bareetraxfs_init (ram_addr_t ram_size,
     void *etraxfs_dmac;
     struct etraxfs_dma_client *eth[2] = {NULL, NULL};
     int kernel_size;
+    DriveInfo *dinfo;
     int i;
     ram_addr_t phys_ram;
     ram_addr_t phys_flash;
@@ -79,9 +82,9 @@ void bareetraxfs_init (ram_addr_t ram_size,
 
 
     phys_flash = qemu_ram_alloc(FLASH_SIZE);
-    i = drive_get_index(IF_PFLASH, 0, 0);
+    dinfo = drive_get(IF_PFLASH, 0, 0);
     pflash_cfi02_register(0x0, phys_flash,
-                          i != -1 ? drives_table[i].bdrv : NULL, (64 * 1024),
+                          dinfo ? dinfo->bdrv : NULL, (64 * 1024),
                           FLASH_SIZE >> 16,
                           1, 2, 0x0000, 0x0000, 0x0000, 0x0000,
                           0x555, 0x2aa);
@@ -89,7 +92,7 @@ void bareetraxfs_init (ram_addr_t ram_size,
     dev = qdev_create(NULL, "etraxfs,pic");
     /* FIXME: Is there a proper way to signal vectors to the CPU core?  */
     qdev_prop_set_ptr(dev, "interrupt_vector", &env->interrupt_vector);
-    qdev_init(dev);
+    qdev_init_nofail(dev);
     s = sysbus_from_qdev(dev);
     sysbus_mmio_map(s, 0, 0x3001c000);
     sysbus_connect_irq(s, 0, cpu_irq[0]);
@@ -135,7 +138,7 @@ void bareetraxfs_init (ram_addr_t ram_size,
         /* Boots a kernel elf binary, os/linux-2.6/vmlinux from the axis 
            devboard SDK.  */
         kernel_size = load_elf(kernel_filename, -0x80000000LL,
-                               &entry, NULL, &high);
+                               &entry, NULL, &high, 0, ELF_MACHINE, 0);
         bootstrap_pc = entry;
         if (kernel_size < 0) {
             /* Takes a kimage from the axis devboard SDK.  */
@@ -154,7 +157,7 @@ void bareetraxfs_init (ram_addr_t ram_size,
             /* Let the kernel know we are modifying the cmdline.  */
             env->regs[10] = 0x87109563;
             env->regs[11] = 0x40000000;
-            pstrcpy_targphys(env->regs[11], 256, kernel_cmdline);
+            pstrcpy_targphys("cmdline", env->regs[11], 256, kernel_cmdline);
         }
     }
     env->pc = bootstrap_pc;

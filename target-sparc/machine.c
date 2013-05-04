@@ -52,10 +52,10 @@ void cpu_save(QEMUFile *f, void *opaque)
         qemu_put_be64s(f, &env->dmmuregs[i]);
     }
     for (i = 0; i < 64; i++) {
-        qemu_put_be64s(f, &env->itlb_tag[i]);
-        qemu_put_be64s(f, &env->itlb_tte[i]);
-        qemu_put_be64s(f, &env->dtlb_tag[i]);
-        qemu_put_be64s(f, &env->dtlb_tte[i]);
+        qemu_put_be64s(f, &env->itlb[i].tag);
+        qemu_put_be64s(f, &env->itlb[i].tte);
+        qemu_put_be64s(f, &env->dtlb[i].tag);
+        qemu_put_be64s(f, &env->dtlb[i].tte);
     }
     qemu_put_be32s(f, &env->mmu_version);
     for (i = 0; i < MAXTL_MAX; i++) {
@@ -148,10 +148,10 @@ int cpu_load(QEMUFile *f, void *opaque, int version_id)
         qemu_get_be64s(f, &env->dmmuregs[i]);
     }
     for (i = 0; i < 64; i++) {
-        qemu_get_be64s(f, &env->itlb_tag[i]);
-        qemu_get_be64s(f, &env->itlb_tte[i]);
-        qemu_get_be64s(f, &env->dtlb_tag[i]);
-        qemu_get_be64s(f, &env->dtlb_tte[i]);
+        qemu_get_be64s(f, &env->itlb[i].tag);
+        qemu_get_be64s(f, &env->itlb[i].tte);
+        qemu_get_be64s(f, &env->dtlb[i].tag);
+        qemu_get_be64s(f, &env->dtlb[i].tte);
     }
     qemu_get_be32s(f, &env->mmu_version);
     for (i = 0; i < MAXTL_MAX; i++) {
@@ -164,7 +164,6 @@ int cpu_load(QEMUFile *f, void *opaque, int version_id)
     qemu_get_be32s(f, &env->asi);
     qemu_get_be32s(f, &env->pstate);
     qemu_get_be32s(f, &env->tl);
-    env->tsptr = &env->ts[env->tl & MAXTL_MASK];
     qemu_get_be32s(f, &env->cansave);
     qemu_get_be32s(f, &env->canrestore);
     qemu_get_be32s(f, &env->otherwin);

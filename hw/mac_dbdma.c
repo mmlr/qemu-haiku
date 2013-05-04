@@ -785,13 +785,13 @@ static uint32_t dbdma_readl (void *opaque, target_phys_addr_t addr)
     return value;
 }
 
-static CPUWriteMemoryFunc *dbdma_write[] = {
+static CPUWriteMemoryFunc * const dbdma_write[] = {
     NULL,
     NULL,
     dbdma_writel,
 };
 
-static CPUReadMemoryFunc *dbdma_read[] = {
+static CPUReadMemoryFunc * const dbdma_read[] = {
     NULL,
     NULL,
     dbdma_readl,
@@ -840,7 +840,6 @@ void* DBDMA_init (int *dbdma_mem_index)
     *dbdma_mem_index = cpu_register_io_memory(dbdma_read, dbdma_write, s);
     register_savevm("dbdma", -1, 1, dbdma_save, dbdma_load, s);
     qemu_register_reset(dbdma_reset, s);
-    dbdma_reset(s);
 
     dbdma_bh = qemu_bh_new(DBDMA_run_bh, s);
 

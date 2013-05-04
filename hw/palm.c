@@ -24,6 +24,7 @@
 #include "boards.h"
 #include "arm-misc.h"
 #include "devices.h"
+#include "loader.h"
 
 static uint32_t static_readb(void *opaque, target_phys_addr_t offset)
 {
@@ -52,13 +53,13 @@ static void static_write(void *opaque, target_phys_addr_t offset,
 #endif
 }
 
-static CPUReadMemoryFunc *static_readfn[] = {
+static CPUReadMemoryFunc * const static_readfn[] = {
     static_readb,
     static_readh,
     static_readw,
 };
 
-static CPUWriteMemoryFunc *static_writefn[] = {
+static CPUWriteMemoryFunc * const static_writefn[] = {
     static_write,
     static_write,
     static_write,

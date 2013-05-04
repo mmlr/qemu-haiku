@@ -701,7 +701,7 @@ static int usb_hid_handle_control(USBDevice *dev, int request, int value,
                 break;
             case 2:
                 /* product description */
-                ret = set_usb_string(data, s->dev.devname);
+                ret = set_usb_string(data, s->dev.product_desc);
                 break;
             case 3:
                 /* vendor description */
@@ -843,68 +843,31 @@ static void usb_hid_handle_destroy(USBDevice *dev)
     if (s->kind != USB_KEYBOARD)
         qemu_remove_mouse_event_handler(s->ptr.eh_entry);
     /* TODO: else */
-    qemu_free(s);
 }
 
-USBDevice *usb_tablet_init(void)
+static int usb_hid_initfn(USBDevice *dev, int kind)
 {
-    USBHIDState *s;
-
-    s = qemu_mallocz(sizeof(USBHIDState));
+    USBHIDState *s = DO_UPCAST(USBHIDState, dev, dev);
     s->dev.speed = USB_SPEED_FULL;
-    s->dev.handle_packet = usb_generic_handle_packet;
-
-    s->dev.handle_reset = usb_mouse_handle_reset;
-    s->dev.handle_control = usb_hid_handle_control;
-    s->dev.handle_data = usb_hid_handle_data;
-    s->dev.handle_destroy = usb_hid_handle_destroy;
-    s->kind = USB_TABLET;
+    s->kind = kind;
     /* Force poll routine to be run and grab input the first time.  */
     s->changed = 1;
-
-    pstrcpy(s->dev.devname, sizeof(s->dev.devname), "QEMU USB Tablet");
-
-    return (USBDevice *)s;
+    return 0;
 }
 
-USBDevice *usb_mouse_init(void)
+static int usb_tablet_initfn(USBDevice *dev)
 {
-    USBHIDState *s;
-
-    s = qemu_mallocz(sizeof(USBHIDState));
-    s->dev.speed = USB_SPEED_FULL;
-    s->dev.handle_packet = usb_generic_handle_packet;
-
-    s->dev.handle_reset = usb_mouse_handle_reset;
-    s->dev.handle_control = usb_hid_handle_control;
-    s->dev.handle_data = usb_hid_handle_data;
-    s->dev.handle_destroy = usb_hid_handle_destroy;
-    s->kind = USB_MOUSE;
-    /* Force poll routine to be run and grab input the first time.  */
-    s->changed = 1;
-
-    pstrcpy(s->dev.devname, sizeof(s->dev.devname), "QEMU USB Mouse");
-
-    return (USBDevice *)s;
+    return usb_hid_initfn(dev, USB_TABLET);
 }
 
-USBDevice *usb_keyboard_init(void)
+static int usb_mouse_initfn(USBDevice *dev)
 {
-    USBHIDState *s;
+    return usb_hid_initfn(dev, USB_MOUSE);
+}
 
-    s = qemu_mallocz(sizeof(USBHIDState));
-    s->dev.speed = USB_SPEED_FULL;
-    s->dev.handle_packet = usb_generic_handle_packet;
-
-    s->dev.handle_reset = usb_keyboard_handle_reset;
-    s->dev.handle_control = usb_hid_handle_control;
-    s->dev.handle_data = usb_hid_handle_data;
-    s->dev.handle_destroy = usb_hid_handle_destroy;
-    s->kind = USB_KEYBOARD;
-
-    pstrcpy(s->dev.devname, sizeof(s->dev.devname), "QEMU USB Keyboard");
-
-    return (USBDevice *) s;
+static int usb_keyboard_initfn(USBDevice *dev)
+{
+    return usb_hid_initfn(dev, USB_KEYBOARD);
 }
 
 void usb_hid_datain_cb(USBDevice *dev, void *opaque, void (*datain)(void *))
@@ -914,3 +877,48 @@ void usb_hid_datain_cb(USBDevice *dev, void *opaque, void (*datain)(void *))
     s->datain_opaque = opaque;
     s->datain = datain;
 }
+
+static struct USBDeviceInfo hid_info[] = {
+    {
+        .product_desc   = "QEMU USB Tablet",
+        .qdev.name      = "usb-tablet",
+        .usbdevice_name = "tablet",
+        .qdev.size      = sizeof(USBHIDState),
+        .init           = usb_tablet_initfn,
+        .handle_packet  = usb_generic_handle_packet,
+        .handle_reset   = usb_mouse_handle_reset,
+        .handle_control = usb_hid_handle_control,
+        .handle_data    = usb_hid_handle_data,
+        .handle_destroy = usb_hid_handle_destroy,
+    },{
+        .product_desc   = "QEMU USB Mouse",
+        .qdev.name      = "usb-mouse",
+        .usbdevice_name = "mouse",
+        .qdev.size      = sizeof(USBHIDState),
+        .init           = usb_mouse_initfn,
+        .handle_packet  = usb_generic_handle_packet,
+        .handle_reset   = usb_mouse_handle_reset,
+        .handle_control = usb_hid_handle_control,
+        .handle_data    = usb_hid_handle_data,
+        .handle_destroy = usb_hid_handle_destroy,
+    },{
+        .product_desc   = "QEMU USB Keyboard",
+        .qdev.name      = "usb-kbd",
+        .usbdevice_name = "keyboard",
+        .qdev.size      = sizeof(USBHIDState),
+        .init           = usb_keyboard_initfn,
+        .handle_packet  = usb_generic_handle_packet,
+        .handle_reset   = usb_keyboard_handle_reset,
+        .handle_control = usb_hid_handle_control,
+        .handle_data    = usb_hid_handle_data,
+        .handle_destroy = usb_hid_handle_destroy,
+    },{
+        /* end of list */
+    }
+};
+
+static void usb_hid_register_devices(void)
+{
+    usb_qdev_register_many(hid_info);
+}
+device_init(usb_hid_register_devices)

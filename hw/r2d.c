@@ -29,8 +29,11 @@
 #include "sysemu.h"
 #include "boards.h"
 #include "pci.h"
+#include "sh_pci.h"
 #include "net.h"
 #include "sh7750_regs.h"
+#include "ide.h"
+#include "loader.h"
 
 #define SDRAM_BASE 0x0c000000 /* Physical location of SDRAM: Area 3 */
 #define SDRAM_SIZE 0x04000000
@@ -155,13 +158,13 @@ r2d_fpga_write(void *opaque, target_phys_addr_t addr, uint32_t value)
     }
 }
 
-static CPUReadMemoryFunc *r2d_fpga_readfn[] = {
+static CPUReadMemoryFunc * const r2d_fpga_readfn[] = {
     r2d_fpga_read,
     r2d_fpga_read,
     NULL,
 };
 
-static CPUWriteMemoryFunc *r2d_fpga_writefn[] = {
+static CPUWriteMemoryFunc * const r2d_fpga_writefn[] = {
     r2d_fpga_write,
     r2d_fpga_write,
     NULL,
@@ -182,8 +185,10 @@ static qemu_irq *r2d_fpga_init(target_phys_addr_t base, qemu_irq irl)
     return qemu_allocate_irqs(r2d_fpga_irq_set, s, NR_IRQS);
 }
 
-static void r2d_pci_set_irq(qemu_irq *p, int n, int l)
+static void r2d_pci_set_irq(void *opaque, int n, int l)
 {
+    qemu_irq *p = opaque;
+
     qemu_set_irq(p[n], l);
 }
 
@@ -203,6 +208,7 @@ static void r2d_init(ram_addr_t ram_size,
     ram_addr_t sdram_addr;
     qemu_irq *irq;
     PCIBus *pci;
+    DriveInfo *dinfo;
     int i;
 
     if (!cpu_model)
@@ -225,13 +231,13 @@ static void r2d_init(ram_addr_t ram_size,
     sm501_init(0x10000000, SM501_VRAM_SIZE, irq[SM501], serial_hds[2]);
 
     /* onboard CF (True IDE mode, Master only). */
-    if ((i = drive_get_index(IF_IDE, 0, 0)) != -1)
+    if ((dinfo = drive_get(IF_IDE, 0, 0)) != NULL)
 	mmio_ide_init(0x14001000, 0x1400080c, irq[CF_IDE], 1,
-		      drives_table[i].bdrv, NULL);
+		      dinfo, NULL);
 
     /* NIC: rtl8139 on-board, and 2 slots. */
     for (i = 0; i < nb_nics; i++)
-        pci_nic_init(&nd_table[i], "rtl8139", i==0 ? "2" : NULL);
+        pci_nic_init_nofail(&nd_table[i], "rtl8139", i==0 ? "2" : NULL);
 
     /* Todo: register on board registers */
     if (kernel_filename) {
@@ -245,7 +251,7 @@ static void r2d_init(ram_addr_t ram_size,
 				   SDRAM_BASE + LINUX_LOAD_OFFSET,
 				   SDRAM_SIZE - LINUX_LOAD_OFFSET);
           env->pc = (SDRAM_BASE + LINUX_LOAD_OFFSET) | 0xa0000000;
-          pstrcpy_targphys(SDRAM_BASE + 0x10100, 256, kernel_cmdline);
+          pstrcpy_targphys("cmdline", SDRAM_BASE + 0x10100, 256, kernel_cmdline);
       } else {
           kernel_size = load_image_targphys(kernel_filename, SDRAM_BASE, SDRAM_SIZE);
           env->pc = SDRAM_BASE | 0xa0000000; /* Start from P2 area */

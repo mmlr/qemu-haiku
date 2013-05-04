@@ -29,6 +29,8 @@
 #include "device_tree.h"
 #include "openpic.h"
 #include "ppce500.h"
+#include "loader.h"
+#include "elf.h"
 
 #define BINARY_DEVICE_TREE_FILE    "mpc8544ds.dtb"
 #define UIMAGE_LOAD_BASE           0
@@ -46,7 +48,7 @@
 #define MPC8544_PCI_IO             0xE1000000
 #define MPC8544_PCI_IOLEN          0x10000
 
-#ifdef HAVE_FDT
+#ifdef CONFIG_FDT
 static int mpc8544_copy_soc_cell(void *fdt, const char *node, const char *prop)
 {
     uint32_t cell;
@@ -77,7 +79,7 @@ static void *mpc8544_load_device_tree(target_phys_addr_t addr,
                                      const char *kernel_cmdline)
 {
     void *fdt = NULL;
-#ifdef HAVE_FDT
+#ifdef CONFIG_FDT
     uint32_t mem_reg_property[] = {0, ramsize};
     char *filename;
     int fdt_size;
@@ -157,12 +159,11 @@ static void mpc8544ds_init(ram_addr_t ram_size,
                          const char *cpu_model)
 {
     PCIBus *pci_bus;
-    PCIDevice *pci_dev;
     CPUState *env;
     uint64_t elf_entry;
     uint64_t elf_lowaddr;
-    target_ulong entry=0;
-    target_ulong loadaddr=UIMAGE_LOAD_BASE;
+    target_phys_addr_t entry=0;
+    target_phys_addr_t loadaddr=UIMAGE_LOAD_BASE;
     target_long kernel_size=0;
     target_ulong dt_base=DTB_LOAD_BASE;
     target_ulong initrd_base=INITRD_LOAD_BASE;
@@ -216,18 +217,9 @@ static void mpc8544ds_init(ram_addr_t ram_size,
     isa_mmio_init(MPC8544_PCI_IO, MPC8544_PCI_IOLEN);
 
     if (pci_bus) {
-        int unit_id = 0;
-
-        /* Add virtio block devices. */
-        while ((i = drive_get_index(IF_VIRTIO, 0, unit_id)) != -1) {
-            pci_dev = pci_create("virtio-blk-pci", drives_table[i].devaddr);
-            qdev_init(&pci_dev->qdev);
-            unit_id++;
-        }
-
         /* Register network interfaces. */
         for (i = 0; i < nb_nics; i++) {
-            pci_nic_init(&nd_table[i], "virtio", NULL);
+            pci_nic_init_nofail(&nd_table[i], "virtio", NULL);
         }
     }
 
@@ -236,7 +228,7 @@ static void mpc8544ds_init(ram_addr_t ram_size,
         kernel_size = load_uimage(kernel_filename, &entry, &loadaddr, NULL);
         if (kernel_size < 0) {
             kernel_size = load_elf(kernel_filename, 0, &elf_entry, &elf_lowaddr,
-                                   NULL);
+                                   NULL, 1, ELF_MACHINE, 0);
             entry = elf_entry;
             loadaddr = elf_lowaddr;
         }

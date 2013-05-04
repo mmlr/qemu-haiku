@@ -47,7 +47,7 @@
 #define REFCOUNT_SHIFT 1 /* refcount size is 2 bytes */
 
 #define MIN_CLUSTER_BITS 9
-#define MAX_CLUSTER_BITS 16
+#define MAX_CLUSTER_BITS 21
 
 #define L2_CACHE_SIZE 16
 
@@ -98,7 +98,7 @@ typedef struct BDRVQcowState {
     uint8_t *cluster_cache;
     uint8_t *cluster_data;
     uint64_t cluster_cache_offset;
-    LIST_HEAD(QCowClusterAlloc, QCowL2Meta) cluster_allocs;
+    QLIST_HEAD(QCowClusterAlloc, QCowL2Meta) cluster_allocs;
 
     uint64_t *refcount_table;
     uint64_t refcount_table_offset;
@@ -135,13 +135,14 @@ struct QCowAIOCB;
 typedef struct QCowL2Meta
 {
     uint64_t offset;
+    uint64_t cluster_offset;
     int n_start;
     int nb_available;
     int nb_clusters;
     struct QCowL2Meta *depends_on;
-    LIST_HEAD(QCowAioDependencies, QCowAIOCB) dependent_requests;
+    QLIST_HEAD(QCowAioDependencies, QCowAIOCB) dependent_requests;
 
-    LIST_ENTRY(QCowL2Meta) next_in_flight;
+    QLIST_ENTRY(QCowL2Meta) next_in_flight;
 } QCowL2Meta;
 
 static inline int size_to_clusters(BDRVQcowState *s, int64_t size)
@@ -191,16 +192,13 @@ void qcow2_encrypt_sectors(BDRVQcowState *s, int64_t sector_num,
 
 uint64_t qcow2_get_cluster_offset(BlockDriverState *bs, uint64_t offset,
     int *num);
-uint64_t qcow2_alloc_cluster_offset(BlockDriverState *bs,
-                              uint64_t offset,
-                              int n_start, int n_end,
-                              int *num, QCowL2Meta *m);
+int qcow2_alloc_cluster_offset(BlockDriverState *bs, uint64_t offset,
+    int n_start, int n_end, int *num, QCowL2Meta *m);
 uint64_t qcow2_alloc_compressed_cluster_offset(BlockDriverState *bs,
                                          uint64_t offset,
                                          int compressed_size);
 
-int qcow2_alloc_cluster_link_l2(BlockDriverState *bs, uint64_t cluster_offset,
-    QCowL2Meta *m);
+int qcow2_alloc_cluster_link_l2(BlockDriverState *bs, QCowL2Meta *m);
 
 /* qcow2-snapshot.c functions */
 int qcow2_snapshot_create(BlockDriverState *bs, QEMUSnapshotInfo *sn_info);

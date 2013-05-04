@@ -134,13 +134,13 @@ static void pxa2xx_pm_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *pxa2xx_pm_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_pm_readfn[] = {
     pxa2xx_pm_read,
     pxa2xx_pm_read,
     pxa2xx_pm_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_pm_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_pm_writefn[] = {
     pxa2xx_pm_write,
     pxa2xx_pm_write,
     pxa2xx_pm_write,
@@ -215,13 +215,13 @@ static void pxa2xx_cm_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *pxa2xx_cm_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_cm_readfn[] = {
     pxa2xx_cm_read,
     pxa2xx_cm_read,
     pxa2xx_cm_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_cm_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_cm_writefn[] = {
     pxa2xx_cm_write,
     pxa2xx_cm_write,
     pxa2xx_cm_write,
@@ -515,13 +515,13 @@ static void pxa2xx_mm_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *pxa2xx_mm_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_mm_readfn[] = {
     pxa2xx_mm_read,
     pxa2xx_mm_read,
     pxa2xx_mm_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_mm_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_mm_writefn[] = {
     pxa2xx_mm_write,
     pxa2xx_mm_write,
     pxa2xx_mm_write,
@@ -791,13 +791,13 @@ static void pxa2xx_ssp_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *pxa2xx_ssp_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_ssp_readfn[] = {
     pxa2xx_ssp_read,
     pxa2xx_ssp_read,
     pxa2xx_ssp_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_ssp_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_ssp_writefn[] = {
     pxa2xx_ssp_write,
     pxa2xx_ssp_write,
     pxa2xx_ssp_write,
@@ -850,7 +850,7 @@ static int pxa2xx_ssp_load(QEMUFile *f, void *opaque, int version_id)
     return 0;
 }
 
-static void pxa2xx_ssp_init(SysBusDevice *dev)
+static int pxa2xx_ssp_init(SysBusDevice *dev)
 {
     int iomemtype;
     PXA2xxSSPState *s = FROM_SYSBUS(PXA2xxSSPState, dev);
@@ -864,6 +864,7 @@ static void pxa2xx_ssp_init(SysBusDevice *dev)
                     pxa2xx_ssp_save, pxa2xx_ssp_load, s);
 
     s->bus = ssi_create_bus(&dev->qdev, "ssi");
+    return 0;
 }
 
 /* Real-Time Clock */
@@ -1155,13 +1156,13 @@ static void pxa2xx_rtc_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *pxa2xx_rtc_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_rtc_readfn[] = {
     pxa2xx_rtc_read,
     pxa2xx_rtc_read,
     pxa2xx_rtc_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_rtc_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_rtc_writefn[] = {
     pxa2xx_rtc_write,
     pxa2xx_rtc_write,
     pxa2xx_rtc_write,
@@ -1439,49 +1440,49 @@ static void pxa2xx_i2c_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *pxa2xx_i2c_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_i2c_readfn[] = {
     pxa2xx_i2c_read,
     pxa2xx_i2c_read,
     pxa2xx_i2c_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_i2c_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_i2c_writefn[] = {
     pxa2xx_i2c_write,
     pxa2xx_i2c_write,
     pxa2xx_i2c_write,
 };
 
-static void pxa2xx_i2c_save(QEMUFile *f, void *opaque)
-{
-    PXA2xxI2CState *s = (PXA2xxI2CState *) opaque;
+static const VMStateDescription vmstate_pxa2xx_i2c_slave = {
+    .name = "pxa2xx_i2c_slave",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField []) {
+        VMSTATE_I2C_SLAVE(i2c, PXA2xxI2CSlaveState),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
-    qemu_put_be16s(f, &s->control);
-    qemu_put_be16s(f, &s->status);
-    qemu_put_8s(f, &s->ibmr);
-    qemu_put_8s(f, &s->data);
+static const VMStateDescription vmstate_pxa2xx_i2c = {
+    .name = "pxa2xx_i2c",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .minimum_version_id_old = 1,
+    .fields      = (VMStateField []) {
+        VMSTATE_UINT16(control, PXA2xxI2CState),
+        VMSTATE_UINT16(status, PXA2xxI2CState),
+        VMSTATE_UINT8(ibmr, PXA2xxI2CState),
+        VMSTATE_UINT8(data, PXA2xxI2CState),
+        VMSTATE_STRUCT_POINTER(slave, PXA2xxI2CState,
+                               vmstate_pxa2xx_i2c, PXA2xxI2CSlaveState *),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
-    i2c_slave_save(f, &s->slave->i2c);
-}
-
-static int pxa2xx_i2c_load(QEMUFile *f, void *opaque, int version_id)
-{
-    PXA2xxI2CState *s = (PXA2xxI2CState *) opaque;
-
-    if (version_id != 1)
-        return -EINVAL;
-
-    qemu_get_be16s(f, &s->control);
-    qemu_get_be16s(f, &s->status);
-    qemu_get_8s(f, &s->ibmr);
-    qemu_get_8s(f, &s->data);
-
-    i2c_slave_load(f, &s->slave->i2c);
-    return 0;
-}
-
-static void pxa2xx_i2c_slave_init(i2c_slave *i2c)
+static int pxa2xx_i2c_slave_init(i2c_slave *i2c)
 {
     /* Nothing to do.  */
+    return 0;
 }
 
 static I2CSlaveInfo pxa2xx_i2c_slave_info = {
@@ -1514,8 +1515,7 @@ PXA2xxI2CState *pxa2xx_i2c_init(target_phys_addr_t base,
     cpu_register_physical_memory(base & ~region_size,
                     region_size + 1, iomemtype);
 
-    register_savevm("pxa2xx_i2c", base, 1,
-                    pxa2xx_i2c_save, pxa2xx_i2c_load, s);
+    vmstate_register(base, &vmstate_pxa2xx_i2c, s);
 
     return s;
 }
@@ -1666,13 +1666,13 @@ static void pxa2xx_i2s_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *pxa2xx_i2s_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_i2s_readfn[] = {
     pxa2xx_i2s_read,
     pxa2xx_i2s_read,
     pxa2xx_i2s_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_i2s_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_i2s_writefn[] = {
     pxa2xx_i2s_write,
     pxa2xx_i2s_write,
     pxa2xx_i2s_write,
@@ -1909,13 +1909,13 @@ static void pxa2xx_fir_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *pxa2xx_fir_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_fir_readfn[] = {
     pxa2xx_fir_read,
     pxa2xx_fir_read,
     pxa2xx_fir_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_fir_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_fir_writefn[] = {
     pxa2xx_fir_write,
     pxa2xx_fir_write,
     pxa2xx_fir_write,
@@ -2034,7 +2034,7 @@ PXA2xxState *pxa270_init(unsigned int sdram_size, const char *revision)
 {
     PXA2xxState *s;
     int iomemtype, i;
-    int index;
+    DriveInfo *dinfo;
     s = (PXA2xxState *) qemu_mallocz(sizeof(PXA2xxState));
 
     if (revision && strncmp(revision, "pxa27", 5)) {
@@ -2066,12 +2066,12 @@ PXA2xxState *pxa270_init(unsigned int sdram_size, const char *revision)
 
     s->gpio = pxa2xx_gpio_init(0x40e00000, s->env, s->pic, 121);
 
-    index = drive_get_index(IF_SD, 0, 0);
-    if (index == -1) {
+    dinfo = drive_get(IF_SD, 0, 0);
+    if (!dinfo) {
         fprintf(stderr, "qemu: missing SecureDigital device\n");
         exit(1);
     }
-    s->mmc = pxa2xx_mmci_init(0x41100000, drives_table[index].bdrv,
+    s->mmc = pxa2xx_mmci_init(0x41100000, dinfo->bdrv,
                               s->pic[PXA2XX_PIC_MMC], s->dma);
 
     for (i = 0; pxa270_serial[i].io_base; i ++)
@@ -2153,7 +2153,7 @@ PXA2xxState *pxa255_init(unsigned int sdram_size)
 {
     PXA2xxState *s;
     int iomemtype, i;
-    int index;
+    DriveInfo *dinfo;
 
     s = (PXA2xxState *) qemu_mallocz(sizeof(PXA2xxState));
 
@@ -2178,12 +2178,12 @@ PXA2xxState *pxa255_init(unsigned int sdram_size)
 
     s->gpio = pxa2xx_gpio_init(0x40e00000, s->env, s->pic, 85);
 
-    index = drive_get_index(IF_SD, 0, 0);
-    if (index == -1) {
+    dinfo = drive_get(IF_SD, 0, 0);
+    if (!dinfo) {
         fprintf(stderr, "qemu: missing SecureDigital device\n");
         exit(1);
     }
-    s->mmc = pxa2xx_mmci_init(0x41100000, drives_table[index].bdrv,
+    s->mmc = pxa2xx_mmci_init(0x41100000, dinfo->bdrv,
                               s->pic[PXA2XX_PIC_MMC], s->dma);
 
     for (i = 0; pxa255_serial[i].io_base; i ++)

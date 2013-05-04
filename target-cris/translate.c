@@ -197,10 +197,6 @@ static inline void t_gen_mov_TN_preg(TCGv tn, int r)
 		tcg_gen_mov_tl(tn, tcg_const_tl(0));
 	else if (r == PR_VR)
 		tcg_gen_mov_tl(tn, tcg_const_tl(32));
-	else if (r == PR_EDA) {
-		printf("read from EDA!\n");
-		tcg_gen_mov_tl(tn, cpu_PR[r]);
-	}
 	else
 		tcg_gen_mov_tl(tn, cpu_PR[r]);
 }
@@ -3082,8 +3078,8 @@ static void check_breakpoint(CPUState *env, DisasContext *dc)
 {
 	CPUBreakpoint *bp;
 
-	if (unlikely(!TAILQ_EMPTY(&env->breakpoints))) {
-		TAILQ_FOREACH(bp, &env->breakpoints, entry) {
+	if (unlikely(!QTAILQ_EMPTY(&env->breakpoints))) {
+		QTAILQ_FOREACH(bp, &env->breakpoints, entry) {
 			if (bp->pc == dc->pc) {
 				cris_evaluate_flags (dc);
 				tcg_gen_movi_tl(env_pc, dc->pc);

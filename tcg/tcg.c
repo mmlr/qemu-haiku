@@ -27,7 +27,7 @@
 
 #include "config.h"
 
-#ifndef DEBUG_TCG
+#ifndef CONFIG_DEBUG_TCG
 /* define it to suppress various consistency checks (faster) */
 #define NDEBUG
 #endif
@@ -46,6 +46,7 @@
 
 #include "qemu-common.h"
 #include "cache-utils.h"
+#include "host-utils.h"
 
 /* Note: the long term plan is to reduce the dependancies on the QEMU
    CPU definitions. Currently they are used for qemu_ld/st
@@ -57,13 +58,16 @@
 #include "tcg-op.h"
 #include "elf.h"
 
+#if defined(CONFIG_USE_GUEST_BASE) && !defined(TCG_TARGET_HAS_GUEST_BASE)
+#error GUEST_BASE not supported on this host.
+#endif
 
 static void patch_reloc(uint8_t *code_ptr, int type, 
                         tcg_target_long value, tcg_target_long addend);
 
 static TCGOpDef tcg_op_defs[] = {
 #define DEF(s, n, copy_size) { #s, 0, 0, n, n, 0, copy_size },
-#define DEF2(s, iargs, oargs, cargs, flags) { #s, iargs, oargs, cargs, iargs + oargs + cargs, flags, 0 },
+#define DEF2(s, oargs, iargs, cargs, flags) { #s, oargs, iargs, cargs, iargs + oargs + cargs, flags, 0 },
 #include "tcg-opc.h"
 #undef DEF
 #undef DEF2
@@ -1082,8 +1086,7 @@ static void tcg_liveness_analysis(TCGContext *s)
 
     nb_ops = gen_opc_ptr - gen_opc_buf;
 
-    /* XXX: make it really dynamic */
-    s->op_dead_iargs = tcg_malloc(OPC_BUF_SIZE * sizeof(uint16_t));
+    s->op_dead_iargs = tcg_malloc(nb_ops * sizeof(uint16_t));
     
     dead_temps = tcg_malloc(s->nb_temps);
     memset(dead_temps, 1, s->nb_temps);
@@ -1862,7 +1865,7 @@ static int tcg_reg_alloc_call(TCGContext *s, const TCGOpDef *def,
 
 static int64_t tcg_table_op_count[NB_OPS];
 
-void dump_op_count(void)
+static void dump_op_count(void)
 {
     int i;
     FILE *f;
@@ -1901,7 +1904,7 @@ static inline int tcg_gen_code_common(TCGContext *s, uint8_t *gen_code_buf,
 
 #ifdef DEBUG_DISAS
     if (unlikely(qemu_loglevel_mask(CPU_LOG_TB_OP_OPT))) {
-        qemu_log("OP after la:\n");
+        qemu_log("OP after liveness analysis:\n");
         tcg_dump_ops(s, logfile);
         qemu_log("\n");
     }
@@ -2070,10 +2073,8 @@ void tcg_dump_info(FILE *f,
                 s->restore_count);
     cpu_fprintf(f, "  avg cycles        %0.1f\n",
                 s->restore_count ? (double)s->restore_time / s->restore_count : 0);
-    {
-        extern void dump_op_count(void);
-        dump_op_count();
-    }
+
+    dump_op_count();
 }
 #else
 void tcg_dump_info(FILE *f,

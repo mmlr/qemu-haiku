@@ -330,11 +330,18 @@ enum
   ARM_HWCAP_ARM_FPA       = 1 << 5,
   ARM_HWCAP_ARM_VFP       = 1 << 6,
   ARM_HWCAP_ARM_EDSP      = 1 << 7,
+  ARM_HWCAP_ARM_JAVA      = 1 << 8,
+  ARM_HWCAP_ARM_IWMMXT    = 1 << 9,
+  ARM_HWCAP_ARM_THUMBEE   = 1 << 10,
+  ARM_HWCAP_ARM_NEON      = 1 << 11,
+  ARM_HWCAP_ARM_VFPv3     = 1 << 12,
+  ARM_HWCAP_ARM_VFPv3D16  = 1 << 13,
 };
 
 #define ELF_HWCAP (ARM_HWCAP_ARM_SWP | ARM_HWCAP_ARM_HALF              \
                     | ARM_HWCAP_ARM_THUMB | ARM_HWCAP_ARM_FAST_MULT     \
-                    | ARM_HWCAP_ARM_FPA | ARM_HWCAP_ARM_VFP)
+                    | ARM_HWCAP_ARM_FPA | ARM_HWCAP_ARM_VFP \
+                    | ARM_HWCAP_ARM_NEON | ARM_HWCAP_ARM_VFPv3 )
 
 #endif
 
@@ -422,35 +429,35 @@ static inline void init_thread(struct target_pt_regs *regs, struct image_info *i
 /* Feature masks for the Aux Vector Hardware Capabilities (AT_HWCAP).
    See arch/powerpc/include/asm/cputable.h.  */
 enum {
-    PPC_FEATURE_32 = 0x80000000,
-    PPC_FEATURE_64 = 0x40000000,
-    PPC_FEATURE_601_INSTR = 0x20000000,
-    PPC_FEATURE_HAS_ALTIVEC = 0x10000000,
-    PPC_FEATURE_HAS_FPU = 0x08000000,
-    PPC_FEATURE_HAS_MMU = 0x04000000,
-    PPC_FEATURE_HAS_4xxMAC = 0x02000000,
-    PPC_FEATURE_UNIFIED_CACHE = 0x01000000,
-    PPC_FEATURE_HAS_SPE = 0x00800000,
-    PPC_FEATURE_HAS_EFP_SINGLE = 0x00400000,
-    PPC_FEATURE_HAS_EFP_DOUBLE = 0x00200000,
-    PPC_FEATURE_NO_TB = 0x00100000,
-    PPC_FEATURE_POWER4 = 0x00080000,
-    PPC_FEATURE_POWER5 = 0x00040000,
-    PPC_FEATURE_POWER5_PLUS = 0x00020000,
-    PPC_FEATURE_CELL = 0x00010000,
-    PPC_FEATURE_BOOKE = 0x00008000,
-    PPC_FEATURE_SMT = 0x00004000,
-    PPC_FEATURE_ICACHE_SNOOP = 0x00002000,
-    PPC_FEATURE_ARCH_2_05 = 0x00001000,
-    PPC_FEATURE_PA6T = 0x00000800,
-    PPC_FEATURE_HAS_DFP = 0x00000400,
-    PPC_FEATURE_POWER6_EXT = 0x00000200,
-    PPC_FEATURE_ARCH_2_06 = 0x00000100,
-    PPC_FEATURE_HAS_VSX = 0x00000080,
-    PPC_FEATURE_PSERIES_PERFMON_COMPAT = 0x00000040,
+    QEMU_PPC_FEATURE_32 = 0x80000000,
+    QEMU_PPC_FEATURE_64 = 0x40000000,
+    QEMU_PPC_FEATURE_601_INSTR = 0x20000000,
+    QEMU_PPC_FEATURE_HAS_ALTIVEC = 0x10000000,
+    QEMU_PPC_FEATURE_HAS_FPU = 0x08000000,
+    QEMU_PPC_FEATURE_HAS_MMU = 0x04000000,
+    QEMU_PPC_FEATURE_HAS_4xxMAC = 0x02000000,
+    QEMU_PPC_FEATURE_UNIFIED_CACHE = 0x01000000,
+    QEMU_PPC_FEATURE_HAS_SPE = 0x00800000,
+    QEMU_PPC_FEATURE_HAS_EFP_SINGLE = 0x00400000,
+    QEMU_PPC_FEATURE_HAS_EFP_DOUBLE = 0x00200000,
+    QEMU_PPC_FEATURE_NO_TB = 0x00100000,
+    QEMU_PPC_FEATURE_POWER4 = 0x00080000,
+    QEMU_PPC_FEATURE_POWER5 = 0x00040000,
+    QEMU_PPC_FEATURE_POWER5_PLUS = 0x00020000,
+    QEMU_PPC_FEATURE_CELL = 0x00010000,
+    QEMU_PPC_FEATURE_BOOKE = 0x00008000,
+    QEMU_PPC_FEATURE_SMT = 0x00004000,
+    QEMU_PPC_FEATURE_ICACHE_SNOOP = 0x00002000,
+    QEMU_PPC_FEATURE_ARCH_2_05 = 0x00001000,
+    QEMU_PPC_FEATURE_PA6T = 0x00000800,
+    QEMU_PPC_FEATURE_HAS_DFP = 0x00000400,
+    QEMU_PPC_FEATURE_POWER6_EXT = 0x00000200,
+    QEMU_PPC_FEATURE_ARCH_2_06 = 0x00000100,
+    QEMU_PPC_FEATURE_HAS_VSX = 0x00000080,
+    QEMU_PPC_FEATURE_PSERIES_PERFMON_COMPAT = 0x00000040,
 
-    PPC_FEATURE_TRUE_LE = 0x00000002,
-    PPC_FEATURE_PPC_LE = 0x00000001,
+    QEMU_PPC_FEATURE_TRUE_LE = 0x00000002,
+    QEMU_PPC_FEATURE_PPC_LE = 0x00000001,
 };
 
 #define ELF_HWCAP get_elf_hwcap()
@@ -464,14 +471,14 @@ static uint32_t get_elf_hwcap(void)
        Altivec/FP/SPE support.  Anything else is just a bonus.  */
 #define GET_FEATURE(flag, feature)              \
     do {if (e->insns_flags & flag) features |= feature; } while(0)
-    GET_FEATURE(PPC_64B, PPC_FEATURE_64);
-    GET_FEATURE(PPC_FLOAT, PPC_FEATURE_HAS_FPU);
-    GET_FEATURE(PPC_ALTIVEC, PPC_FEATURE_HAS_ALTIVEC);
-    GET_FEATURE(PPC_SPE, PPC_FEATURE_HAS_SPE);
-    GET_FEATURE(PPC_SPE_SINGLE, PPC_FEATURE_HAS_EFP_SINGLE);
-    GET_FEATURE(PPC_SPE_DOUBLE, PPC_FEATURE_HAS_EFP_DOUBLE);
-    GET_FEATURE(PPC_BOOKE, PPC_FEATURE_BOOKE);
-    GET_FEATURE(PPC_405_MAC, PPC_FEATURE_HAS_4xxMAC);
+    GET_FEATURE(PPC_64B, QEMU_PPC_FEATURE_64);
+    GET_FEATURE(PPC_FLOAT, QEMU_PPC_FEATURE_HAS_FPU);
+    GET_FEATURE(PPC_ALTIVEC, QEMU_PPC_FEATURE_HAS_ALTIVEC);
+    GET_FEATURE(PPC_SPE, QEMU_PPC_FEATURE_HAS_SPE);
+    GET_FEATURE(PPC_SPE_SINGLE, QEMU_PPC_FEATURE_HAS_EFP_SINGLE);
+    GET_FEATURE(PPC_SPE_DOUBLE, QEMU_PPC_FEATURE_HAS_EFP_DOUBLE);
+    GET_FEATURE(PPC_BOOKE, QEMU_PPC_FEATURE_BOOKE);
+    GET_FEATURE(PPC_405_MAC, QEMU_PPC_FEATURE_HAS_4xxMAC);
 #undef GET_FEATURE
 
     return features;
@@ -798,9 +805,9 @@ static int elf_core_dump(int, const CPUState *);
 #ifdef BSWAP_NEEDED
 static void bswap_note(struct elf_note *en)
 {
-    bswaptls(&en->n_namesz);
-    bswaptls(&en->n_descsz);
-    bswaptls(&en->n_type);
+    bswap32s(&en->n_namesz);
+    bswap32s(&en->n_descsz);
+    bswap32s(&en->n_type);
 }
 #endif /* BSWAP_NEEDED */
 
@@ -1315,10 +1322,10 @@ static void load_symbols(struct elfhdr *hdr, int fd)
     s->disas_num_syms = nsyms;
 #if ELF_CLASS == ELFCLASS32
     s->disas_symtab.elf32 = syms;
-    s->lookup_symbol = lookup_symbolxx;
+    s->lookup_symbol = (lookup_symbol_t)lookup_symbolxx;
 #else
     s->disas_symtab.elf64 = syms;
-    s->lookup_symbol = lookup_symbolxx;
+    s->lookup_symbol = (lookup_symbol_t)lookup_symbolxx;
 #endif
     s->next = syminfos;
     syminfos = s;
@@ -1454,7 +1461,7 @@ int load_elf_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
 	    }
 
 #if 0
-	    printf("Using ELF interpreter %s\n", elf_interpreter);
+	    printf("Using ELF interpreter %s\n", path(elf_interpreter));
 #endif
 	    if (retval >= 0) {
 		retval = open(path(elf_interpreter), O_RDONLY);
@@ -1476,7 +1483,7 @@ int load_elf_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
 	    }
 	    if (retval >= 0) {
 		interp_ex = *((struct exec *) bprm->buf); /* aout exec-header */
-		interp_elf_ex=*((struct elfhdr *) bprm->buf); /* elf exec-header */
+		interp_elf_ex = *((struct elfhdr *) bprm->buf); /* elf exec-header */
 	    }
 	    if (retval < 0) {
 		perror("load_elf_binary3");
@@ -1544,6 +1551,29 @@ int load_elf_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
     info->start_mmap = (abi_ulong)ELF_START_MMAP;
     info->mmap = 0;
     elf_entry = (abi_ulong) elf_ex.e_entry;
+
+#if defined(CONFIG_USE_GUEST_BASE)
+    /*
+     * In case where user has not explicitly set the guest_base, we
+     * probe here that should we set it automatically.
+     */
+    if (!have_guest_base) {
+        /*
+         * Go through ELF program header table and find out whether
+	 * any of the segments drop below our current mmap_min_addr and
+         * in that case set guest_base to corresponding address.
+         */
+        for (i = 0, elf_ppnt = elf_phdata; i < elf_ex.e_phnum;
+            i++, elf_ppnt++) {
+            if (elf_ppnt->p_type != PT_LOAD)
+                continue;
+            if (HOST_PAGE_ALIGN(elf_ppnt->p_vaddr) < mmap_min_addr) {
+                guest_base = HOST_PAGE_ALIGN(mmap_min_addr);
+                break;
+            }
+        }
+    }
+#endif /* CONFIG_USE_GUEST_BASE */
 
     /* Do this so that we can load the interpreter, if need be.  We will
        change some of these later */
@@ -1821,7 +1851,7 @@ struct target_elf_prpsinfo {
 
 /* Here is the structure in which status of each thread is captured. */
 struct elf_thread_status {
-    TAILQ_ENTRY(elf_thread_status)  ets_link;
+    QTAILQ_ENTRY(elf_thread_status)  ets_link;
     struct target_elf_prstatus prstatus;   /* NT_PRSTATUS */
 #if 0
     elf_fpregset_t fpu;             /* NT_PRFPREG */
@@ -1837,7 +1867,7 @@ struct elf_note_info {
     struct target_elf_prstatus *prstatus;  /* NT_PRSTATUS */
     struct target_elf_prpsinfo *psinfo;    /* NT_PRPSINFO */
 
-    TAILQ_HEAD(thread_list_head, elf_thread_status) thread_list;
+    QTAILQ_HEAD(thread_list_head, elf_thread_status) thread_list;
 #if 0
     /*
      * Current version of ELF coredump doesn't support
@@ -1855,11 +1885,11 @@ struct vm_area_struct {
     abi_ulong   vma_start;  /* start vaddr of memory region */
     abi_ulong   vma_end;    /* end vaddr of memory region */
     abi_ulong   vma_flags;  /* protection etc. flags for the region */
-    TAILQ_ENTRY(vm_area_struct) vma_link;
+    QTAILQ_ENTRY(vm_area_struct) vma_link;
 };
 
 struct mm_struct {
-    TAILQ_HEAD(, vm_area_struct) mm_mmap;
+    QTAILQ_HEAD(, vm_area_struct) mm_mmap;
     int mm_count;           /* number of mappings */
 };
 
@@ -1939,7 +1969,7 @@ static struct mm_struct *vma_init(void)
         return (NULL);
 
     mm->mm_count = 0;
-    TAILQ_INIT(&mm->mm_mmap);
+    QTAILQ_INIT(&mm->mm_mmap);
 
     return (mm);
 }
@@ -1949,7 +1979,7 @@ static void vma_delete(struct mm_struct *mm)
     struct vm_area_struct *vma;
 
     while ((vma = vma_first(mm)) != NULL) {
-        TAILQ_REMOVE(&mm->mm_mmap, vma, vma_link);
+        QTAILQ_REMOVE(&mm->mm_mmap, vma, vma_link);
         qemu_free(vma);
     }
     qemu_free(mm);
@@ -1967,7 +1997,7 @@ static int vma_add_mapping(struct mm_struct *mm, abi_ulong start,
     vma->vma_end = end;
     vma->vma_flags = flags;
 
-    TAILQ_INSERT_TAIL(&mm->mm_mmap, vma, vma_link);
+    QTAILQ_INSERT_TAIL(&mm->mm_mmap, vma, vma_link);
     mm->mm_count++;
 
     return (0);
@@ -1975,12 +2005,12 @@ static int vma_add_mapping(struct mm_struct *mm, abi_ulong start,
 
 static struct vm_area_struct *vma_first(const struct mm_struct *mm)
 {
-    return (TAILQ_FIRST(&mm->mm_mmap));
+    return (QTAILQ_FIRST(&mm->mm_mmap));
 }
 
 static struct vm_area_struct *vma_next(struct vm_area_struct *vma)
 {
-    return (TAILQ_NEXT(vma, vma_link));
+    return (QTAILQ_NEXT(vma, vma_link));
 }
 
 static int vma_get_mapping_count(const struct mm_struct *mm)
@@ -2305,7 +2335,7 @@ static void fill_thread_info(struct elf_note_info *info, const CPUState *env)
     fill_note(&ets->notes[0], "CORE", NT_PRSTATUS, sizeof (ets->prstatus),
         &ets->prstatus);
 
-    TAILQ_INSERT_TAIL(&info->thread_list, ets, ets_link);
+    QTAILQ_INSERT_TAIL(&info->thread_list, ets, ets_link);
 
     info->notes_size += note_size(&ets->notes[0]);
 }
@@ -2320,7 +2350,7 @@ static int fill_note_info(struct elf_note_info *info,
 
     (void) memset(info, 0, sizeof (*info));
 
-    TAILQ_INIT(&info->thread_list);
+    QTAILQ_INIT(&info->thread_list);
 
     info->notes = qemu_mallocz(NUMNOTES * sizeof (struct memelfnote));
     if (info->notes == NULL)
@@ -2366,9 +2396,9 @@ static void free_note_info(struct elf_note_info *info)
 {
     struct elf_thread_status *ets;
 
-    while (!TAILQ_EMPTY(&info->thread_list)) {
-        ets = TAILQ_FIRST(&info->thread_list);
-        TAILQ_REMOVE(&info->thread_list, ets, ets_link);
+    while (!QTAILQ_EMPTY(&info->thread_list)) {
+        ets = QTAILQ_FIRST(&info->thread_list);
+        QTAILQ_REMOVE(&info->thread_list, ets, ets_link);
         qemu_free(ets);
     }
 

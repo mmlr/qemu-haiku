@@ -28,6 +28,8 @@
 #include "boards.h"
 #include "sysemu.h"
 #include "etraxfs.h"
+#include "loader.h"
+#include "elf.h"
 
 #define D(x)
 #define DNAND(x)
@@ -69,13 +71,13 @@ nand_writel (void *opaque, target_phys_addr_t addr, uint32_t value)
     s->rdy = rdy;
 }
 
-static CPUReadMemoryFunc *nand_read[] = {
+static CPUReadMemoryFunc * const nand_read[] = {
     &nand_readl,
     &nand_readl,
     &nand_readl,
 };
 
-static CPUWriteMemoryFunc *nand_write[] = {
+static CPUWriteMemoryFunc * const nand_write[] = {
     &nand_writel,
     &nand_writel,
     &nand_writel,
@@ -226,12 +228,12 @@ static void gpio_writel (void *opaque, target_phys_addr_t addr, uint32_t value)
     }
 }
 
-static CPUReadMemoryFunc *gpio_read[] = {
+static CPUReadMemoryFunc * const gpio_read[] = {
     NULL, NULL,
     &gpio_readl,
 };
 
-static CPUWriteMemoryFunc *gpio_write[] = {
+static CPUWriteMemoryFunc * const gpio_write[] = {
     NULL, NULL,
     &gpio_writel,
 };
@@ -298,7 +300,7 @@ void axisdev88_init (ram_addr_t ram_size,
     dev = qdev_create(NULL, "etraxfs,pic");
     /* FIXME: Is there a proper way to signal vectors to the CPU core?  */
     qdev_prop_set_ptr(dev, "interrupt_vector", &env->interrupt_vector);
-    qdev_init(dev);
+    qdev_init_nofail(dev);
     s = sysbus_from_qdev(dev);
     sysbus_mmio_map(s, 0, 0x3001c000);
     sysbus_connect_irq(s, 0, cpu_irq[0]);
@@ -344,7 +346,7 @@ void axisdev88_init (ram_addr_t ram_size,
         /* Boots a kernel elf binary, os/linux-2.6/vmlinux from the axis 
            devboard SDK.  */
         kernel_size = load_elf(kernel_filename, -0x80000000LL,
-                               &entry, NULL, &high);
+                               &entry, NULL, &high, 0, ELF_MACHINE, 0);
         bootstrap_pc = entry;
         if (kernel_size < 0) {
             /* Takes a kimage from the axis devboard SDK.  */
@@ -363,7 +365,7 @@ void axisdev88_init (ram_addr_t ram_size,
             /* Let the kernel know we are modifying the cmdline.  */
             env->regs[10] = 0x87109563;
             env->regs[11] = 0x40000000;
-            pstrcpy_targphys(env->regs[11], 256, kernel_cmdline);
+            pstrcpy_targphys("cmdline", env->regs[11], 256, kernel_cmdline);
         }
     }
     env->pc = bootstrap_pc;

@@ -110,13 +110,13 @@ static void syborg_pointer_write(void *opaque, target_phys_addr_t offset,
     syborg_pointer_update(s);
 }
 
-static CPUReadMemoryFunc *syborg_pointer_readfn[] = {
+static CPUReadMemoryFunc * const syborg_pointer_readfn[] = {
    syborg_pointer_read,
    syborg_pointer_read,
    syborg_pointer_read
 };
 
-static CPUWriteMemoryFunc *syborg_pointer_writefn[] = {
+static CPUWriteMemoryFunc * const syborg_pointer_writefn[] = {
    syborg_pointer_write,
    syborg_pointer_write,
    syborg_pointer_write
@@ -199,7 +199,7 @@ static int syborg_pointer_load(QEMUFile *f, void *opaque, int version_id)
     return 0;
 }
 
-static void syborg_pointer_init(SysBusDevice *dev)
+static int syborg_pointer_init(SysBusDevice *dev)
 {
     SyborgPointerState *s = FROM_SYSBUS(SyborgPointerState, dev);
     int iomemtype;
@@ -220,6 +220,7 @@ static void syborg_pointer_init(SysBusDevice *dev)
 
     register_savevm("syborg_pointer", -1, 1,
                     syborg_pointer_save, syborg_pointer_load, s);
+    return 0;
 }
 
 static SysBusDeviceInfo syborg_pointer_info = {
@@ -227,18 +228,9 @@ static SysBusDeviceInfo syborg_pointer_info = {
     .qdev.name  = "syborg,pointer",
     .qdev.size  = sizeof(SyborgPointerState),
     .qdev.props = (Property[]) {
-        {
-            .name   = "fifo-size",
-            .info   = &qdev_prop_uint32,
-            .offset = offsetof(SyborgPointerState, fifo_size),
-            .defval = (uint32_t[]) { 16 },
-        },{
-            .name   = "absolute",
-            .info   = &qdev_prop_uint32,
-            .offset = offsetof(SyborgPointerState, absolute),
-            .defval = (uint32_t[]) { 1 },
-        },
-        {/* end of list */}
+        DEFINE_PROP_UINT32("fifo-size", SyborgPointerState, fifo_size, 16),
+        DEFINE_PROP_UINT32("absolute",  SyborgPointerState, absolute,   1),
+        DEFINE_PROP_END_OF_LIST(),
     }
 };
 

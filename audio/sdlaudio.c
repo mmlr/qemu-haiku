@@ -41,14 +41,14 @@
 typedef struct SDLVoiceOut {
     HWVoiceOut hw;
     int live;
-    int rpos;
     int decr;
+    int pending;
 } SDLVoiceOut;
 
 static struct {
     int nb_samples;
 } conf = {
-    1024
+    .nb_samples = 1024
 };
 
 static struct SDLAudioState {
@@ -225,6 +225,10 @@ static void sdl_callback (void *opaque, Uint8 *buf, int len)
     HWVoiceOut *hw = &sdl->hw;
     int samples = len >> hw->info.shift;
 
+    if (sdl_lock (s, "sdl_callback")) {
+        return;
+    }
+
     if (s->exit) {
         return;
     }
@@ -232,49 +236,34 @@ static void sdl_callback (void *opaque, Uint8 *buf, int len)
     while (samples) {
         int to_mix, decr;
 
-        /* dolog ("in callback samples=%d\n", samples); */
-        sdl_wait (s, "sdl_callback");
-        if (s->exit) {
-            return;
+        while (!sdl->pending) {
+            if (sdl_unlock (s, "sdl_callback")) {
+                return;
+            }
+
+            sdl_wait (s, "sdl_callback");
+            if (s->exit) {
+                return;
+            }
+
+            if (sdl_lock (s, "sdl_callback")) {
+                return;
+            }
+            sdl->pending += sdl->live;
+            sdl->live = 0;
         }
 
-        if (sdl_lock (s, "sdl_callback")) {
-            return;
-        }
-
-        if (audio_bug (AUDIO_FUNC, sdl->live < 0 || sdl->live > hw->samples)) {
-            dolog ("sdl->live=%d hw->samples=%d\n",
-                   sdl->live, hw->samples);
-            return;
-        }
-
-        if (!sdl->live) {
-            goto again;
-        }
-
-        /* dolog ("in callback live=%d\n", live); */
-        to_mix = audio_MIN (samples, sdl->live);
-        decr = to_mix;
-        while (to_mix) {
-            int chunk = audio_MIN (to_mix, hw->samples - hw->rpos);
-            struct st_sample *src = hw->mix_buf + hw->rpos;
-
-            /* dolog ("in callback to_mix %d, chunk %d\n", to_mix, chunk); */
-            hw->clip (buf, src, chunk);
-            sdl->rpos = (sdl->rpos + chunk) % hw->samples;
-            to_mix -= chunk;
-            buf += chunk << hw->info.shift;
-        }
+        to_mix = audio_MIN (samples, sdl->pending);
+        decr = audio_pcm_hw_clip_out (hw, buf, to_mix, 0);
+        buf += decr << hw->info.shift;
         samples -= decr;
-        sdl->live -= decr;
         sdl->decr += decr;
-
-    again:
-        if (sdl_unlock (s, "sdl_callback")) {
-            return;
-        }
+        sdl->pending -= decr;
     }
-    /* dolog ("done len=%d\n", len); */
+
+    if (sdl_unlock (s, "sdl_callback")) {
+        return;
+    }
 }
 
 static int sdl_write_out (SWVoiceOut *sw, void *buf, int len)
@@ -282,36 +271,25 @@ static int sdl_write_out (SWVoiceOut *sw, void *buf, int len)
     return audio_pcm_sw_write (sw, buf, len);
 }
 
-static int sdl_run_out (HWVoiceOut *hw)
+static int sdl_run_out (HWVoiceOut *hw, int live)
 {
-    int decr, live;
+    int decr;
     SDLVoiceOut *sdl = (SDLVoiceOut *) hw;
     SDLAudioState *s = &glob_sdl;
 
-    if (sdl_lock (s, "sdl_callback")) {
+    if (sdl_lock (s, "sdl_run_out")) {
         return 0;
     }
 
-    live = audio_pcm_hw_get_live_out (hw);
-
-    if (sdl->decr > live) {
-        ldebug ("sdl->decr %d live %d sdl->live %d\n",
-                sdl->decr,
-                live,
-                sdl->live);
-    }
-
-    decr = audio_MIN (sdl->decr, live);
-    sdl->decr -= decr;
-
-    sdl->live = live - decr;
-    hw->rpos = sdl->rpos;
+    sdl->live = live;
+    decr = sdl->decr;
+    sdl->decr = 0;
 
     if (sdl->live > 0) {
-        sdl_unlock_and_post (s, "sdl_callback");
+        sdl_unlock_and_post (s, "sdl_run_out");
     }
     else {
-        sdl_unlock (s, "sdl_callback");
+        sdl_unlock (s, "sdl_run_out");
     }
     return decr;
 }
@@ -420,35 +398,33 @@ static void sdl_audio_fini (void *opaque)
 }
 
 static struct audio_option sdl_options[] = {
-    {"SAMPLES", AUD_OPT_INT, &conf.nb_samples,
-     "Size of SDL buffer in samples", NULL, 0},
-    {NULL, 0, NULL, NULL, NULL, 0}
+    {
+        .name  = "SAMPLES",
+        .tag   = AUD_OPT_INT,
+        .valp  = &conf.nb_samples,
+        .descr = "Size of SDL buffer in samples"
+    },
+    { /* End of list */ }
 };
 
 static struct audio_pcm_ops sdl_pcm_ops = {
-    sdl_init_out,
-    sdl_fini_out,
-    sdl_run_out,
-    sdl_write_out,
-    sdl_ctl_out,
-
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL
+    .init_out = sdl_init_out,
+    .fini_out = sdl_fini_out,
+    .run_out  = sdl_run_out,
+    .write    = sdl_write_out,
+    .ctl_out  = sdl_ctl_out,
 };
 
 struct audio_driver sdl_audio_driver = {
-    INIT_FIELD (name           = ) "sdl",
-    INIT_FIELD (descr          = ) "SDL http://www.libsdl.org",
-    INIT_FIELD (options        = ) sdl_options,
-    INIT_FIELD (init           = ) sdl_audio_init,
-    INIT_FIELD (fini           = ) sdl_audio_fini,
-    INIT_FIELD (pcm_ops        = ) &sdl_pcm_ops,
-    INIT_FIELD (can_be_default = ) 1,
-    INIT_FIELD (max_voices_out = ) 1,
-    INIT_FIELD (max_voices_in  = ) 0,
-    INIT_FIELD (voice_size_out = ) sizeof (SDLVoiceOut),
-    INIT_FIELD (voice_size_in  = ) 0
+    .name           = "sdl",
+    .descr          = "SDL http://www.libsdl.org",
+    .options        = sdl_options,
+    .init           = sdl_audio_init,
+    .fini           = sdl_audio_fini,
+    .pcm_ops        = &sdl_pcm_ops,
+    .can_be_default = 1,
+    .max_voices_out = 1,
+    .max_voices_in  = 0,
+    .voice_size_out = sizeof (SDLVoiceOut),
+    .voice_size_in  = 0
 };

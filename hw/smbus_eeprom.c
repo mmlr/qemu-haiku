@@ -30,7 +30,7 @@
 
 typedef struct SMBusEEPROMDevice {
     SMBusDevice smbusdev;
-    uint8_t *data;
+    void *data;
     uint8_t offset;
 } SMBusEEPROMDevice;
 
@@ -54,7 +54,8 @@ static void eeprom_send_byte(SMBusDevice *dev, uint8_t val)
 static uint8_t eeprom_receive_byte(SMBusDevice *dev)
 {
     SMBusEEPROMDevice *eeprom = (SMBusEEPROMDevice *) dev;
-    uint8_t val = eeprom->data[eeprom->offset++];
+    uint8_t *data = eeprom->data;
+    uint8_t val = data[eeprom->offset++];
 #ifdef DEBUG
     printf("eeprom_receive_byte: addr=0x%02x val=0x%02x\n",
            dev->i2c.address, val);
@@ -95,23 +96,20 @@ static uint8_t eeprom_read_data(SMBusDevice *dev, uint8_t cmd, int n)
     return eeprom_receive_byte(dev);
 }
 
-static void smbus_eeprom_init(SMBusDevice *dev)
+static int smbus_eeprom_init(SMBusDevice *dev)
 {
     SMBusEEPROMDevice *eeprom = (SMBusEEPROMDevice *)dev;
 
     eeprom->offset = 0;
+    return 0;
 }
 
 static SMBusDeviceInfo smbus_eeprom_info = {
     .i2c.qdev.name = "smbus-eeprom",
     .i2c.qdev.size = sizeof(SMBusEEPROMDevice),
     .i2c.qdev.props = (Property[]) {
-        {
-            .name   = "data",
-            .info   = &qdev_prop_ptr,
-            .offset = offsetof(SMBusEEPROMDevice, data),
-        },
-        {/* end of list */}
+        DEFINE_PROP_PTR("data", SMBusEEPROMDevice, data),
+        DEFINE_PROP_END_OF_LIST(),
     },
     .init = smbus_eeprom_init,
     .quick_cmd = eeprom_quick_cmd,

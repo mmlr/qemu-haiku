@@ -22,7 +22,6 @@
  * THE SOFTWARE.
  */
 
-#include "sun4m.h"
 #include "sysbus.h"
 
 //#define DEBUG_ECC
@@ -38,6 +37,10 @@
  * MCC (version 0, implementation 0) SS-600MP
  * EMC (version 0, implementation 1) SS-10
  * SMC (version 0, implementation 2) SS-10SX and SS-20
+ *
+ * Chipset docs:
+ * "Sun-4M System Architecture (revision 2.0) by Chuck Narad", 950-1373-01,
+ * http://mediacast.sun.com/users/Barton808/media/Sun4M_SystemArchitecture_edited2.pdf
  */
 
 #define ECC_MCC        0x00000000
@@ -221,13 +224,13 @@ static uint32_t ecc_mem_readl(void *opaque, target_phys_addr_t addr)
     return ret;
 }
 
-static CPUReadMemoryFunc *ecc_mem_read[3] = {
+static CPUReadMemoryFunc * const ecc_mem_read[3] = {
     NULL,
     NULL,
     ecc_mem_readl,
 };
 
-static CPUWriteMemoryFunc *ecc_mem_write[3] = {
+static CPUWriteMemoryFunc * const ecc_mem_write[3] = {
     NULL,
     NULL,
     ecc_mem_writel,
@@ -251,54 +254,34 @@ static uint32_t ecc_diag_mem_readb(void *opaque, target_phys_addr_t addr)
     return ret;
 }
 
-static CPUReadMemoryFunc *ecc_diag_mem_read[3] = {
+static CPUReadMemoryFunc * const ecc_diag_mem_read[3] = {
     ecc_diag_mem_readb,
     NULL,
     NULL,
 };
 
-static CPUWriteMemoryFunc *ecc_diag_mem_write[3] = {
+static CPUWriteMemoryFunc * const ecc_diag_mem_write[3] = {
     ecc_diag_mem_writeb,
     NULL,
     NULL,
 };
 
-static int ecc_load(QEMUFile *f, void *opaque, int version_id)
+static const VMStateDescription vmstate_ecc = {
+    .name ="ECC",
+    .version_id = 3,
+    .minimum_version_id = 3,
+    .minimum_version_id_old = 3,
+    .fields      = (VMStateField []) {
+        VMSTATE_UINT32_ARRAY(regs, ECCState, ECC_NREGS),
+        VMSTATE_BUFFER(diag, ECCState),
+        VMSTATE_UINT32(version, ECCState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static void ecc_reset(DeviceState *d)
 {
-    ECCState *s = opaque;
-    int i;
-
-    if (version_id != 3)
-        return -EINVAL;
-
-    for (i = 0; i < ECC_NREGS; i++)
-        qemu_get_be32s(f, &s->regs[i]);
-
-    for (i = 0; i < ECC_DIAG_SIZE; i++)
-        qemu_get_8s(f, &s->diag[i]);
-
-    qemu_get_be32s(f, &s->version);
-
-    return 0;
-}
-
-static void ecc_save(QEMUFile *f, void *opaque)
-{
-    ECCState *s = opaque;
-    int i;
-
-    for (i = 0; i < ECC_NREGS; i++)
-        qemu_put_be32s(f, &s->regs[i]);
-
-    for (i = 0; i < ECC_DIAG_SIZE; i++)
-        qemu_put_8s(f, &s->diag[i]);
-
-    qemu_put_be32s(f, &s->version);
-}
-
-static void ecc_reset(void *opaque)
-{
-    ECCState *s = opaque;
+    ECCState *s = container_of(d, ECCState, busdev.qdev);
 
     if (s->version == ECC_MCC)
         s->regs[ECC_MER] &= ECC_MER_REU;
@@ -315,7 +298,7 @@ static void ecc_reset(void *opaque)
     s->regs[ECC_ECR1] = 0;
 }
 
-static void ecc_init1(SysBusDevice *dev)
+static int ecc_init1(SysBusDevice *dev)
 {
     int ecc_io_memory;
     ECCState *s = FROM_SYSBUS(ECCState, dev);
@@ -330,39 +313,19 @@ static void ecc_init1(SysBusDevice *dev)
                                                ecc_diag_mem_write, s);
         sysbus_init_mmio(dev, ECC_DIAG_SIZE, ecc_io_memory);
     }
-    register_savevm("ECC", -1, 3, ecc_save, ecc_load, s);
-    qemu_register_reset(ecc_reset, s);
-    ecc_reset(s);
-}
 
-void ecc_init(target_phys_addr_t base, qemu_irq irq, uint32_t version)
-{
-    DeviceState *dev;
-    SysBusDevice *s;
-
-    dev = qdev_create(NULL, "eccmemctl");
-    qdev_prop_set_uint32(dev, "version", version);
-    qdev_init(dev);
-    s = sysbus_from_qdev(dev);
-    sysbus_connect_irq(s, 0, irq);
-    sysbus_mmio_map(s, 0, base);
-    if (version == ECC_MCC) { // SS-600MP only
-        sysbus_mmio_map(s, 1, base + 0x1000);
-    }
+    return 0;
 }
 
 static SysBusDeviceInfo ecc_info = {
     .init = ecc_init1,
     .qdev.name  = "eccmemctl",
     .qdev.size  = sizeof(ECCState),
+    .qdev.vmsd  = &vmstate_ecc,
+    .qdev.reset = ecc_reset,
     .qdev.props = (Property[]) {
-        {
-            .name   = "version",
-            .info   = &qdev_prop_hex32,
-            .offset = offsetof(ECCState, version),
-            .defval = (uint32_t[]) { -1 },
-        },
-        {/* end of list */}
+        DEFINE_PROP_HEX32("version", ECCState, version, -1),
+        DEFINE_PROP_END_OF_LIST(),
     }
 };
 

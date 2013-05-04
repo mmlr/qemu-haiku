@@ -185,7 +185,7 @@ static DisplaySurface* sdl_create_displaysurface(int width, int height)
             surface->linesize = width * host_format.BytesPerPixel;
             surface->pf = sdl_to_qemu_pixelformat(&host_format);
         }
-#ifdef WORDS_BIGENDIAN
+#ifdef HOST_WORDS_BIGENDIAN
         surface->flags = QEMU_ALLOCATED_FLAG | QEMU_BIG_ENDIAN_FLAG;
 #else
         surface->flags = QEMU_ALLOCATED_FLAG;
@@ -204,7 +204,7 @@ static DisplaySurface* sdl_create_displaysurface(int width, int height)
     surface->linesize = real_screen->pitch;
     surface->data = real_screen->pixels;
 
-#ifdef WORDS_BIGENDIAN
+#ifdef HOST_WORDS_BIGENDIAN
     surface->flags = QEMU_REALPIXELS_FLAG | QEMU_BIG_ENDIAN_FLAG;
 #else
     surface->flags = QEMU_REALPIXELS_FLAG;
@@ -407,24 +407,30 @@ static void sdl_process_key(SDL_KeyboardEvent *ev)
 
 static void sdl_update_caption(void)
 {
-    char buf[1024];
+    char win_title[1024];
+    char icon_title[1024];
     const char *status = "";
 
     if (!vm_running)
         status = " [Stopped]";
     else if (gui_grab) {
-        if (!alt_grab)
-            status = " - Press Ctrl-Alt to exit grab";
-        else
+        if (alt_grab)
             status = " - Press Ctrl-Alt-Shift to exit grab";
+        else if (ctrl_grab)
+            status = " - Press Right-Ctrl to exit grab";
+        else
+            status = " - Press Ctrl-Alt to exit grab";
     }
 
-    if (qemu_name)
-        snprintf(buf, sizeof(buf), "QEMU (%s)%s", qemu_name, status);
-    else
-        snprintf(buf, sizeof(buf), "QEMU%s", status);
+    if (qemu_name) {
+        snprintf(win_title, sizeof(win_title), "QEMU (%s)%s", qemu_name, status);
+        snprintf(icon_title, sizeof(icon_title), "QEMU (%s)", qemu_name);
+    } else {
+        snprintf(win_title, sizeof(win_title), "QEMU%s", status);
+        snprintf(icon_title, sizeof(icon_title), "QEMU");
+    }
 
-    SDL_WM_SetCaption(buf, "QEMU");
+    SDL_WM_SetCaption(win_title, icon_title);
 }
 
 static void sdl_hide_cursor(void)
@@ -519,6 +525,7 @@ static void sdl_send_mouse_event(int dx, int dy, int dz, int x, int y, int state
 static void toggle_full_screen(DisplayState *ds)
 {
     gui_fullscreen = !gui_fullscreen;
+    do_sdl_resize(real_screen->w, real_screen->h, real_screen->format->BitsPerPixel);
     if (gui_fullscreen) {
         scaling_active = 0;
         gui_saved_grab = gui_grab;
@@ -553,12 +560,14 @@ static void sdl_refresh(DisplayState *ds)
         case SDL_KEYDOWN:
         case SDL_KEYUP:
             if (ev->type == SDL_KEYDOWN) {
-                if (!alt_grab) {
-                    mod_state = (SDL_GetModState() & gui_grab_code) ==
-                                gui_grab_code;
-                } else {
+                if (alt_grab) {
                     mod_state = (SDL_GetModState() & (gui_grab_code | KMOD_LSHIFT)) ==
                                 (gui_grab_code | KMOD_LSHIFT);
+                } else if (ctrl_grab) {
+                    mod_state = (SDL_GetModState() & KMOD_RCTRL) == KMOD_RCTRL;
+                } else {
+                    mod_state = (SDL_GetModState() & gui_grab_code) ==
+                                gui_grab_code;
                 }
                 gui_key_modifier_pressed = mod_state;
                 if (gui_key_modifier_pressed) {
@@ -568,6 +577,12 @@ static void sdl_refresh(DisplayState *ds)
                     case 0x21: /* 'f' key on US keyboard */
                         toggle_full_screen(ds);
                         gui_keysym = 1;
+                        break;
+                    case 0x16: /* 'u' key on US keyboard */
+                        scaling_active = 0;
+                        sdl_resize(ds);
+                        vga_hw_invalidate();
+                        vga_hw_update();
                         break;
                     case 0x02 ... 0x0a: /* '1' to '9' keys */
                         /* Reset the modifiers sent to the current console */

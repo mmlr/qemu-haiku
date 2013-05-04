@@ -85,37 +85,37 @@ static void pxa2xx_pcmcia_io_write(void *opaque,
     }
 }
 
-static CPUReadMemoryFunc *pxa2xx_pcmcia_common_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_pcmcia_common_readfn[] = {
     pxa2xx_pcmcia_common_read,
     pxa2xx_pcmcia_common_read,
     pxa2xx_pcmcia_common_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_pcmcia_common_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_pcmcia_common_writefn[] = {
     pxa2xx_pcmcia_common_write,
     pxa2xx_pcmcia_common_write,
     pxa2xx_pcmcia_common_write,
 };
 
-static CPUReadMemoryFunc *pxa2xx_pcmcia_attr_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_pcmcia_attr_readfn[] = {
     pxa2xx_pcmcia_attr_read,
     pxa2xx_pcmcia_attr_read,
     pxa2xx_pcmcia_attr_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_pcmcia_attr_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_pcmcia_attr_writefn[] = {
     pxa2xx_pcmcia_attr_write,
     pxa2xx_pcmcia_attr_write,
     pxa2xx_pcmcia_attr_write,
 };
 
-static CPUReadMemoryFunc *pxa2xx_pcmcia_io_readfn[] = {
+static CPUReadMemoryFunc * const pxa2xx_pcmcia_io_readfn[] = {
     pxa2xx_pcmcia_io_read,
     pxa2xx_pcmcia_io_read,
     pxa2xx_pcmcia_io_read,
 };
 
-static CPUWriteMemoryFunc *pxa2xx_pcmcia_io_writefn[] = {
+static CPUWriteMemoryFunc * const pxa2xx_pcmcia_io_writefn[] = {
     pxa2xx_pcmcia_io_write,
     pxa2xx_pcmcia_io_write,
     pxa2xx_pcmcia_io_write,
@@ -193,8 +193,8 @@ int pxa2xx_pcmcia_dettach(void *opaque)
         return -ENOENT;
 
     s->card->detach(s->card->state);
-    s->card->slot = 0;
-    s->card = 0;
+    s->card->slot = NULL;
+    s->card = NULL;
 
     s->slot.attached = 0;
 

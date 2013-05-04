@@ -14,6 +14,7 @@
 #include "net.h"
 #include "sysemu.h"
 #include "pci.h"
+#include "usb-ohci.h"
 #include "boards.h"
 
 /* Primary interrupt controller.  */
@@ -117,19 +118,19 @@ static void vpb_sic_write(void *opaque, target_phys_addr_t offset,
     vpb_sic_update(s);
 }
 
-static CPUReadMemoryFunc *vpb_sic_readfn[] = {
+static CPUReadMemoryFunc * const vpb_sic_readfn[] = {
    vpb_sic_read,
    vpb_sic_read,
    vpb_sic_read
 };
 
-static CPUWriteMemoryFunc *vpb_sic_writefn[] = {
+static CPUWriteMemoryFunc * const vpb_sic_writefn[] = {
    vpb_sic_write,
    vpb_sic_write,
    vpb_sic_write
 };
 
-static void vpb_sic_init(SysBusDevice *dev)
+static int vpb_sic_init(SysBusDevice *dev)
 {
     vpb_sic_state *s = FROM_SYSBUS(vpb_sic_state, dev);
     int iomemtype;
@@ -144,6 +145,7 @@ static void vpb_sic_init(SysBusDevice *dev)
                                        vpb_sic_writefn, s);
     sysbus_init_mmio(dev, 0x1000, iomemtype);
     /* ??? Save/restore.  */
+    return 0;
 }
 
 /* Board init.  */
@@ -183,7 +185,7 @@ static void versatile_init(ram_addr_t ram_size,
     /* SDRAM at address zero.  */
     cpu_register_physical_memory(0, ram_size, ram_offset | IO_MEM_RAM);
 
-    arm_sysctl_init(0x10000000, 0x41007004);
+    arm_sysctl_init(0x10000000, 0x41007004, 0x02000000);
     cpu_pic = arm_pic_init_cpu(env);
     dev = sysbus_create_varargs("pl190", 0x10140000,
                                 cpu_pic[0], cpu_pic[1], NULL);
@@ -212,11 +214,11 @@ static void versatile_init(ram_addr_t ram_size,
             smc91c111_init(nd, 0x10010000, sic[25]);
             done_smc = 1;
         } else {
-            pci_nic_init(nd, "rtl8139", NULL);
+            pci_nic_init_nofail(nd, "rtl8139", NULL);
         }
     }
     if (usb_enabled) {
-        usb_ohci_init_pci(pci_bus, 3, -1);
+        usb_ohci_init_pci(pci_bus, -1);
     }
     n = drive_get_max_bus(IF_SCSI);
     while (n >= 0) {

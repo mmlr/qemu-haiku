@@ -331,7 +331,7 @@ static void tsc2102_audio_output_update(TSC210xState *s)
         s->codec.out.size = 0;
         AUD_set_active_out(s->dac_voice[0], 0);
         AUD_close_out(&s->card, s->dac_voice[0]);
-        s->dac_voice[0] = 0;
+        s->dac_voice[0] = NULL;
     }
     s->codec.cts = 0;
 
@@ -864,7 +864,7 @@ static void tsc210x_pin_update(TSC210xState *s)
     s->busy = 1;
     s->precision = s->nextprecision;
     s->function = s->nextfunction;
-    expires = qemu_get_clock(vm_clock) + (ticks_per_sec >> 10);
+    expires = qemu_get_clock(vm_clock) + (get_ticks_per_sec() >> 10);
     qemu_mod_timer(s->timer, expires);
 }
 

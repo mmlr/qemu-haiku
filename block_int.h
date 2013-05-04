@@ -37,6 +37,7 @@
 #define BLOCK_OPT_BACKING_FILE  "backing_file"
 #define BLOCK_OPT_BACKING_FMT   "backing_fmt"
 #define BLOCK_OPT_CLUSTER_SIZE  "cluster_size"
+#define BLOCK_OPT_PREALLOC      "preallocation"
 
 typedef struct AIOPool {
     void (*cancel)(BlockDriverAIOCB *acb);
@@ -68,6 +69,14 @@ struct BlockDriver {
     BlockDriverAIOCB *(*bdrv_aio_writev)(BlockDriverState *bs,
         int64_t sector_num, QEMUIOVector *qiov, int nb_sectors,
         BlockDriverCompletionFunc *cb, void *opaque);
+    BlockDriverAIOCB *(*bdrv_aio_flush)(BlockDriverState *bs,
+        BlockDriverCompletionFunc *cb, void *opaque);
+
+    int (*bdrv_aio_multiwrite)(BlockDriverState *bs, BlockRequest *reqs,
+        int num_reqs);
+    int (*bdrv_merge_requests)(BlockDriverState *bs, BlockRequest* a,
+        BlockRequest *b);
+
 
     const char *protocol_name;
     int (*bdrv_truncate)(BlockDriverState *bs, int64_t offset);
@@ -108,6 +117,9 @@ struct BlockDriver {
     /* Returns number of errors in image, -errno for internal errors */
     int (*bdrv_check)(BlockDriverState* bs);
 
+    /* Set if newly created images are not guaranteed to contain only zeros */
+    int no_zero_init;
+
     struct BlockDriver *next;
 };
 
@@ -115,6 +127,7 @@ struct BlockDriverState {
     int64_t total_sectors; /* if we are reading a disk image, give its
                               size in sectors */
     int read_only; /* if true, the media is read only */
+    int open_flags; /* flags used to open the file, re-used for re-open */
     int removable; /* if true, the media can be removed */
     int locked;    /* if true, the media cannot temporarily be ejected */
     int encrypted; /* if true, the media is encrypted */
@@ -151,11 +164,15 @@ struct BlockDriverState {
     /* the memory alignment required for the buffers handled by this driver */
     int buffer_alignment;
 
+    /* do we need to tell the quest if we have a volatile write cache? */
+    int enable_write_cache;
+
     /* NOTE: the following infos are only hints for real hardware
        drivers. They are not used by the block driver */
     int cyls, heads, secs, translation;
     int type;
     char device_name[32];
+    unsigned long *dirty_bitmap;
     BlockDriverState *next;
     void *private;
 };

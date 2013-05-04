@@ -366,13 +366,13 @@ static void omap_inth_write(void *opaque, target_phys_addr_t addr,
     OMAP_BAD_REG(addr);
 }
 
-static CPUReadMemoryFunc *omap_inth_readfn[] = {
+static CPUReadMemoryFunc * const omap_inth_readfn[] = {
     omap_badwidth_read32,
     omap_badwidth_read32,
     omap_inth_read,
 };
 
-static CPUWriteMemoryFunc *omap_inth_writefn[] = {
+static CPUWriteMemoryFunc * const omap_inth_writefn[] = {
     omap_inth_write,
     omap_inth_write,
     omap_inth_write,
@@ -436,7 +436,7 @@ static uint32_t omap2_inth_read(void *opaque, target_phys_addr_t addr)
     struct omap_intr_handler_s *s = (struct omap_intr_handler_s *) opaque;
     int offset = addr;
     int bank_no, line_no;
-    struct omap_intr_handler_bank_s *bank = 0;
+    struct omap_intr_handler_bank_s *bank = NULL;
 
     if ((offset & 0xf80) == 0x80) {
         bank_no = (offset & 0x60) >> 5;
@@ -514,7 +514,7 @@ static void omap2_inth_write(void *opaque, target_phys_addr_t addr,
     struct omap_intr_handler_s *s = (struct omap_intr_handler_s *) opaque;
     int offset = addr;
     int bank_no, line_no;
-    struct omap_intr_handler_bank_s *bank = 0;
+    struct omap_intr_handler_bank_s *bank = NULL;
 
     if ((offset & 0xf80) == 0x80) {
         bank_no = (offset & 0x60) >> 5;
@@ -612,13 +612,13 @@ static void omap2_inth_write(void *opaque, target_phys_addr_t addr,
     OMAP_BAD_REG(addr);
 }
 
-static CPUReadMemoryFunc *omap2_inth_readfn[] = {
+static CPUReadMemoryFunc * const omap2_inth_readfn[] = {
     omap_badwidth_read32,
     omap_badwidth_read32,
     omap2_inth_read,
 };
 
-static CPUWriteMemoryFunc *omap2_inth_writefn[] = {
+static CPUWriteMemoryFunc * const omap2_inth_writefn[] = {
     omap2_inth_write,
     omap2_inth_write,
     omap2_inth_write,
@@ -675,7 +675,7 @@ static inline uint32_t omap_timer_read(struct omap_mpu_timer_s *timer)
 
     if (timer->st && timer->enable && timer->rate)
         return timer->val - muldiv64(distance >> (timer->ptv + 1),
-                        timer->rate, ticks_per_sec);
+                                     timer->rate, get_ticks_per_sec());
     else
         return timer->val;
 }
@@ -693,7 +693,7 @@ static inline void omap_timer_update(struct omap_mpu_timer_s *timer)
     if (timer->enable && timer->st && timer->rate) {
         timer->val = timer->reset_val;	/* Should skip this on clk enable */
         expires = muldiv64((uint64_t) timer->val << (timer->ptv + 1),
-                        ticks_per_sec, timer->rate);
+                           get_ticks_per_sec(), timer->rate);
 
         /* If timer expiry would be sooner than in about 1 ms and
          * auto-reload isn't set, then fire immediately.  This is a hack
@@ -701,7 +701,7 @@ static inline void omap_timer_update(struct omap_mpu_timer_s *timer)
          * sets the interval to a very low value and polls the status bit
          * in a busy loop when it wants to sleep just a couple of CPU
          * ticks.  */
-        if (expires > (ticks_per_sec >> 10) || timer->ar)
+        if (expires > (get_ticks_per_sec() >> 10) || timer->ar)
             qemu_mod_timer(timer->timer, timer->time + expires);
         else
             qemu_bh_schedule(timer->tick);
@@ -795,13 +795,13 @@ static void omap_mpu_timer_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_mpu_timer_readfn[] = {
+static CPUReadMemoryFunc * const omap_mpu_timer_readfn[] = {
     omap_badwidth_read32,
     omap_badwidth_read32,
     omap_mpu_timer_read,
 };
 
-static CPUWriteMemoryFunc *omap_mpu_timer_writefn[] = {
+static CPUWriteMemoryFunc * const omap_mpu_timer_writefn[] = {
     omap_badwidth_write32,
     omap_badwidth_write32,
     omap_mpu_timer_write,
@@ -913,13 +913,13 @@ static void omap_wd_timer_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_wd_timer_readfn[] = {
+static CPUReadMemoryFunc * const omap_wd_timer_readfn[] = {
     omap_badwidth_read16,
     omap_wd_timer_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_wd_timer_writefn[] = {
+static CPUWriteMemoryFunc * const omap_wd_timer_writefn[] = {
     omap_badwidth_write16,
     omap_wd_timer_write,
     omap_badwidth_write16,
@@ -1021,13 +1021,13 @@ static void omap_os_timer_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_os_timer_readfn[] = {
+static CPUReadMemoryFunc * const omap_os_timer_readfn[] = {
     omap_badwidth_read32,
     omap_badwidth_read32,
     omap_os_timer_read,
 };
 
-static CPUWriteMemoryFunc *omap_os_timer_writefn[] = {
+static CPUWriteMemoryFunc * const omap_os_timer_writefn[] = {
     omap_badwidth_write32,
     omap_badwidth_write32,
     omap_os_timer_write,
@@ -1158,14 +1158,14 @@ static void omap_ulpd_pm_write(void *opaque, target_phys_addr_t addr,
                 now -= s->ulpd_gauge_start;
 
                 /* 32-kHz ticks */
-                ticks = muldiv64(now, 32768, ticks_per_sec);
+                ticks = muldiv64(now, 32768, get_ticks_per_sec());
                 s->ulpd_pm_regs[0x00 >> 2] = (ticks >>  0) & 0xffff;
                 s->ulpd_pm_regs[0x04 >> 2] = (ticks >> 16) & 0xffff;
                 if (ticks >> 32)	/* OVERFLOW_32K */
                     s->ulpd_pm_regs[0x14 >> 2] |= 1 << 2;
 
                 /* High frequency ticks */
-                ticks = muldiv64(now, 12000000, ticks_per_sec);
+                ticks = muldiv64(now, 12000000, get_ticks_per_sec());
                 s->ulpd_pm_regs[0x08 >> 2] = (ticks >>  0) & 0xffff;
                 s->ulpd_pm_regs[0x0c >> 2] = (ticks >> 16) & 0xffff;
                 if (ticks >> 32)	/* OVERFLOW_HI_FREQ */
@@ -1243,13 +1243,13 @@ static void omap_ulpd_pm_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_ulpd_pm_readfn[] = {
+static CPUReadMemoryFunc * const omap_ulpd_pm_readfn[] = {
     omap_badwidth_read16,
     omap_ulpd_pm_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_ulpd_pm_writefn[] = {
+static CPUWriteMemoryFunc * const omap_ulpd_pm_writefn[] = {
     omap_badwidth_write16,
     omap_ulpd_pm_write,
     omap_badwidth_write16,
@@ -1469,13 +1469,13 @@ static void omap_pin_cfg_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_pin_cfg_readfn[] = {
+static CPUReadMemoryFunc * const omap_pin_cfg_readfn[] = {
     omap_badwidth_read32,
     omap_badwidth_read32,
     omap_pin_cfg_read,
 };
 
-static CPUWriteMemoryFunc *omap_pin_cfg_writefn[] = {
+static CPUWriteMemoryFunc * const omap_pin_cfg_writefn[] = {
     omap_badwidth_write32,
     omap_badwidth_write32,
     omap_pin_cfg_write,
@@ -1556,13 +1556,13 @@ static void omap_id_write(void *opaque, target_phys_addr_t addr,
     OMAP_BAD_REG(addr);
 }
 
-static CPUReadMemoryFunc *omap_id_readfn[] = {
+static CPUReadMemoryFunc * const omap_id_readfn[] = {
     omap_badwidth_read32,
     omap_badwidth_read32,
     omap_id_read,
 };
 
-static CPUWriteMemoryFunc *omap_id_writefn[] = {
+static CPUWriteMemoryFunc * const omap_id_writefn[] = {
     omap_badwidth_write32,
     omap_badwidth_write32,
     omap_id_write,
@@ -1633,13 +1633,13 @@ static void omap_mpui_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_mpui_readfn[] = {
+static CPUReadMemoryFunc * const omap_mpui_readfn[] = {
     omap_badwidth_read32,
     omap_badwidth_read32,
     omap_mpui_read,
 };
 
-static CPUWriteMemoryFunc *omap_mpui_writefn[] = {
+static CPUWriteMemoryFunc * const omap_mpui_writefn[] = {
     omap_badwidth_write32,
     omap_badwidth_write32,
     omap_mpui_write,
@@ -1732,13 +1732,13 @@ static void omap_tipb_bridge_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_tipb_bridge_readfn[] = {
+static CPUReadMemoryFunc * const omap_tipb_bridge_readfn[] = {
     omap_badwidth_read16,
     omap_tipb_bridge_read,
     omap_tipb_bridge_read,
 };
 
-static CPUWriteMemoryFunc *omap_tipb_bridge_writefn[] = {
+static CPUWriteMemoryFunc * const omap_tipb_bridge_writefn[] = {
     omap_badwidth_write16,
     omap_tipb_bridge_write,
     omap_tipb_bridge_write,
@@ -1834,13 +1834,13 @@ static void omap_tcmi_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_tcmi_readfn[] = {
+static CPUReadMemoryFunc * const omap_tcmi_readfn[] = {
     omap_badwidth_read32,
     omap_badwidth_read32,
     omap_tcmi_read,
 };
 
-static CPUWriteMemoryFunc *omap_tcmi_writefn[] = {
+static CPUWriteMemoryFunc * const omap_tcmi_writefn[] = {
     omap_badwidth_write32,
     omap_badwidth_write32,
     omap_tcmi_write,
@@ -1920,13 +1920,13 @@ static void omap_dpll_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_dpll_readfn[] = {
+static CPUReadMemoryFunc * const omap_dpll_readfn[] = {
     omap_badwidth_read16,
     omap_dpll_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_dpll_writefn[] = {
+static CPUWriteMemoryFunc * const omap_dpll_writefn[] = {
     omap_badwidth_write16,
     omap_dpll_write,
     omap_badwidth_write16,
@@ -2069,13 +2069,13 @@ static void omap_uart_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_uart_readfn[] = {
+static CPUReadMemoryFunc * const omap_uart_readfn[] = {
     omap_uart_read,
     omap_uart_read,
     omap_badwidth_read8,
 };
 
-static CPUWriteMemoryFunc *omap_uart_writefn[] = {
+static CPUWriteMemoryFunc * const omap_uart_writefn[] = {
     omap_uart_write,
     omap_uart_write,
     omap_badwidth_write8,
@@ -2381,13 +2381,13 @@ static void omap_clkm_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_clkm_readfn[] = {
+static CPUReadMemoryFunc * const omap_clkm_readfn[] = {
     omap_badwidth_read16,
     omap_clkm_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_clkm_writefn[] = {
+static CPUWriteMemoryFunc * const omap_clkm_writefn[] = {
     omap_badwidth_write16,
     omap_clkm_write,
     omap_badwidth_write16,
@@ -2464,13 +2464,13 @@ static void omap_clkdsp_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_clkdsp_readfn[] = {
+static CPUReadMemoryFunc * const omap_clkdsp_readfn[] = {
     omap_badwidth_read16,
     omap_clkdsp_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_clkdsp_writefn[] = {
+static CPUWriteMemoryFunc * const omap_clkdsp_writefn[] = {
     omap_badwidth_write16,
     omap_clkdsp_write,
     omap_badwidth_write16,
@@ -2706,13 +2706,13 @@ static void omap_mpuio_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_mpuio_readfn[] = {
+static CPUReadMemoryFunc * const omap_mpuio_readfn[] = {
     omap_badwidth_read16,
     omap_mpuio_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_mpuio_writefn[] = {
+static CPUWriteMemoryFunc * const omap_mpuio_writefn[] = {
     omap_badwidth_write16,
     omap_mpuio_write,
     omap_badwidth_write16,
@@ -2919,13 +2919,13 @@ static void omap_gpio_write(void *opaque, target_phys_addr_t addr,
 }
 
 /* *Some* sources say the memory region is 32-bit.  */
-static CPUReadMemoryFunc *omap_gpio_readfn[] = {
+static CPUReadMemoryFunc * const omap_gpio_readfn[] = {
     omap_badwidth_read16,
     omap_gpio_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_gpio_writefn[] = {
+static CPUWriteMemoryFunc * const omap_gpio_writefn[] = {
     omap_badwidth_write16,
     omap_gpio_write,
     omap_badwidth_write16,
@@ -3089,13 +3089,13 @@ static void omap_uwire_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_uwire_readfn[] = {
+static CPUReadMemoryFunc * const omap_uwire_readfn[] = {
     omap_badwidth_read16,
     omap_uwire_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_uwire_writefn[] = {
+static CPUWriteMemoryFunc * const omap_uwire_writefn[] = {
     omap_badwidth_write16,
     omap_uwire_write,
     omap_badwidth_write16,
@@ -3188,13 +3188,13 @@ static void omap_pwl_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_pwl_readfn[] = {
+static CPUReadMemoryFunc * const omap_pwl_readfn[] = {
     omap_pwl_read,
     omap_badwidth_read8,
     omap_badwidth_read8,
 };
 
-static CPUWriteMemoryFunc *omap_pwl_writefn[] = {
+static CPUWriteMemoryFunc * const omap_pwl_writefn[] = {
     omap_pwl_write,
     omap_badwidth_write8,
     omap_badwidth_write8,
@@ -3292,13 +3292,13 @@ static void omap_pwt_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_pwt_readfn[] = {
+static CPUReadMemoryFunc * const omap_pwt_readfn[] = {
     omap_pwt_read,
     omap_badwidth_read8,
     omap_badwidth_read8,
 };
 
-static CPUWriteMemoryFunc *omap_pwt_writefn[] = {
+static CPUWriteMemoryFunc * const omap_pwt_writefn[] = {
     omap_pwt_write,
     omap_badwidth_write8,
     omap_badwidth_write8,
@@ -3358,16 +3358,6 @@ static void omap_rtc_alarm_update(struct omap_rtc_s *s)
         printf("%s: conversion failed\n", __FUNCTION__);
 }
 
-static inline uint8_t omap_rtc_bcd(int num)
-{
-    return ((num / 10) << 4) | (num % 10);
-}
-
-static inline int omap_rtc_bin(uint8_t num)
-{
-    return (num & 15) + 10 * (num >> 4);
-}
-
 static uint32_t omap_rtc_read(void *opaque, target_phys_addr_t addr)
 {
     struct omap_rtc_s *s = (struct omap_rtc_s *) opaque;
@@ -3376,51 +3366,51 @@ static uint32_t omap_rtc_read(void *opaque, target_phys_addr_t addr)
 
     switch (offset) {
     case 0x00:	/* SECONDS_REG */
-        return omap_rtc_bcd(s->current_tm.tm_sec);
+        return to_bcd(s->current_tm.tm_sec);
 
     case 0x04:	/* MINUTES_REG */
-        return omap_rtc_bcd(s->current_tm.tm_min);
+        return to_bcd(s->current_tm.tm_min);
 
     case 0x08:	/* HOURS_REG */
         if (s->pm_am)
             return ((s->current_tm.tm_hour > 11) << 7) |
-                    omap_rtc_bcd(((s->current_tm.tm_hour - 1) % 12) + 1);
+                    to_bcd(((s->current_tm.tm_hour - 1) % 12) + 1);
         else
-            return omap_rtc_bcd(s->current_tm.tm_hour);
+            return to_bcd(s->current_tm.tm_hour);
 
     case 0x0c:	/* DAYS_REG */
-        return omap_rtc_bcd(s->current_tm.tm_mday);
+        return to_bcd(s->current_tm.tm_mday);
 
     case 0x10:	/* MONTHS_REG */
-        return omap_rtc_bcd(s->current_tm.tm_mon + 1);
+        return to_bcd(s->current_tm.tm_mon + 1);
 
     case 0x14:	/* YEARS_REG */
-        return omap_rtc_bcd(s->current_tm.tm_year % 100);
+        return to_bcd(s->current_tm.tm_year % 100);
 
     case 0x18:	/* WEEK_REG */
         return s->current_tm.tm_wday;
 
     case 0x20:	/* ALARM_SECONDS_REG */
-        return omap_rtc_bcd(s->alarm_tm.tm_sec);
+        return to_bcd(s->alarm_tm.tm_sec);
 
     case 0x24:	/* ALARM_MINUTES_REG */
-        return omap_rtc_bcd(s->alarm_tm.tm_min);
+        return to_bcd(s->alarm_tm.tm_min);
 
     case 0x28:	/* ALARM_HOURS_REG */
         if (s->pm_am)
             return ((s->alarm_tm.tm_hour > 11) << 7) |
-                    omap_rtc_bcd(((s->alarm_tm.tm_hour - 1) % 12) + 1);
+                    to_bcd(((s->alarm_tm.tm_hour - 1) % 12) + 1);
         else
-            return omap_rtc_bcd(s->alarm_tm.tm_hour);
+            return to_bcd(s->alarm_tm.tm_hour);
 
     case 0x2c:	/* ALARM_DAYS_REG */
-        return omap_rtc_bcd(s->alarm_tm.tm_mday);
+        return to_bcd(s->alarm_tm.tm_mday);
 
     case 0x30:	/* ALARM_MONTHS_REG */
-        return omap_rtc_bcd(s->alarm_tm.tm_mon + 1);
+        return to_bcd(s->alarm_tm.tm_mon + 1);
 
     case 0x34:	/* ALARM_YEARS_REG */
-        return omap_rtc_bcd(s->alarm_tm.tm_year % 100);
+        return to_bcd(s->alarm_tm.tm_year % 100);
 
     case 0x40:	/* RTC_CTRL_REG */
         return (s->pm_am << 3) | (s->auto_comp << 2) |
@@ -3459,7 +3449,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
         printf("RTC SEC_REG <-- %02x\n", value);
 #endif
         s->ti -= s->current_tm.tm_sec;
-        s->ti += omap_rtc_bin(value);
+        s->ti += from_bcd(value);
         return;
 
     case 0x04:	/* MINUTES_REG */
@@ -3467,7 +3457,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
         printf("RTC MIN_REG <-- %02x\n", value);
 #endif
         s->ti -= s->current_tm.tm_min * 60;
-        s->ti += omap_rtc_bin(value) * 60;
+        s->ti += from_bcd(value) * 60;
         return;
 
     case 0x08:	/* HOURS_REG */
@@ -3476,10 +3466,10 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
 #endif
         s->ti -= s->current_tm.tm_hour * 3600;
         if (s->pm_am) {
-            s->ti += (omap_rtc_bin(value & 0x3f) & 12) * 3600;
+            s->ti += (from_bcd(value & 0x3f) & 12) * 3600;
             s->ti += ((value >> 7) & 1) * 43200;
         } else
-            s->ti += omap_rtc_bin(value & 0x3f) * 3600;
+            s->ti += from_bcd(value & 0x3f) * 3600;
         return;
 
     case 0x0c:	/* DAYS_REG */
@@ -3487,7 +3477,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
         printf("RTC DAY_REG <-- %02x\n", value);
 #endif
         s->ti -= s->current_tm.tm_mday * 86400;
-        s->ti += omap_rtc_bin(value) * 86400;
+        s->ti += from_bcd(value) * 86400;
         return;
 
     case 0x10:	/* MONTHS_REG */
@@ -3495,7 +3485,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
         printf("RTC MTH_REG <-- %02x\n", value);
 #endif
         memcpy(&new_tm, &s->current_tm, sizeof(new_tm));
-        new_tm.tm_mon = omap_rtc_bin(value);
+        new_tm.tm_mon = from_bcd(value);
         ti[0] = mktimegm(&s->current_tm);
         ti[1] = mktimegm(&new_tm);
 
@@ -3505,7 +3495,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
         } else {
             /* A less accurate version */
             s->ti -= s->current_tm.tm_mon * 2592000;
-            s->ti += omap_rtc_bin(value) * 2592000;
+            s->ti += from_bcd(value) * 2592000;
         }
         return;
 
@@ -3514,7 +3504,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
         printf("RTC YRS_REG <-- %02x\n", value);
 #endif
         memcpy(&new_tm, &s->current_tm, sizeof(new_tm));
-        new_tm.tm_year += omap_rtc_bin(value) - (new_tm.tm_year % 100);
+        new_tm.tm_year += from_bcd(value) - (new_tm.tm_year % 100);
         ti[0] = mktimegm(&s->current_tm);
         ti[1] = mktimegm(&new_tm);
 
@@ -3524,7 +3514,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
         } else {
             /* A less accurate version */
             s->ti -= (s->current_tm.tm_year % 100) * 31536000;
-            s->ti += omap_rtc_bin(value) * 31536000;
+            s->ti += from_bcd(value) * 31536000;
         }
         return;
 
@@ -3535,7 +3525,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
 #ifdef ALMDEBUG
         printf("ALM SEC_REG <-- %02x\n", value);
 #endif
-        s->alarm_tm.tm_sec = omap_rtc_bin(value);
+        s->alarm_tm.tm_sec = from_bcd(value);
         omap_rtc_alarm_update(s);
         return;
 
@@ -3543,7 +3533,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
 #ifdef ALMDEBUG
         printf("ALM MIN_REG <-- %02x\n", value);
 #endif
-        s->alarm_tm.tm_min = omap_rtc_bin(value);
+        s->alarm_tm.tm_min = from_bcd(value);
         omap_rtc_alarm_update(s);
         return;
 
@@ -3553,10 +3543,10 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
 #endif
         if (s->pm_am)
             s->alarm_tm.tm_hour =
-                    ((omap_rtc_bin(value & 0x3f)) % 12) +
+                    ((from_bcd(value & 0x3f)) % 12) +
                     ((value >> 7) & 1) * 12;
         else
-            s->alarm_tm.tm_hour = omap_rtc_bin(value);
+            s->alarm_tm.tm_hour = from_bcd(value);
         omap_rtc_alarm_update(s);
         return;
 
@@ -3564,7 +3554,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
 #ifdef ALMDEBUG
         printf("ALM DAY_REG <-- %02x\n", value);
 #endif
-        s->alarm_tm.tm_mday = omap_rtc_bin(value);
+        s->alarm_tm.tm_mday = from_bcd(value);
         omap_rtc_alarm_update(s);
         return;
 
@@ -3572,7 +3562,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
 #ifdef ALMDEBUG
         printf("ALM MON_REG <-- %02x\n", value);
 #endif
-        s->alarm_tm.tm_mon = omap_rtc_bin(value);
+        s->alarm_tm.tm_mon = from_bcd(value);
         omap_rtc_alarm_update(s);
         return;
 
@@ -3580,7 +3570,7 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
 #ifdef ALMDEBUG
         printf("ALM YRS_REG <-- %02x\n", value);
 #endif
-        s->alarm_tm.tm_year = omap_rtc_bin(value);
+        s->alarm_tm.tm_year = from_bcd(value);
         omap_rtc_alarm_update(s);
         return;
 
@@ -3633,13 +3623,13 @@ static void omap_rtc_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_rtc_readfn[] = {
+static CPUReadMemoryFunc * const omap_rtc_readfn[] = {
     omap_rtc_read,
     omap_badwidth_read8,
     omap_badwidth_read8,
 };
 
-static CPUWriteMemoryFunc *omap_rtc_writefn[] = {
+static CPUWriteMemoryFunc * const omap_rtc_writefn[] = {
     omap_rtc_write,
     omap_badwidth_write8,
     omap_badwidth_write8,
@@ -3831,7 +3821,8 @@ static void omap_mcbsp_source_tick(void *opaque)
     s->rx_req = s->rx_rate << bps[(s->rcr[0] >> 5) & 7];
 
     omap_mcbsp_rx_newdata(s);
-    qemu_mod_timer(s->source_timer, qemu_get_clock(vm_clock) + ticks_per_sec);
+    qemu_mod_timer(s->source_timer, qemu_get_clock(vm_clock) +
+                   get_ticks_per_sec());
 }
 
 static void omap_mcbsp_rx_start(struct omap_mcbsp_s *s)
@@ -3876,7 +3867,8 @@ static void omap_mcbsp_sink_tick(void *opaque)
     s->tx_req = s->tx_rate << bps[(s->xcr[0] >> 5) & 7];
 
     omap_mcbsp_tx_newdata(s);
-    qemu_mod_timer(s->sink_timer, qemu_get_clock(vm_clock) + ticks_per_sec);
+    qemu_mod_timer(s->sink_timer, qemu_get_clock(vm_clock) +
+                   get_ticks_per_sec());
 }
 
 static void omap_mcbsp_tx_start(struct omap_mcbsp_s *s)
@@ -4216,13 +4208,13 @@ static void omap_mcbsp_writew(void *opaque, target_phys_addr_t addr,
     omap_badwidth_write16(opaque, addr, value);
 }
 
-static CPUReadMemoryFunc *omap_mcbsp_readfn[] = {
+static CPUReadMemoryFunc * const omap_mcbsp_readfn[] = {
     omap_badwidth_read16,
     omap_mcbsp_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_mcbsp_writefn[] = {
+static CPUWriteMemoryFunc * const omap_mcbsp_writefn[] = {
     omap_badwidth_write16,
     omap_mcbsp_writeh,
     omap_mcbsp_writew,
@@ -4404,13 +4396,13 @@ static void omap_lpg_write(void *opaque, target_phys_addr_t addr,
     }
 }
 
-static CPUReadMemoryFunc *omap_lpg_readfn[] = {
+static CPUReadMemoryFunc * const omap_lpg_readfn[] = {
     omap_lpg_read,
     omap_badwidth_read8,
     omap_badwidth_read8,
 };
 
-static CPUWriteMemoryFunc *omap_lpg_writefn[] = {
+static CPUWriteMemoryFunc * const omap_lpg_writefn[] = {
     omap_lpg_write,
     omap_badwidth_write8,
     omap_badwidth_write8,
@@ -4453,13 +4445,13 @@ static uint32_t omap_mpui_io_read(void *opaque, target_phys_addr_t addr)
     return 0;
 }
 
-static CPUReadMemoryFunc *omap_mpui_io_readfn[] = {
+static CPUReadMemoryFunc * const omap_mpui_io_readfn[] = {
     omap_badwidth_read16,
     omap_mpui_io_read,
     omap_badwidth_read16,
 };
 
-static CPUWriteMemoryFunc *omap_mpui_io_writefn[] = {
+static CPUWriteMemoryFunc * const omap_mpui_io_writefn[] = {
     omap_badwidth_write16,
     omap_badwidth_write16,
     omap_badwidth_write16,
@@ -4628,7 +4620,7 @@ struct omap_mpu_state_s *omap310_mpu_init(unsigned long sdram_size,
     ram_addr_t imif_base, emiff_base;
     qemu_irq *cpu_irq;
     qemu_irq dma_irqs[6];
-    int sdindex;
+    DriveInfo *dinfo;
 
     if (!core)
         core = "ti925t";
@@ -4729,23 +4721,23 @@ struct omap_mpu_state_s *omap310_mpu_init(unsigned long sdram_size,
                     omap_findclk(s, "uart2_ck"),
                     omap_findclk(s, "uart2_ck"),
                     s->drq[OMAP_DMA_UART2_TX], s->drq[OMAP_DMA_UART2_RX],
-                    serial_hds[0] ? serial_hds[1] : 0);
+                    serial_hds[0] ? serial_hds[1] : NULL);
     s->uart[2] = omap_uart_init(0xfffb9800, s->irq[0][OMAP_INT_UART3],
                     omap_findclk(s, "uart3_ck"),
                     omap_findclk(s, "uart3_ck"),
                     s->drq[OMAP_DMA_UART3_TX], s->drq[OMAP_DMA_UART3_RX],
-                    serial_hds[0] && serial_hds[1] ? serial_hds[2] : 0);
+                    serial_hds[0] && serial_hds[1] ? serial_hds[2] : NULL);
 
     omap_dpll_init(&s->dpll[0], 0xfffecf00, omap_findclk(s, "dpll1"));
     omap_dpll_init(&s->dpll[1], 0xfffed000, omap_findclk(s, "dpll2"));
     omap_dpll_init(&s->dpll[2], 0xfffed100, omap_findclk(s, "dpll3"));
 
-    sdindex = drive_get_index(IF_SD, 0, 0);
-    if (sdindex == -1) {
+    dinfo = drive_get(IF_SD, 0, 0);
+    if (!dinfo) {
         fprintf(stderr, "qemu: missing SecureDigital device\n");
         exit(1);
     }
-    s->mmc = omap_mmc_init(0xfffb7800, drives_table[sdindex].bdrv,
+    s->mmc = omap_mmc_init(0xfffb7800, dinfo->bdrv,
                     s->irq[1][OMAP_INT_OQN], &s->drq[OMAP_DMA_MMC_TX],
                     omap_findclk(s, "mmc_ck"));
 

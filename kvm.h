@@ -15,7 +15,7 @@
 #define QEMU_KVM_H
 
 #include "config.h"
-#include "sys-queue.h"
+#include "qemu-queue.h"
 
 #ifdef CONFIG_KVM
 extern int kvm_allowed;
@@ -47,6 +47,7 @@ int kvm_log_stop(target_phys_addr_t phys_addr, ram_addr_t size);
 int kvm_set_migration_log(int enable);
 
 int kvm_has_sync_mmu(void);
+int kvm_has_vcpu_events(void);
 
 void kvm_setup_guest_memory(void *start, size_t size);
 
@@ -59,6 +60,9 @@ int kvm_remove_breakpoint(CPUState *current_env, target_ulong addr,
                           target_ulong len, int type);
 void kvm_remove_all_breakpoints(CPUState *current_env);
 int kvm_update_guest_debug(CPUState *env, unsigned long reinject_trap);
+
+int kvm_pit_in_kernel(void);
+int kvm_irqchip_in_kernel(void);
 
 /* internal API */
 
@@ -87,6 +91,8 @@ int kvm_arch_init(KVMState *s, int smp_cpus);
 
 int kvm_arch_init_vcpu(CPUState *env);
 
+void kvm_arch_reset_vcpu(CPUState *env);
+
 struct kvm_guest_debug;
 struct kvm_debug_exit_arch;
 
@@ -94,10 +100,10 @@ struct kvm_sw_breakpoint {
     target_ulong pc;
     target_ulong saved_insn;
     int use_count;
-    TAILQ_ENTRY(kvm_sw_breakpoint) entry;
+    QTAILQ_ENTRY(kvm_sw_breakpoint) entry;
 };
 
-TAILQ_HEAD(kvm_sw_breakpoint_head, kvm_sw_breakpoint);
+QTAILQ_HEAD(kvm_sw_breakpoint_head, kvm_sw_breakpoint);
 
 int kvm_arch_debug(struct kvm_debug_exit_arch *arch_info);
 
@@ -122,16 +128,14 @@ int kvm_check_extension(KVMState *s, unsigned int extension);
 
 uint32_t kvm_arch_get_supported_cpuid(CPUState *env, uint32_t function,
                                       int reg);
+void kvm_cpu_synchronize_state(CPUState *env);
 
 /* generic hooks - to be moved/refactored once there are more users */
 
-static inline void cpu_synchronize_state(CPUState *env, int modified)
+static inline void cpu_synchronize_state(CPUState *env)
 {
     if (kvm_enabled()) {
-        if (modified)
-            kvm_arch_put_registers(env);
-        else
-            kvm_arch_get_registers(env);
+        kvm_cpu_synchronize_state(env);
     }
 }
 

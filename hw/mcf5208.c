@@ -11,6 +11,8 @@
 #include "sysemu.h"
 #include "net.h"
 #include "boards.h"
+#include "loader.h"
+#include "elf.h"
 
 #define SYS_FREQ 66000000
 
@@ -118,13 +120,13 @@ static uint32_t m5208_timer_read(void *opaque, target_phys_addr_t addr)
     }
 }
 
-static CPUReadMemoryFunc *m5208_timer_readfn[] = {
+static CPUReadMemoryFunc * const m5208_timer_readfn[] = {
    m5208_timer_read,
    m5208_timer_read,
    m5208_timer_read
 };
 
-static CPUWriteMemoryFunc *m5208_timer_writefn[] = {
+static CPUWriteMemoryFunc * const m5208_timer_writefn[] = {
    m5208_timer_write,
    m5208_timer_write,
    m5208_timer_write
@@ -157,13 +159,13 @@ static void m5208_sys_write(void *opaque, target_phys_addr_t addr,
     hw_error("m5208_sys_write: Bad offset 0x%x\n", (int)addr);
 }
 
-static CPUReadMemoryFunc *m5208_sys_readfn[] = {
+static CPUReadMemoryFunc * const m5208_sys_readfn[] = {
    m5208_sys_read,
    m5208_sys_read,
    m5208_sys_read
 };
 
-static CPUWriteMemoryFunc *m5208_sys_writefn[] = {
+static CPUWriteMemoryFunc * const m5208_sys_writefn[] = {
    m5208_sys_write,
    m5208_sys_write,
    m5208_sys_write
@@ -201,7 +203,7 @@ static void mcf5208evb_init(ram_addr_t ram_size,
     CPUState *env;
     int kernel_size;
     uint64_t elf_entry;
-    target_ulong entry;
+    target_phys_addr_t entry;
     qemu_irq *pic;
 
     if (!cpu_model)
@@ -268,7 +270,8 @@ static void mcf5208evb_init(ram_addr_t ram_size,
         exit(1);
     }
 
-    kernel_size = load_elf(kernel_filename, 0, &elf_entry, NULL, NULL);
+    kernel_size = load_elf(kernel_filename, 0, &elf_entry, NULL, NULL,
+                           1, ELF_MACHINE, 0);
     entry = elf_entry;
     if (kernel_size < 0) {
         kernel_size = load_uimage(kernel_filename, &entry, NULL, NULL);

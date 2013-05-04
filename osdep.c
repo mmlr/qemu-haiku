@@ -28,20 +28,17 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
-#ifdef HOST_SOLARIS
+#ifdef CONFIG_SOLARIS
 #include <sys/types.h>
 #include <sys/statvfs.h>
 #endif
 
-/* FIXME: This file should be target independent. However it has kqemu
-   hacks, so must be built for every target.  */
-
-/* Needed early for HOST_BSD etc. */
+/* Needed early for CONFIG_BSD etc. */
 #include "config-host.h"
 
 #ifdef _WIN32
 #include <windows.h>
-#elif defined(HOST_BSD)
+#elif defined(CONFIG_BSD)
 #include <stdlib.h>
 #else
 #include <malloc.h>
@@ -51,7 +48,7 @@
 #include "sysemu.h"
 #include "qemu_socket.h"
 
-#if !defined(_POSIX_C_SOURCE) || defined(_WIN32)
+#if !defined(_POSIX_C_SOURCE) || defined(_WIN32) || defined(__sun__)
 static void *oom_check(void *ptr)
 {
     if (ptr == NULL) {
@@ -88,129 +85,16 @@ void qemu_vfree(void *ptr)
 
 #else
 
-#if defined(CONFIG_KQEMU)
-
-#ifdef __OpenBSD__
-#include <sys/param.h>
-#include <sys/types.h>
-#include <sys/mount.h>
-#else
-#ifndef __FreeBSD__
-#include <sys/vfs.h>
-#endif
-#endif
-
-#include <sys/mman.h>
-#include <fcntl.h>
-
-static void *kqemu_vmalloc(size_t size)
-{
-    static int phys_ram_fd = -1;
-    static int phys_ram_size = 0;
-    void *ptr;
-
-/* no need (?) for a dummy file on OpenBSD/FreeBSD */
-#if defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__DragonFly__)
-    int map_anon = MAP_ANON;
-#else
-    int map_anon = 0;
-    const char *tmpdir;
-    char phys_ram_file[1024];
-#ifdef HOST_SOLARIS
-    struct statvfs stfs;
-#else
-    struct statfs stfs;
-#endif
-
-    if (!size) {
-        abort ();
-    }
-
-    if (phys_ram_fd < 0) {
-        tmpdir = getenv("QEMU_TMPDIR");
-        if (!tmpdir)
-#ifdef HOST_SOLARIS
-            tmpdir = "/tmp";
-        if (statvfs(tmpdir, &stfs) == 0) {
-#else
-            tmpdir = "/dev/shm";
-        if (statfs(tmpdir, &stfs) == 0) {
-#endif
-            int64_t free_space;
-            int ram_mb;
-
-            free_space = (int64_t)stfs.f_bavail * stfs.f_bsize;
-            if ((ram_size + 8192 * 1024) >= free_space) {
-                ram_mb = (ram_size / (1024 * 1024));
-                fprintf(stderr,
-                        "You do not have enough space in '%s' for the %d MB of QEMU virtual RAM.\n",
-                        tmpdir, ram_mb);
-                if (strcmp(tmpdir, "/dev/shm") == 0) {
-                    fprintf(stderr, "To have more space available provided you have enough RAM and swap, do as root:\n"
-                            "mount -o remount,size=%dm /dev/shm\n",
-                            ram_mb + 16);
-                } else {
-                    fprintf(stderr,
-                            "Use the '-m' option of QEMU to diminish the amount of virtual RAM or use the\n"
-                            "QEMU_TMPDIR environment variable to set another directory where the QEMU\n"
-                            "temporary RAM file will be opened.\n");
-                }
-                fprintf(stderr, "Or disable the accelerator module with -no-kqemu\n");
-                exit(1);
-            }
-        }
-        snprintf(phys_ram_file, sizeof(phys_ram_file), "%s/qemuXXXXXX",
-                 tmpdir);
-        phys_ram_fd = mkstemp(phys_ram_file);
-        if (phys_ram_fd < 0) {
-            fprintf(stderr,
-                    "warning: could not create temporary file in '%s'.\n"
-                    "Use QEMU_TMPDIR to select a directory in a tmpfs filesystem.\n"
-                    "Using '/tmp' as fallback.\n",
-                    tmpdir);
-            snprintf(phys_ram_file, sizeof(phys_ram_file), "%s/qemuXXXXXX",
-                     "/tmp");
-            phys_ram_fd = mkstemp(phys_ram_file);
-            if (phys_ram_fd < 0) {
-                fprintf(stderr, "Could not create temporary memory file '%s'\n",
-                        phys_ram_file);
-                exit(1);
-            }
-        }
-        unlink(phys_ram_file);
-    }
-    size = (size + 4095) & ~4095;
-    ftruncate(phys_ram_fd, phys_ram_size + size);
-#endif /* !(__OpenBSD__ || __FreeBSD__ || __DragonFly__) */
-    ptr = mmap(NULL,
-               size,
-               PROT_WRITE | PROT_READ, map_anon | MAP_SHARED,
-               phys_ram_fd, phys_ram_size);
-    if (ptr == MAP_FAILED) {
-        fprintf(stderr, "Could not map physical memory\n");
-        exit(1);
-    }
-    phys_ram_size += size;
-    return ptr;
-}
-
-static void kqemu_vfree(void *ptr)
-{
-    /* may be useful some day, but currently we do not need to free */
-}
-
-#endif
-
 void *qemu_memalign(size_t alignment, size_t size)
 {
-#if defined(_POSIX_C_SOURCE)
+#if defined(_POSIX_C_SOURCE) && !defined(__sun__)
     int ret;
     void *ptr;
     ret = posix_memalign(&ptr, alignment, size);
     if (ret != 0)
         abort();
     return ptr;
-#elif defined(HOST_BSD)
+#elif defined(CONFIG_BSD)
     return oom_check(valloc(size));
 #else
     return oom_check(memalign(alignment, size));
@@ -220,19 +104,11 @@ void *qemu_memalign(size_t alignment, size_t size)
 /* alloc shared memory pages */
 void *qemu_vmalloc(size_t size)
 {
-#if defined(CONFIG_KQEMU)
-    if (kqemu_allowed)
-        return kqemu_vmalloc(size);
-#endif
     return qemu_memalign(getpagesize(), size);
 }
 
 void qemu_vfree(void *ptr)
 {
-#if defined(CONFIG_KQEMU)
-    if (kqemu_allowed)
-        kqemu_vfree(ptr);
-#endif
     free(ptr);
 }
 
@@ -245,7 +121,7 @@ int qemu_create_pidfile(const char *filename)
 #ifndef _WIN32
     int fd;
 
-    fd = open(filename, O_RDWR | O_CREAT, 0600);
+    fd = qemu_open(filename, O_RDWR | O_CREAT, 0600);
     if (fd == -1)
         return -1;
 
@@ -325,11 +201,119 @@ int inet_aton(const char *cp, struct in_addr *ia)
     ia->s_addr = addr;
     return 1;
 }
+
+void qemu_set_cloexec(int fd)
+{
+}
+
 #else
+
 void socket_set_nonblock(int fd)
 {
     int f;
     f = fcntl(fd, F_GETFL);
     fcntl(fd, F_SETFL, f | O_NONBLOCK);
 }
+
+void qemu_set_cloexec(int fd)
+{
+    int f;
+    f = fcntl(fd, F_GETFD);
+    fcntl(fd, F_SETFD, f | FD_CLOEXEC);
+}
+
 #endif
+
+/*
+ * Opens a file with FD_CLOEXEC set
+ */
+int qemu_open(const char *name, int flags, ...)
+{
+    int ret;
+    int mode = 0;
+
+    if (flags & O_CREAT) {
+        va_list ap;
+
+        va_start(ap, flags);
+        mode = va_arg(ap, int);
+        va_end(ap);
+    }
+
+#ifdef O_CLOEXEC
+    ret = open(name, flags | O_CLOEXEC, mode);
+#else
+    ret = open(name, flags, mode);
+    if (ret >= 0) {
+        qemu_set_cloexec(ret);
+    }
+#endif
+
+    return ret;
+}
+
+#ifndef _WIN32
+/*
+ * Creates a pipe with FD_CLOEXEC set on both file descriptors
+ */
+int qemu_pipe(int pipefd[2])
+{
+    int ret;
+
+#ifdef CONFIG_PIPE2
+    ret = pipe2(pipefd, O_CLOEXEC);
+    if (ret != -1 || errno != ENOSYS) {
+        return ret;
+    }
+#endif
+    ret = pipe(pipefd);
+    if (ret == 0) {
+        qemu_set_cloexec(pipefd[0]);
+        qemu_set_cloexec(pipefd[1]);
+    }
+
+    return ret;
+}
+#endif
+
+/*
+ * Opens a socket with FD_CLOEXEC set
+ */
+int qemu_socket(int domain, int type, int protocol)
+{
+    int ret;
+
+#ifdef SOCK_CLOEXEC
+    ret = socket(domain, type | SOCK_CLOEXEC, protocol);
+    if (ret != -1 || errno != EINVAL) {
+        return ret;
+    }
+#endif
+    ret = socket(domain, type, protocol);
+    if (ret >= 0) {
+        qemu_set_cloexec(ret);
+    }
+
+    return ret;
+}
+
+/*
+ * Accept a connection and set FD_CLOEXEC
+ */
+int qemu_accept(int s, struct sockaddr *addr, socklen_t *addrlen)
+{
+    int ret;
+
+#ifdef CONFIG_ACCEPT4
+    ret = accept4(s, addr, addrlen, SOCK_CLOEXEC);
+    if (ret != -1 || errno != ENOSYS) {
+        return ret;
+    }
+#endif
+    ret = accept(s, addr, addrlen);
+    if (ret >= 0) {
+        qemu_set_cloexec(ret);
+    }
+
+    return ret;
+}

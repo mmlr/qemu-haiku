@@ -167,12 +167,12 @@ timer_writel (void *opaque, target_phys_addr_t addr, uint32_t value)
     timer_update_irq(t);
 }
 
-static CPUReadMemoryFunc *timer_read[] = {
+static CPUReadMemoryFunc * const timer_read[] = {
     NULL, NULL,
     &timer_readl,
 };
 
-static CPUWriteMemoryFunc *timer_write[] = {
+static CPUWriteMemoryFunc * const timer_write[] = {
     NULL, NULL,
     &timer_writel,
 };
@@ -189,7 +189,7 @@ static void timer_hit(void *opaque)
     timer_update_irq(t);
 }
 
-static void xilinx_timer_init(SysBusDevice *dev)
+static int xilinx_timer_init(SysBusDevice *dev)
 {
     struct timerblock *t = FROM_SYSBUS(typeof (*t), dev);
     unsigned int i;
@@ -212,6 +212,7 @@ static void xilinx_timer_init(SysBusDevice *dev)
 
     timer_regs = cpu_register_io_memory(timer_read, timer_write, t);
     sysbus_init_mmio(dev, R_MAX * 4 * t->nr_timers, timer_regs);
+    return 0;
 }
 
 static SysBusDeviceInfo xilinx_timer_info = {
@@ -219,18 +220,9 @@ static SysBusDeviceInfo xilinx_timer_info = {
     .qdev.name  = "xilinx,timer",
     .qdev.size  = sizeof(struct timerblock),
     .qdev.props = (Property[]) {
-        {
-            .name   = "frequency",
-            .info   = &qdev_prop_uint32,
-            .offset = offsetof(struct timerblock, freq_hz),
-            .defval = (uint32_t[]) { 2 },
-        },{
-            .name   = "nr-timers",
-            .info   = &qdev_prop_uint32,
-            .offset = offsetof(struct timerblock, nr_timers),
-            .defval = (uint32_t[]) { 2 },
-        },
-        {/* end of list */}
+        DEFINE_PROP_UINT32("frequency", struct timerblock, freq_hz,   0),
+        DEFINE_PROP_UINT32("nr-timers", struct timerblock, nr_timers, 0),
+        DEFINE_PROP_END_OF_LIST(),
     }
 };
 

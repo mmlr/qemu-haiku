@@ -30,7 +30,7 @@
 
 #include <stdio.h>
 
-FPA11* qemufpa=0;
+FPA11* qemufpa = NULL;
 CPUARMState* user_registers;
 
 /* Reset the FPA11 chip.  Called to initialize and reset the emulator. */
@@ -191,7 +191,7 @@ unsigned int EmulateAll(unsigned int opcode, FPA11* qfpa, CPUARMState* qregs)
   if(nRc == 1 && get_float_exception_flags(&fpa11->fp_status))
   {
     //printf("fef 0x%x\n",float_exception_flags);
-    nRc=-get_float_exception_flags(&fpa11->fp_status);
+    nRc = -get_float_exception_flags(&fpa11->fp_status);
   }
 
   //printf("returning %d\n",nRc);

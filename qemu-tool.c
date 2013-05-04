@@ -43,6 +43,23 @@ void monitor_print_filename(Monitor *mon, const char *filename)
 {
 }
 
+void async_context_push(void)
+{
+}
+
+void async_context_pop(void)
+{
+}
+
+int get_async_context_id(void)
+{
+    return 0;
+}
+
+void monitor_protocol_event(MonitorEvent event, QObject *data)
+{
+}
+
 QEMUBH *qemu_bh_new(QEMUBHFunc *cb, void *opaque)
 {
     QEMUBH *bh;
@@ -87,4 +104,13 @@ int64_t qemu_get_clock(QEMUClock *clock)
     qemu_timeval tv;
     qemu_gettimeofday(&tv);
     return (tv.tv_sec * 1000000000LL + (tv.tv_usec * 1000)) / 1000000;
+}
+
+void qemu_error(const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
 }

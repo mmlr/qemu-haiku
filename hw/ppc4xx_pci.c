@@ -22,8 +22,6 @@
 #include "hw.h"
 #include "ppc.h"
 #include "ppc4xx.h"
-
-typedef target_phys_addr_t pci_addr_t;
 #include "pci.h"
 #include "pci_host.h"
 #include "bswap.h"
@@ -93,7 +91,7 @@ static uint32_t pci4xx_cfgaddr_readl(void *opaque, target_phys_addr_t addr)
     return ppc4xx_pci->pci_state.config_reg;
 }
 
-static CPUReadMemoryFunc *pci4xx_cfgaddr_read[] = {
+static CPUReadMemoryFunc * const pci4xx_cfgaddr_read[] = {
     &pci4xx_cfgaddr_readl,
     &pci4xx_cfgaddr_readl,
     &pci4xx_cfgaddr_readl,
@@ -111,22 +109,10 @@ static void pci4xx_cfgaddr_writel(void *opaque, target_phys_addr_t addr,
     ppc4xx_pci->pci_state.config_reg = value & ~0x3;
 }
 
-static CPUWriteMemoryFunc *pci4xx_cfgaddr_write[] = {
+static CPUWriteMemoryFunc * const pci4xx_cfgaddr_write[] = {
     &pci4xx_cfgaddr_writel,
     &pci4xx_cfgaddr_writel,
     &pci4xx_cfgaddr_writel,
-};
-
-static CPUReadMemoryFunc *pci4xx_cfgdata_read[] = {
-    &pci_host_data_readb,
-    &pci_host_data_readw,
-    &pci_host_data_readl,
-};
-
-static CPUWriteMemoryFunc *pci4xx_cfgdata_write[] = {
-    &pci_host_data_writeb,
-    &pci_host_data_writew,
-    &pci_host_data_writel,
 };
 
 static void ppc4xx_pci_reg_write4(void *opaque, target_phys_addr_t offset,
@@ -272,13 +258,13 @@ static uint32_t ppc4xx_pci_reg_read4(void *opaque, target_phys_addr_t offset)
     return value;
 }
 
-static CPUReadMemoryFunc *pci_reg_read[] = {
+static CPUReadMemoryFunc * const pci_reg_read[] = {
     &ppc4xx_pci_reg_read4,
     &ppc4xx_pci_reg_read4,
     &ppc4xx_pci_reg_read4,
 };
 
-static CPUWriteMemoryFunc *pci_reg_write[] = {
+static CPUWriteMemoryFunc * const pci_reg_write[] = {
     &ppc4xx_pci_reg_write4,
     &ppc4xx_pci_reg_write4,
     &ppc4xx_pci_reg_write4,
@@ -304,8 +290,10 @@ static int ppc4xx_pci_map_irq(PCIDevice *pci_dev, int irq_num)
     return slot - 1;
 }
 
-static void ppc4xx_pci_set_irq(qemu_irq *pci_irqs, int irq_num, int level)
+static void ppc4xx_pci_set_irq(void *opaque, int irq_num, int level)
 {
+    qemu_irq *pci_irqs = opaque;
+
     DPRINTF("%s: PCI irq %d\n", __func__, irq_num);
     qemu_set_irq(pci_irqs[irq_num], level);
 }
@@ -390,9 +378,7 @@ PCIBus *ppc4xx_pci_init(CPUState *env, qemu_irq pci_irqs[4],
     cpu_register_physical_memory(config_space + PCIC0_CFGADDR, 4, index);
 
     /* CFGDATA */
-    index = cpu_register_io_memory(pci4xx_cfgdata_read,
-                                   pci4xx_cfgdata_write,
-                                   &controller->pci_state);
+    index = pci_host_data_register_mmio(&controller->pci_state);
     if (index < 0)
         goto free;
     cpu_register_physical_memory(config_space + PCIC0_CFGDATA, 4, index);
