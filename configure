@@ -1982,11 +1982,6 @@ if test "$aix" = "yes" ; then
   echo "CONFIG_AIX=y" >> $config_host_mak
 fi
 
-if test "$haiku" = "yes" ; then
-  echo "CONFIG_HAIKU=yes" >> $config_host_mak
-  echo "#define CONFIG_HAIKU 1" >> $config_host_h
-fi
-
 if test "$solaris" = "yes" ; then
   echo "CONFIG_SOLARIS=y" >> $config_host_mak
   echo "CONFIG_SOLARIS_VERSION=$solarisrev" >> $config_host_mak
