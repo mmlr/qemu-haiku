@@ -207,7 +207,8 @@ QEMUApplication::QEMUApplication(int argc, char **argv)
 bool
 QEMUApplication::QuitRequested()
 {
-	sView->QueueShutdownRequest();
+	if (sView != NULL)
+		sView->QueueShutdownRequest();
 	return true;
 }
 
