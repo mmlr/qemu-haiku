@@ -224,20 +224,10 @@ QEMUApplication::InitDisplay()
 }
 
 
-void
-QEMUApplication::AtExit()
-{
-	int32 result;
-	be_app->PostMessage(B_QUIT_REQUESTED);
-	wait_for_thread(sMainThread, &result);
-}
-
-
 int32
 QEMUApplication::RunQEMUMain(void *arg)
 {
 	QEMUApplication *app = (QEMUApplication *)arg;
-	atexit(QEMUApplication::AtExit);
 
 	block_signals(false);
 	qemu_main(app->fArgC, app->fArgV);

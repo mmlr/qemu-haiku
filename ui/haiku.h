@@ -44,7 +44,6 @@ virtual	bool				QuitRequested();
 		void				InitDisplay();
 
 private:
-static	void				AtExit();
 static	int32				RunQEMUMain(void *arg);
 
 		int					fArgC;
