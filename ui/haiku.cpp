@@ -769,7 +769,6 @@ haiku_resize(DisplayState *ds)
 	sView->UpdateFrameBuffer(ds_get_width(ds), ds_get_height(ds),
 		ds_get_data(ds), ds_get_linesize(ds), ds_get_bits_per_pixel(ds));
 	sView->UpdateFullScreen();
-	sGraphicConsole = is_graphic_console();
 }
 
 
@@ -787,6 +786,7 @@ haiku_display_init(DisplayState *ds, int fullScreen)
 {
 	sApplication->InitDisplay();
 	sFullScreen = fullScreen != 0;
+	sGraphicConsole = is_graphic_console();
 
 	DisplayChangeListener *displayChangeListener
 		= (DisplayChangeListener *)qemu_mallocz(sizeof(DisplayChangeListener));
