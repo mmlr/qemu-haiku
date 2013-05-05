@@ -1,7 +1,7 @@
 /*
  * QEMU Haiku audio output driver
  * 
- * Copyright (c) 2005-2009 Michael Lotz
+ * Copyright (c) 2005-2013 Michael Lotz
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
