@@ -63,7 +63,7 @@ extern "C" {
 void	kbd_put_keycode(int keycode);
 void	kbd_mouse_event(int dx, int dy, int dz, int buttons_state);
 void	qemu_system_shutdown_request(void);
-int		qemu_main(int argc, char *argv[]);
+int		qemu_main(int argc, char **argv, char **envp);
 int		is_graphic_console(void);
 void	console_select(unsigned int index);
 void	vga_hw_update(void);
@@ -230,7 +230,7 @@ QEMUApplication::RunQEMUMain(void *arg)
 	QEMUApplication *app = (QEMUApplication *)arg;
 
 	block_signals(false);
-	qemu_main(app->fArgC, app->fArgV);
+	qemu_main(app->fArgC, app->fArgV, NULL);
 	app->PostMessage(B_QUIT_REQUESTED);
 	return B_OK;
 }

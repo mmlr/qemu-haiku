@@ -106,7 +106,8 @@ int main(int argc, char **argv)
 #endif
 #endif /* CONFIG_SDL */
 
-#ifdef __HAIKU__
+#ifdef CONFIG_HAIKU
+int qemu_main(int argc, char **argv, char **envp);
 #define main qemu_main
 #endif
 
