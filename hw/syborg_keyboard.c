@@ -176,7 +176,7 @@ static const VMStateDescription vmstate_syborg_keyboard = {
         VMSTATE_UINT32(read_pos, SyborgKeyboardState),
         VMSTATE_UINT32(read_count, SyborgKeyboardState),
         VMSTATE_VARRAY_UINT32(key_fifo, SyborgKeyboardState, fifo_size, 1,
-                              vmstate_info_uint32, uint32),
+                              vmstate_info_uint32, uint32_t),
         VMSTATE_END_OF_LIST()
     }
 };

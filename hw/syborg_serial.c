@@ -287,7 +287,7 @@ static const VMStateDescription vmstate_syborg_serial = {
         VMSTATE_UINT32(dma_rx_ptr, SyborgSerialState),
         VMSTATE_UINT32(dma_rx_size, SyborgSerialState),
         VMSTATE_VARRAY_UINT32(read_fifo, SyborgSerialState, fifo_size, 1,
-                              vmstate_info_uint32, uint32),
+                              vmstate_info_uint32, uint32_t),
         VMSTATE_END_OF_LIST()
     }
 };
