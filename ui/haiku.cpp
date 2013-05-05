@@ -27,6 +27,7 @@
 #include "haiku.h"
 #undef load_image
 
+#include <Cursor.h>
 #include <Path.h>
 #include <Screen.h>
 #include <WindowScreen.h>
@@ -42,6 +43,8 @@ static QEMUWindow *sWindow = NULL;
 static QEMUView *sView = NULL;
 static bool sFullScreen = false;
 static bool sGraphicConsole = false;
+static bool sAbsoluteMouse = false;
+static bool sGrabInput = false;
 static int sWidth = 100;
 static int sHeight = 100;
 static BPoint sCenter;
@@ -400,9 +403,19 @@ QEMUView::QueueKeysym(int32 keysym)
 
 
 void
-QEMUView::QueueMouseEvent(int32 deltaX, int32 deltaY, int32 deltaZ,
-	int32 buttonState)
+QEMUView::QueueMouseEvent(BPoint where, int32 deltaZ, int32 buttonState)
 {
+	int32 deltaX = where.x;
+	int32 deltaY = where.y;
+
+	if (sAbsoluteMouse) {
+		deltaX = deltaX * 0x7fff / (sWidth -1);
+		deltaY = deltaY * 0x7fff / (sHeight - 1);
+	} else {
+		deltaX -= sCenter.x;
+		deltaY -= sCenter.y;
+	}
+
 	BMessage *event = new BMessage(kMouseEvent);
 	event->AddInt32("deltaX", deltaX);
 	event->AddInt32("deltaY", deltaY);
@@ -514,7 +527,6 @@ filter_result
 QEMUView::MessageFilter(BMessage *message, BHandler **target,
 	BMessageFilter *filter)
 {
-	static bool sGrabInput = false;
 	static bool sMouseWarp = false;
 	static int32 sMouseButtons = 0;
 	bool keyDown = false;
@@ -635,7 +647,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 		} break;
 
 		case B_MOUSE_MOVED: {
-			if (!sGrabInput)
+			if (!sGrabInput && !sAbsoluteMouse)
 				break;
 
 			if (sMouseWarp) {
@@ -645,12 +657,13 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 
 			BPoint where;
 			message->FindPoint("where", &where);
-			BPoint delta = where - sCenter;
 
 			// Haiku buttons are the same as QEMU
-			QueueMouseEvent((int32)delta.x, (int32)delta.y, 0, sMouseButtons);
+			QueueMouseEvent(where, 0, sMouseButtons);
 
-			CenterMouse(sMouseWarp);
+			if (!sAbsoluteMouse)
+				CenterMouse(sMouseWarp);
+
 			return B_SKIP_MESSAGE;
 		} break;
 
@@ -659,7 +672,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 			int32 buttons;
 			message->FindInt32("buttons", &buttons);
 
-			if (!sGrabInput) {
+			if (!sGrabInput && !sAbsoluteMouse) {
 				if (message->what == B_MOUSE_DOWN
 					&& (buttons & B_PRIMARY_MOUSE_BUTTON)) {
 					CenterMouse(sMouseWarp);
@@ -668,19 +681,26 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 				break;
 			}
 
+			BPoint where;
+			message->FindPoint("where", &where);
+
 			sMouseButtons = buttons;
 			// Haiku buttons are the same as QEMU
-			QueueMouseEvent(0, 0, 0, sMouseButtons);
+			QueueMouseEvent(where, 0, sMouseButtons);
 			return B_SKIP_MESSAGE;
 		} break;
 
 		case B_MOUSE_WHEEL_CHANGED: {
-			if (!sGrabInput)
+			if (!sGrabInput && !sAbsoluteMouse)
 				break;
 
 			float delta;
 			message->FindFloat("be:wheel_delta_y", &delta);
-			QueueMouseEvent(0, 0, (int32)delta, sMouseButtons);
+
+			BPoint where;
+			message->FindPoint("where", &where);
+
+			QueueMouseEvent(where, (int32)delta, sMouseButtons);
 			return B_SKIP_MESSAGE;
 		} break;
 	}
@@ -781,12 +801,29 @@ haiku_refresh(DisplayState *ds)
 }
 
 
+static void
+haiku_mouse_mode_change(Notifier *notifier, void *data)
+{
+	sAbsoluteMouse = kbd_mouse_is_absolute();
+	BCursor cursor(sAbsoluteMouse ? B_CURSOR_ID_NO_CURSOR
+		: B_CURSOR_ID_SYSTEM_DEFAULT);
+
+	if (sAbsoluteMouse) {
+		if (sGrabInput)
+			sView->EndGrab(sGrabInput, 0);
+		sApplication->SetCursor(&cursor, true);
+	} else
+		sApplication->SetCursor(&cursor, true);
+}
+
+
 void
 haiku_display_init(DisplayState *ds, int fullScreen)
 {
 	sApplication->InitDisplay();
 	sFullScreen = fullScreen != 0;
 	sGraphicConsole = is_graphic_console();
+	sAbsoluteMouse = kbd_mouse_is_absolute();
 
 	DisplayChangeListener *displayChangeListener
 		= (DisplayChangeListener *)qemu_mallocz(sizeof(DisplayChangeListener));
@@ -794,4 +831,7 @@ haiku_display_init(DisplayState *ds, int fullScreen)
 	displayChangeListener->dpy_resize = haiku_resize;
 	displayChangeListener->dpy_refresh = haiku_refresh;
 	register_displaychangelistener(ds, displayChangeListener);
+
+	static Notifier sMouseModeChangeNotifier = { haiku_mouse_mode_change };
+	qemu_add_mouse_mode_change_notifier(&sMouseModeChangeNotifier);
 }

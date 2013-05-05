@@ -86,8 +86,8 @@ static	void				EndGrab(bool &grab, int32 modifiers);
 
 static	void				QueueKeycode(uint8 keycode);
 static	void				QueueKeysym(int32 keysym);
-static	void				QueueMouseEvent(int32 deltaX, int32 deltaY,
-								int32 deltaZ, int32 buttonState);
+static	void				QueueMouseEvent(BPoint where, int32 deltaZ,
+								int32 buttonState);
 static	void				QueueShutdownRequest();
 static	void				QueueConsoleSelect(uint8 console);
 static	void				QueueInvalidation();
