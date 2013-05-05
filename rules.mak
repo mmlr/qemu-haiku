@@ -1,6 +1,3 @@
-%.o: %.cpp
-	$(CC) -Wall -Werror $(CFLAGS) $(QEMU_INCLUDES) -c -o $@ $<
-
 # Don't use implicit rules or variables
 # we have explicit rules for everything
 MAKEFLAGS += -rR
@@ -19,6 +16,9 @@ QEMU_DGFLAGS += -MMD -MP -MT $@ -MF $(*D)/$(*F).d
 
 %.o: %.c
 	$(call quiet-command,$(CC) $(QEMU_CFLAGS) $(QEMU_INCLUDES) $(QEMU_DGFLAGS) $(CFLAGS) -c -o $@ $<,"  CC    $(TARGET_DIR)$@")
+
+%.o: %.cpp
+	$(CC) -Wall -Werror $(CFLAGS) $(QEMU_INCLUDES) -c -o $@ $<
 
 ifeq ($(LIBTOOL),)
 %.lo: %.c
