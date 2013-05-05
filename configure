@@ -466,6 +466,7 @@ Haiku)
   sysconfdir="${prefix}/etc"
   bindir="${prefix}"
   confsuffix=""
+  CFLAGS="-fno-pic -march=prescott -mtune=core2 $CFLAGS"
   QEMU_CFLAGS="-DB_USE_POSITIVE_POSIX_ERRORS $QEMU_CFLAGS"
   LIBS="-lposix_error_mapper -lnetwork -lbe -lbsd -lgame -lmedia -lstdc++ $LIBS"
 ;;
@@ -2573,7 +2574,7 @@ fi
 # After here, no more $cc or $ld runs
 
 if test "$debug" = "no" ; then
-  CFLAGS="$CFLAGS"
+  CFLAGS="-O2 $CFLAGS"
 fi
 
 # Consult white-list to determine whether to enable werror
