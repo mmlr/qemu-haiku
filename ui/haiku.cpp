@@ -531,6 +531,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 {
 	static bool sMouseWarp = false;
 	static int32 sMouseButtons = 0;
+	static BPoint sMousePosition;
 	bool keyDown = false;
 
 	switch (message->what) {
@@ -657,11 +658,10 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 				return B_SKIP_MESSAGE;
 			}
 
-			BPoint where;
-			message->FindPoint("where", &where);
+			message->FindPoint("where", &sMousePosition);
 
 			// Haiku buttons are the same as QEMU
-			QueueMouseEvent(where, 0, sMouseButtons);
+			QueueMouseEvent(sMousePosition, 0, sMouseButtons);
 
 			if (!sAbsoluteMouse)
 				CenterMouse(sMouseWarp);
@@ -683,12 +683,11 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 				break;
 			}
 
-			BPoint where;
-			message->FindPoint("where", &where);
-
 			sMouseButtons = buttons;
+			message->FindPoint("where", &sMousePosition);
+
 			// Haiku buttons are the same as QEMU
-			QueueMouseEvent(where, 0, sMouseButtons);
+			QueueMouseEvent(sMousePosition, 0, sMouseButtons);
 			return B_SKIP_MESSAGE;
 		} break;
 
@@ -699,10 +698,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 			float delta;
 			message->FindFloat("be:wheel_delta_y", &delta);
 
-			BPoint where;
-			message->FindPoint("where", &where);
-
-			QueueMouseEvent(where, (int32)delta, sMouseButtons);
+			QueueMouseEvent(sMousePosition, (int32)delta, sMouseButtons);
 			return B_SKIP_MESSAGE;
 		} break;
 	}
