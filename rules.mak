@@ -18,7 +18,7 @@ QEMU_DGFLAGS += -MMD -MP -MT $@ -MF $(*D)/$(*F).d
 	$(call quiet-command,$(CC) $(QEMU_CFLAGS) $(QEMU_INCLUDES) $(QEMU_DGFLAGS) $(CFLAGS) -c -o $@ $<,"  CC    $(TARGET_DIR)$@")
 
 %.o: %.cpp
-	$(CC) -Wall -Werror $(CFLAGS) $(QEMU_INCLUDES) -c -o $@ $<
+	$(call quiet-command,$(CC) -Wall -Werror $(CFLAGS) $(QEMU_INCLUDES) -c -o $@ $<,"  CPP   $(TARGET_DIR)$@")
 
 ifeq ($(LIBTOOL),)
 %.lo: %.c
