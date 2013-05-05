@@ -451,11 +451,15 @@ QEMUView::QueueInvalidation()
 void
 QEMUView::ProcessEvents()
 {
-	if (!fEventQueue.Lock())
-		return;
+	while (true) {
+		if (!fEventQueue.Lock())
+			return;
 
-	while (!fEventQueue.IsEmpty()) {
 		BMessage *event = fEventQueue.NextMessage();
+		fEventQueue.Unlock();
+
+		if (event == NULL)
+			return;
 
 		switch (event->what) {
 			case kKeycodeEvent:
@@ -518,8 +522,6 @@ QEMUView::ProcessEvents()
 
 		delete event;
 	}
-
-	fEventQueue.Unlock();
 }
 
 
