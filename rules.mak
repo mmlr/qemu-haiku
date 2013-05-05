@@ -1,5 +1,5 @@
 %.o: %.cpp
-	$(CC) -Wall -Werror -I. -c -o $@ $<
+	$(CC) -Wall -Werror $(CFLAGS) $(QEMU_INCLUDES) -c -o $@ $<
 
 # Don't use implicit rules or variables
 # we have explicit rules for everything
