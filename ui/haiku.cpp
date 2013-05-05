@@ -58,18 +58,20 @@ static const uint32 kShutdownRequest = 'shut';
 static const uint32 kInvalidationRequest = 'ival';
 
 
-// Required functions into QEMU
+// QEMU C interface
 extern "C" {
-void	kbd_put_keycode(int keycode);
-void	kbd_mouse_event(int dx, int dy, int dz, int buttons_state);
-void	qemu_system_shutdown_request(void);
-int		qemu_main(int argc, char **argv, char **envp);
-int		is_graphic_console(void);
-void	console_select(unsigned int index);
-void	vga_hw_update(void);
-void	vga_hw_invalidate(void);
-void	kbd_put_keysym(int keysym);
-}
+#include "qemu-common.h"
+#include "sysemu.h"
+#include "console.h"
+
+static	void	haiku_update(DisplayState *ds, int x, int y, int w, int h);
+static	void	haiku_resize(DisplayState *ds);
+static	void	haiku_refresh(DisplayState *ds);
+		void	haiku_display_init(DisplayState *ds, int fullScreen);
+
+		// Redirected QEMU main
+		int		qemu_main(int argc, char **argv, char **envp);
+};
 
 
 // Haiku keycode to scancode table
@@ -744,19 +746,6 @@ QEMUView::UpdateFrameBuffer(int width, int height, uchar *bits,
 		UnlockLooper();
 	}
 }
-
-
-// QEMU C interface
-extern "C" {
-#include "qemu-common.h"
-#include "sysemu.h"
-#include "console.h"
-
-static	void	haiku_update(DisplayState *ds, int x, int y, int w, int h);
-static	void	haiku_resize(DisplayState *ds);
-static	void	haiku_refresh(DisplayState *ds);
-		void	haiku_display_init(DisplayState *ds, int fullScreen);
-};
 
 
 static void
