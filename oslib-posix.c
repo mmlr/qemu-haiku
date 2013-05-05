@@ -35,6 +35,11 @@
 extern int daemon(int, int);
 #endif
 
+#ifdef __HAIKU__
+/* The old style memalign (vs. posix_memalign) is in malloc.h */
+#include <malloc.h>
+#endif
+
 #include "config-host.h"
 #include "sysemu.h"
 #include "trace.h"
