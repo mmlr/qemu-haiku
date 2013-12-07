@@ -11,6 +11,8 @@ static char *scsibus_get_dev_path(DeviceState *dev);
 static char *scsibus_get_fw_dev_path(DeviceState *dev);
 static int scsi_req_parse(SCSICommand *cmd, SCSIDevice *dev, uint8_t *buf);
 static void scsi_req_dequeue(SCSIRequest *req);
+static uint8_t *scsi_target_alloc_buf(SCSIRequest *req, size_t len);
+static void scsi_target_free_buf(SCSIRequest *req);
 
 static Property scsi_props[] = {
     DEFINE_PROP_UINT32("channel", SCSIDevice, channel, 0),
@@ -209,10 +211,11 @@ static int scsi_qdev_exit(DeviceState *qdev)
 /* handle legacy '-drive if=scsi,...' cmd line args */
 SCSIDevice *scsi_bus_legacy_add_drive(SCSIBus *bus, BlockDriverState *bdrv,
                                       int unit, bool removable, int bootindex,
-                                      const char *serial)
+                                      const char *serial, Error **errp)
 {
     const char *driver;
     DeviceState *dev;
+    Error *err = NULL;
 
     driver = bdrv_is_sg(bdrv) ? "scsi-generic" : "scsi-disk";
     dev = qdev_create(&bus->qbus, driver);
@@ -223,23 +226,29 @@ SCSIDevice *scsi_bus_legacy_add_drive(SCSIBus *bus, BlockDriverState *bdrv,
     if (object_property_find(OBJECT(dev), "removable", NULL)) {
         qdev_prop_set_bit(dev, "removable", removable);
     }
-    if (serial) {
+    if (serial && object_property_find(OBJECT(dev), "serial", NULL)) {
         qdev_prop_set_string(dev, "serial", serial);
     }
     if (qdev_prop_set_drive(dev, "drive", bdrv) < 0) {
+        error_setg(errp, "Setting drive property failed");
         qdev_free(dev);
         return NULL;
     }
-    if (qdev_init(dev) < 0)
+    object_property_set_bool(OBJECT(dev), true, "realized", &err);
+    if (err != NULL) {
+        error_propagate(errp, err);
+        qdev_free(dev);
         return NULL;
+    }
     return SCSI_DEVICE(dev);
 }
 
-int scsi_bus_legacy_handle_cmdline(SCSIBus *bus)
+void scsi_bus_legacy_handle_cmdline(SCSIBus *bus, Error **errp)
 {
     Location loc;
     DriveInfo *dinfo;
-    int res = 0, unit;
+    int unit;
+    Error *err = NULL;
 
     loc_push_none(&loc);
     for (unit = 0; unit <= bus->info->max_target; unit++) {
@@ -248,13 +257,14 @@ int scsi_bus_legacy_handle_cmdline(SCSIBus *bus)
             continue;
         }
         qemu_opts_loc_restore(dinfo->opts);
-        if (!scsi_bus_legacy_add_drive(bus, dinfo->bdrv, unit, false, -1, NULL)) {
-            res = -1;
+        scsi_bus_legacy_add_drive(bus, dinfo->bdrv, unit, false, -1, NULL,
+                                  &err);
+        if (err != NULL) {
+            error_propagate(errp, err);
             break;
         }
     }
     loc_pop(&loc);
-    return res;
 }
 
 static int32_t scsi_invalid_field(SCSIRequest *req, uint8_t *buf)
@@ -309,7 +319,8 @@ typedef struct SCSITargetReq SCSITargetReq;
 struct SCSITargetReq {
     SCSIRequest req;
     int len;
-    uint8_t buf[2056];
+    uint8_t *buf;
+    int buf_len;
 };
 
 static void store_lun(uint8_t *outbuf, int lun)
@@ -353,14 +364,12 @@ static bool scsi_target_emulate_report_luns(SCSITargetReq *r)
     if (!found_lun0) {
         n += 8;
     }
-    len = MIN(n + 8, r->req.cmd.xfer & ~7);
-    if (len > sizeof(r->buf)) {
-        /* TODO: > 256 LUNs? */
-        return false;
-    }
 
+    scsi_target_alloc_buf(&r->req, n + 8);
+
+    len = MIN(n + 8, r->req.cmd.xfer & ~7);
     memset(r->buf, 0, len);
-    stl_be_p(&r->buf, n);
+    stl_be_p(r->buf, n);
     i = found_lun0 ? 8 : 16;
     QTAILQ_FOREACH(kid, &r->req.bus->qbus.children, sibling) {
         DeviceState *qdev = kid->child;
@@ -379,6 +388,9 @@ static bool scsi_target_emulate_report_luns(SCSITargetReq *r)
 static bool scsi_target_emulate_inquiry(SCSITargetReq *r)
 {
     assert(r->req.dev->lun != r->req.lun);
+
+    scsi_target_alloc_buf(&r->req, SCSI_INQUIRY_LEN);
+
     if (r->req.cmd.buf[1] & 0x2) {
         /* Command support data - optional, not implemented */
         return false;
@@ -403,7 +415,7 @@ static bool scsi_target_emulate_inquiry(SCSITargetReq *r)
             return false;
         }
         /* done with EVPD */
-        assert(r->len < sizeof(r->buf));
+        assert(r->len < r->buf_len);
         r->len = MIN(r->req.cmd.xfer, r->len);
         return true;
     }
@@ -447,8 +459,8 @@ static int32_t scsi_target_send_command(SCSIRequest *req, uint8_t *buf)
         }
         break;
     case REQUEST_SENSE:
-        r->len = scsi_device_get_sense(r->req.dev, r->buf,
-                                       MIN(req->cmd.xfer, sizeof r->buf),
+        scsi_target_alloc_buf(&r->req, SCSI_SENSE_LEN);
+        r->len = scsi_device_get_sense(r->req.dev, r->buf, r->buf_len,
                                        (req->cmd.buf[1] & 1) == 0);
         if (r->req.dev->sense_is_ua) {
             scsi_device_unit_attention_reported(req->dev);
@@ -493,11 +505,29 @@ static uint8_t *scsi_target_get_buf(SCSIRequest *req)
     return r->buf;
 }
 
+static uint8_t *scsi_target_alloc_buf(SCSIRequest *req, size_t len)
+{
+    SCSITargetReq *r = DO_UPCAST(SCSITargetReq, req, req);
+
+    r->buf = g_malloc(len);
+    r->buf_len = len;
+
+    return r->buf;
+}
+
+static void scsi_target_free_buf(SCSIRequest *req)
+{
+    SCSITargetReq *r = DO_UPCAST(SCSITargetReq, req, req);
+
+    g_free(r->buf);
+}
+
 static const struct SCSIReqOps reqops_target_command = {
     .size         = sizeof(SCSITargetReq),
     .send_command = scsi_target_send_command,
     .read_data    = scsi_target_read_data,
     .get_buf      = scsi_target_get_buf,
+    .free_req     = scsi_target_free_buf,
 };
 
 
@@ -505,10 +535,12 @@ SCSIRequest *scsi_req_alloc(const SCSIReqOps *reqops, SCSIDevice *d,
                             uint32_t tag, uint32_t lun, void *hba_private)
 {
     SCSIRequest *req;
+    SCSIBus *bus = scsi_bus_from_device(d);
+    BusState *qbus = BUS(bus);
 
     req = g_malloc0(reqops->size);
     req->refcount = 1;
-    req->bus = scsi_bus_from_device(d);
+    req->bus = bus;
     req->dev = d;
     req->tag = tag;
     req->lun = lun;
@@ -516,6 +548,8 @@ SCSIRequest *scsi_req_alloc(const SCSIReqOps *reqops, SCSIDevice *d,
     req->status = -1;
     req->sense_len = 0;
     req->ops = reqops;
+    object_ref(OBJECT(d));
+    object_ref(OBJECT(qbus->parent));
     trace_scsi_req_alloc(req->dev->id, req->lun, req->tag);
     return req;
 }
@@ -1353,7 +1387,7 @@ int scsi_build_sense(uint8_t *in_buf, int in_len,
         buf[7] = 10;
         buf[12] = sense.asc;
         buf[13] = sense.ascq;
-        return MIN(len, 18);
+        return MIN(len, SCSI_SENSE_LEN);
     } else {
         /* Return descriptor format sense buffer */
         buf[0] = 0x72;
@@ -1498,13 +1532,17 @@ void scsi_req_unref(SCSIRequest *req)
 {
     assert(req->refcount > 0);
     if (--req->refcount == 0) {
-        SCSIBus *bus = DO_UPCAST(SCSIBus, qbus, req->dev->qdev.parent_bus);
+        BusState *qbus = req->dev->qdev.parent_bus;
+        SCSIBus *bus = DO_UPCAST(SCSIBus, qbus, qbus);
+
         if (bus->info->free_request && req->hba_private) {
             bus->info->free_request(bus, req->hba_private);
         }
         if (req->ops->free_req) {
             req->ops->free_req(req);
         }
+        object_unref(OBJECT(req->dev));
+        object_unref(OBJECT(qbus->parent));
         g_free(req);
     }
 }
@@ -1865,6 +1903,7 @@ const VMStateDescription vmstate_scsi_device = {
 static void scsi_device_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
+    set_bit(DEVICE_CATEGORY_STORAGE, k->categories);
     k->bus_type = TYPE_SCSI_BUS;
     k->init     = scsi_qdev_init;
     k->unplug   = scsi_qdev_unplug;

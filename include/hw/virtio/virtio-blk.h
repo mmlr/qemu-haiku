@@ -123,8 +123,10 @@ typedef struct VirtIOBlock {
     BlockConf *conf;
     VirtIOBlkConf blk;
     unsigned short sector_mask;
+    bool original_wce;
     VMChangeStateEntry *change;
 #ifdef CONFIG_VIRTIO_BLK_DATA_PLANE
+    Notifier migration_state_notifier;
     struct VirtIOBlockDataPlane *dataplane;
 #endif
 } VirtIOBlock;

@@ -241,7 +241,11 @@ static int usb_host_get_port(libusb_device *dev, char *port, size_t len)
     size_t off;
     int rc, i;
 
+#if LIBUSBX_API_VERSION >= 0x01000102
+    rc = libusb_get_port_numbers(dev, path, 7);
+#else
     rc = libusb_get_port_path(ctx, dev, path, 7);
+#endif
     if (rc < 0) {
         return 0;
     }
@@ -1347,6 +1351,7 @@ static void usb_host_class_initfn(ObjectClass *klass, void *data)
     uc->flush_ep_queue = usb_host_flush_ep_queue;
     dc->vmsd = &vmstate_usb_host;
     dc->props = usb_host_dev_properties;
+    set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
 }
 
 static TypeInfo usb_host_dev_info = {

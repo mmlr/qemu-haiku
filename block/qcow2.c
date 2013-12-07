@@ -291,9 +291,25 @@ static QemuOptsList qcow2_runtime_opts = {
     .head = QTAILQ_HEAD_INITIALIZER(qcow2_runtime_opts.head),
     .desc = {
         {
-            .name = "lazy_refcounts",
+            .name = QCOW2_OPT_LAZY_REFCOUNTS,
             .type = QEMU_OPT_BOOL,
             .help = "Postpone refcount updates",
+        },
+        {
+            .name = QCOW2_OPT_DISCARD_REQUEST,
+            .type = QEMU_OPT_BOOL,
+            .help = "Pass guest discard requests to the layer below",
+        },
+        {
+            .name = QCOW2_OPT_DISCARD_SNAPSHOT,
+            .type = QEMU_OPT_BOOL,
+            .help = "Generate discard requests when snapshot related space "
+                    "is freed",
+        },
+        {
+            .name = QCOW2_OPT_DISCARD_OTHER,
+            .type = QEMU_OPT_BOOL,
+            .help = "Generate discard requests when other clusters are freed",
         },
         { /* end of list */ }
     },
@@ -470,6 +486,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags)
     }
 
     QLIST_INIT(&s->cluster_allocs);
+    QTAILQ_INIT(&s->discards);
 
     /* read qcow2 extensions */
     if (qcow2_read_extensions(bs, header.header_length, ext_end, NULL)) {
@@ -531,6 +548,16 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags)
 
     s->use_lazy_refcounts = qemu_opt_get_bool(opts, QCOW2_OPT_LAZY_REFCOUNTS,
         (s->compatible_features & QCOW2_COMPAT_LAZY_REFCOUNTS));
+
+    s->discard_passthrough[QCOW2_DISCARD_NEVER] = false;
+    s->discard_passthrough[QCOW2_DISCARD_ALWAYS] = true;
+    s->discard_passthrough[QCOW2_DISCARD_REQUEST] =
+        qemu_opt_get_bool(opts, QCOW2_OPT_DISCARD_REQUEST,
+                          flags & BDRV_O_UNMAP);
+    s->discard_passthrough[QCOW2_DISCARD_SNAPSHOT] =
+        qemu_opt_get_bool(opts, QCOW2_OPT_DISCARD_SNAPSHOT, true);
+    s->discard_passthrough[QCOW2_DISCARD_OTHER] =
+        qemu_opt_get_bool(opts, QCOW2_OPT_DISCARD_OTHER, false);
 
     qemu_opts_del(opts);
 
@@ -621,13 +648,11 @@ static int coroutine_fn qcow2_co_is_allocated(BlockDriverState *bs,
     int ret;
 
     *pnum = nb_sectors;
-    /* FIXME We can get errors here, but the bdrv_co_is_allocated interface
-     * can't pass them on today */
     qemu_co_mutex_lock(&s->lock);
     ret = qcow2_get_cluster_offset(bs, sector_num << 9, pnum, &cluster_offset);
     qemu_co_mutex_unlock(&s->lock);
     if (ret < 0) {
-        *pnum = 0;
+        return ret;
     }
 
     return (cluster_offset != 0) || (ret == QCOW2_CLUSTER_ZERO);
@@ -1196,7 +1221,8 @@ static int preallocate(BlockDriverState *bs)
 
         ret = qcow2_alloc_cluster_link_l2(bs, meta);
         if (ret < 0) {
-            qcow2_free_any_clusters(bs, meta->alloc_offset, meta->nb_clusters);
+            qcow2_free_any_clusters(bs, meta->alloc_offset, meta->nb_clusters,
+                                    QCOW2_DISCARD_NEVER);
             return ret;
         }
 
@@ -1757,6 +1783,7 @@ static BlockDriver bdrv_qcow2 = {
     .bdrv_close         = qcow2_close,
     .bdrv_reopen_prepare  = qcow2_reopen_prepare,
     .bdrv_create        = qcow2_create,
+    .bdrv_has_zero_init = bdrv_has_zero_init_1,
     .bdrv_co_is_allocated = qcow2_co_is_allocated,
     .bdrv_set_key       = qcow2_set_key,
     .bdrv_make_empty    = qcow2_make_empty,

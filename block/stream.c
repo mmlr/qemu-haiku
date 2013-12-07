@@ -120,7 +120,7 @@ wait:
         if (ret == 1) {
             /* Allocated in the top, no need to copy.  */
             copy = false;
-        } else {
+        } else if (ret >= 0) {
             /* Copy if allocated in the intermediate images.  Limit to the
              * known-unallocated area [sector_num, sector_num+n).  */
             ret = bdrv_co_is_allocated_above(bs->backing_hd, base,
@@ -198,7 +198,7 @@ static void stream_set_speed(BlockJob *job, int64_t speed, Error **errp)
     ratelimit_set_speed(&s->limit, speed / BDRV_SECTOR_SIZE, SLICE_TIME);
 }
 
-static BlockJobType stream_job_type = {
+static const BlockJobType stream_job_type = {
     .instance_size = sizeof(StreamBlockJob),
     .job_type      = "stream",
     .set_speed     = stream_set_speed,
