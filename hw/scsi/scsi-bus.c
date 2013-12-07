@@ -74,10 +74,10 @@ static void scsi_device_unit_attention_reported(SCSIDevice *s)
 }
 
 /* Create a scsi bus, and attach devices to it.  */
-void scsi_bus_new(SCSIBus *bus, DeviceState *host, const SCSIBusInfo *info,
-                  const char *bus_name)
+void scsi_bus_new(SCSIBus *bus, size_t bus_size, DeviceState *host,
+                  const SCSIBusInfo *info, const char *bus_name)
 {
-    qbus_create_inplace(&bus->qbus, TYPE_SCSI_BUS, host, bus_name);
+    qbus_create_inplace(bus, bus_size, TYPE_SCSI_BUS, host, bus_name);
     bus->busnr = next_scsi_bus++;
     bus->info = info;
     bus->qbus.allow_hotplug = 1;
@@ -178,7 +178,7 @@ static int scsi_qdev_init(DeviceState *qdev)
         d = scsi_device_find(bus, dev->channel, dev->id, dev->lun);
         assert(d);
         if (d->lun == dev->lun && dev != d) {
-            qdev_free(&d->qdev);
+            object_unparent(OBJECT(d));
         }
     }
 
@@ -231,13 +231,13 @@ SCSIDevice *scsi_bus_legacy_add_drive(SCSIBus *bus, BlockDriverState *bdrv,
     }
     if (qdev_prop_set_drive(dev, "drive", bdrv) < 0) {
         error_setg(errp, "Setting drive property failed");
-        qdev_free(dev);
+        object_unparent(OBJECT(dev));
         return NULL;
     }
     object_property_set_bool(OBJECT(dev), true, "realized", &err);
     if (err != NULL) {
         error_propagate(errp, err);
-        qdev_free(dev);
+        object_unparent(OBJECT(dev));
         return NULL;
     }
     return SCSI_DEVICE(dev);
@@ -369,7 +369,7 @@ static bool scsi_target_emulate_report_luns(SCSITargetReq *r)
 
     len = MIN(n + 8, r->req.cmd.xfer & ~7);
     memset(r->buf, 0, len);
-    stl_be_p(r->buf, n);
+    stl_be_p(&r->buf[0], n);
     i = found_lun0 ? 8 : 16;
     QTAILQ_FOREACH(kid, &r->req.bus->qbus.children, sibling) {
         DeviceState *qdev = kid->child;
@@ -426,7 +426,7 @@ static bool scsi_target_emulate_inquiry(SCSITargetReq *r)
     }
 
     /* PAGE CODE == 0 */
-    r->len = MIN(r->req.cmd.xfer, 36);
+    r->len = MIN(r->req.cmd.xfer, SCSI_INQUIRY_LEN);
     memset(r->buf, 0, r->len);
     if (r->req.lun != 0) {
         r->buf[0] = TYPE_NO_LUN;
@@ -460,7 +460,8 @@ static int32_t scsi_target_send_command(SCSIRequest *req, uint8_t *buf)
         break;
     case REQUEST_SENSE:
         scsi_target_alloc_buf(&r->req, SCSI_SENSE_LEN);
-        r->len = scsi_device_get_sense(r->req.dev, r->buf, r->buf_len,
+        r->len = scsi_device_get_sense(r->req.dev, r->buf,
+                                       MIN(req->cmd.xfer, r->buf_len),
                                        (req->cmd.buf[1] & 1) == 0);
         if (r->req.dev->sense_is_ua) {
             scsi_device_unit_attention_reported(req->dev);

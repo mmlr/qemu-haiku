@@ -608,19 +608,19 @@ static ioreq_t *cpu_get_ioreq(XenIOState *state)
 
     port = xc_evtchn_pending(state->xce_handle);
     if (port == state->bufioreq_local_port) {
-        qemu_mod_timer(state->buffered_io_timer,
-                BUFFER_IO_MAX_DELAY + qemu_get_clock_ms(rt_clock));
+        timer_mod(state->buffered_io_timer,
+                BUFFER_IO_MAX_DELAY + qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
         return NULL;
     }
 
     if (port != -1) {
-        for (i = 0; i < smp_cpus; i++) {
+        for (i = 0; i < max_cpus; i++) {
             if (state->ioreq_local_port[i] == port) {
                 break;
             }
         }
 
-        if (i == smp_cpus) {
+        if (i == max_cpus) {
             hw_error("Fatal error while trying to get io event!\n");
         }
 
@@ -830,10 +830,10 @@ static void handle_buffered_io(void *opaque)
     XenIOState *state = opaque;
 
     if (handle_buffered_iopage(state)) {
-        qemu_mod_timer(state->buffered_io_timer,
-                BUFFER_IO_MAX_DELAY + qemu_get_clock_ms(rt_clock));
+        timer_mod(state->buffered_io_timer,
+                BUFFER_IO_MAX_DELAY + qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
     } else {
-        qemu_del_timer(state->buffered_io_timer);
+        timer_del(state->buffered_io_timer);
         xc_evtchn_unmask(state->xce_handle, state->bufioreq_local_port);
     }
 }
@@ -949,7 +949,7 @@ static void xenstore_record_dm_state(struct xs_handle *xs, const char *state)
         exit(1);
     }
 
-    snprintf(path, sizeof (path), "/local/domain/0/device-model/%u/state", xen_domid);
+    snprintf(path, sizeof (path), "device-model/%u/state", xen_domid);
     if (!xs_write(xs, XBT_NULL, path, state, strlen(state))) {
         fprintf(stderr, "error recording dm state\n");
         exit(1);
@@ -964,7 +964,7 @@ static void xen_main_loop_prepare(XenIOState *state)
         evtchn_fd = xc_evtchn_fd(state->xce_handle);
     }
 
-    state->buffered_io_timer = qemu_new_timer_ms(rt_clock, handle_buffered_io,
+    state->buffered_io_timer = timer_new_ms(QEMU_CLOCK_REALTIME, handle_buffered_io,
                                                  state);
 
     if (evtchn_fd != -1) {
@@ -1115,10 +1115,10 @@ int xen_hvm_init(MemoryRegion **ram_memory)
         hw_error("map buffered IO page returned error %d", errno);
     }
 
-    state->ioreq_local_port = g_malloc0(smp_cpus * sizeof (evtchn_port_t));
+    state->ioreq_local_port = g_malloc0(max_cpus * sizeof (evtchn_port_t));
 
     /* FIXME: how about if we overflow the page here? */
-    for (i = 0; i < smp_cpus; i++) {
+    for (i = 0; i < max_cpus; i++) {
         rc = xc_evtchn_bind_interdomain(state->xce_handle, xen_domid,
                                         xen_vcpu_eport(state->shared_page, i));
         if (rc == -1) {
