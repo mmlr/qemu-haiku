@@ -6,7 +6,8 @@
 #ifdef NEED_CPU_H
 /* Disassemble this for me please... (debugging). */
 void disas(FILE *out, void *code, unsigned long size);
-void target_disas(FILE *out, target_ulong code, target_ulong size, int flags);
+void target_disas(FILE *out, CPUArchState *env, target_ulong code,
+                  target_ulong size, int flags);
 
 void monitor_disas(Monitor *mon, CPUArchState *env,
                    target_ulong pc, int nb_insn, int is_physical, int flags);
@@ -22,7 +23,7 @@ struct elf64_sym;
 #if defined(CONFIG_USER_ONLY)
 typedef const char *(*lookup_symbol_t)(struct syminfo *s, target_ulong orig_addr);
 #else
-typedef const char *(*lookup_symbol_t)(struct syminfo *s, target_phys_addr_t orig_addr);
+typedef const char *(*lookup_symbol_t)(struct syminfo *s, hwaddr orig_addr);
 #endif
 
 struct syminfo {
