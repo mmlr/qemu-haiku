@@ -346,7 +346,10 @@ static int raw_reopen_prepare(BDRVReopenState *state,
 
     raw_s->fd = -1;
 
-    int fcntl_flags = O_APPEND | O_ASYNC | O_NONBLOCK;
+    int fcntl_flags = O_APPEND | O_NONBLOCK;
+#ifdef O_ASYNC
+	fcntl_flags |= O_ASYNC;
+#endif
 #ifdef O_NOATIME
     fcntl_flags |= O_NOATIME;
 #endif
