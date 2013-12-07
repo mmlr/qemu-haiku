@@ -12,8 +12,8 @@
 
 #include "qemu/rng-random.h"
 #include "qemu/rng.h"
-#include "qerror.h"
-#include "main-loop.h"
+#include "qapi/qmp/qerror.h"
+#include "qemu/main-loop.h"
 
 struct RndRandom
 {
@@ -41,6 +41,9 @@ static void entropy_available(void *opaque)
     ssize_t len;
 
     len = read(s->fd, buffer, s->size);
+    if (len < 0 && errno == EAGAIN) {
+        return;
+    }
     g_assert(len != -1);
 
     s->receive_func(s->opaque, buffer, len);
@@ -144,7 +147,7 @@ static void rng_random_class_init(ObjectClass *klass, void *data)
     rbc->opened = rng_random_opened;
 }
 
-static TypeInfo rng_random_info = {
+static const TypeInfo rng_random_info = {
     .name = TYPE_RNG_RANDOM,
     .parent = TYPE_RNG_BACKEND,
     .instance_size = sizeof(RndRandom),

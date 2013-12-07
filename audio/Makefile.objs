@@ -13,3 +13,6 @@ common-obj-$(CONFIG_HAIKU) += haikuaudio.o
 common-obj-$(CONFIG_AUDIO_PT_INT) += audio_pt_int.o
 common-obj-$(CONFIG_AUDIO_WIN_INT) += audio_win_int.o
 common-obj-y += wavcapture.o
+
+$(obj)/audio.o $(obj)/fmodaudio.o: QEMU_CFLAGS += $(FMOD_CFLAGS)
+$(obj)/sdlaudio.o: QEMU_CFLAGS += $(SDL_CFLAGS)
