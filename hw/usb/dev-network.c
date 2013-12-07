@@ -1001,6 +1001,13 @@ static int rndis_keepalive_response(USBNetState *s,
     return 0;
 }
 
+/* Prepare to receive the next packet */
+static void usb_net_reset_in_buf(USBNetState *s)
+{
+    s->in_ptr = s->in_len = 0;
+    qemu_flush_queued_packets(&s->nic->nc);
+}
+
 static int rndis_parse(USBNetState *s, uint8_t *data, int length)
 {
     uint32_t msg_type;
@@ -1025,7 +1032,8 @@ static int rndis_parse(USBNetState *s, uint8_t *data, int length)
 
     case RNDIS_RESET_MSG:
         rndis_clear_responsequeue(s);
-        s->out_ptr = s->in_ptr = s->in_len = 0;
+        s->out_ptr = 0;
+        usb_net_reset_in_buf(s);
         return rndis_reset_response(s, (rndis_reset_msg_type *) data);
 
     case RNDIS_KEEPALIVE_MSG:
@@ -1135,7 +1143,7 @@ static int usb_net_handle_datain(USBNetState *s, USBPacket *p)
     int ret = USB_RET_NAK;
 
     if (s->in_ptr > s->in_len) {
-        s->in_ptr = s->in_len = 0;
+        usb_net_reset_in_buf(s);
         ret = USB_RET_NAK;
         return ret;
     }
@@ -1152,7 +1160,7 @@ static int usb_net_handle_datain(USBNetState *s, USBPacket *p)
     if (s->in_ptr >= s->in_len &&
                     (is_rndis(s) || (s->in_len & (64 - 1)) || !ret)) {
         /* no short packet necessary */
-        s->in_ptr = s->in_len = 0;
+        usb_net_reset_in_buf(s);
     }
 
 #ifdef TRAFFIC_DEBUG
@@ -1247,23 +1255,35 @@ static int usb_net_handle_data(USBDevice *dev, USBPacket *p)
     return ret;
 }
 
-static ssize_t usbnet_receive(VLANClientState *nc, const uint8_t *buf, size_t size)
+static ssize_t usbnet_receive(NetClientState *nc, const uint8_t *buf, size_t size)
 {
     USBNetState *s = DO_UPCAST(NICState, nc, nc)->opaque;
-    struct rndis_packet_msg_type *msg;
+    uint8_t *in_buf = s->in_buf;
+    size_t total_size = size;
 
     if (is_rndis(s)) {
-        msg = (struct rndis_packet_msg_type *) s->in_buf;
         if (s->rndis_state != RNDIS_DATA_INITIALIZED) {
             return -1;
         }
-        if (size + sizeof(struct rndis_packet_msg_type) > sizeof(s->in_buf))
-            return -1;
+        total_size += sizeof(struct rndis_packet_msg_type);
+    }
+    if (total_size > sizeof(s->in_buf)) {
+        return -1;
+    }
 
+    /* Only accept packet if input buffer is empty */
+    if (s->in_len > 0) {
+        return 0;
+    }
+
+    if (is_rndis(s)) {
+        struct rndis_packet_msg_type *msg;
+
+        msg = (struct rndis_packet_msg_type *)in_buf;
         memset(msg, 0, sizeof(struct rndis_packet_msg_type));
         msg->MessageType = cpu_to_le32(RNDIS_PACKET_MSG);
-        msg->MessageLength = cpu_to_le32(size + sizeof(struct rndis_packet_msg_type));
-        msg->DataOffset = cpu_to_le32(sizeof(struct rndis_packet_msg_type) - 8);
+        msg->MessageLength = cpu_to_le32(size + sizeof(*msg));
+        msg->DataOffset = cpu_to_le32(sizeof(*msg) - 8);
         msg->DataLength = cpu_to_le32(size);
         /* msg->OOBDataOffset;
          * msg->OOBDataLength;
@@ -1273,19 +1293,16 @@ static ssize_t usbnet_receive(VLANClientState *nc, const uint8_t *buf, size_t si
          * msg->VcHandle;
          * msg->Reserved;
          */
-        memcpy(msg + 1, buf, size);
-        s->in_len = size + sizeof(struct rndis_packet_msg_type);
-    } else {
-        if (size > sizeof(s->in_buf))
-            return -1;
-        memcpy(s->in_buf, buf, size);
-        s->in_len = size;
+        in_buf += sizeof(*msg);
     }
+
+    memcpy(in_buf, buf, size);
+    s->in_len = total_size;
     s->in_ptr = 0;
     return size;
 }
 
-static int usbnet_can_receive(VLANClientState *nc)
+static int usbnet_can_receive(NetClientState *nc)
 {
     USBNetState *s = DO_UPCAST(NICState, nc, nc)->opaque;
 
@@ -1296,7 +1313,7 @@ static int usbnet_can_receive(VLANClientState *nc)
     return !s->in_len;
 }
 
-static void usbnet_cleanup(VLANClientState *nc)
+static void usbnet_cleanup(NetClientState *nc)
 {
     USBNetState *s = DO_UPCAST(NICState, nc, nc)->opaque;
 
@@ -1309,11 +1326,11 @@ static void usb_net_handle_destroy(USBDevice *dev)
 
     /* TODO: remove the nd_table[] entry */
     rndis_clear_responsequeue(s);
-    qemu_del_vlan_client(&s->nic->nc);
+    qemu_del_net_client(&s->nic->nc);
 }
 
 static NetClientInfo net_usbnet_info = {
-    .type = NET_CLIENT_TYPE_NIC,
+    .type = NET_CLIENT_OPTIONS_KIND_NIC,
     .size = sizeof(NICState),
     .can_receive = usbnet_can_receive,
     .receive = usbnet_receive,
@@ -1356,6 +1373,7 @@ static int usb_net_initfn(USBDevice *dev)
 
 static USBDevice *usb_net_init(USBBus *bus, const char *cmdline)
 {
+    Error *local_err = NULL;
     USBDevice *dev;
     QemuOpts *opts;
     int idx;
@@ -1367,8 +1385,10 @@ static USBDevice *usb_net_init(USBBus *bus, const char *cmdline)
     qemu_opt_set(opts, "type", "nic");
     qemu_opt_set(opts, "model", "usb");
 
-    idx = net_client_init(NULL, opts, 0);
-    if (idx == -1) {
+    idx = net_client_init(opts, 0, &local_err);
+    if (error_is_set(&local_err)) {
+        qerror_report_err(local_err);
+        error_free(local_err);
         return NULL;
     }
 

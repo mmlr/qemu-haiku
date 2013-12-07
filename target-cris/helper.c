@@ -121,14 +121,14 @@ static void do_interruptv10(CPUCRISState *env)
 			/* These exceptions are genereated by the core itself.
 			   ERP should point to the insn following the brk.  */
 			ex_vec = env->trap_vector;
-			env->pregs[PR_ERP] = env->pc;
+			env->pregs[PRV10_BRP] = env->pc;
 			break;
 
 		case EXCP_NMI:
 			/* NMI is hardwired to vector zero.  */
 			ex_vec = 0;
-			env->pregs[PR_CCS] &= ~M_FLAG;
-			env->pregs[PR_NRP] = env->pc;
+			env->pregs[PR_CCS] &= ~M_FLAG_V10;
+			env->pregs[PRV10_BRP] = env->pc;
 			break;
 
 		case EXCP_BUSFAULT:
@@ -151,7 +151,7 @@ static void do_interruptv10(CPUCRISState *env)
 	}
 
 	/* Now that we are in kernel mode, load the handlers address.  */
-	env->pc = ldl_code(env->pregs[PR_EBP] + ex_vec * 4);
+        env->pc = cpu_ldl_code(env, env->pregs[PR_EBP] + ex_vec * 4);
 	env->locked_irq = 1;
 	env->pregs[PR_CCS] |= F_FLAG_V10; /* set F.  */
 
@@ -185,7 +185,7 @@ void do_interrupt(CPUCRISState *env)
 		case EXCP_NMI:
 			/* NMI is hardwired to vector zero.  */
 			ex_vec = 0;
-			env->pregs[PR_CCS] &= ~M_FLAG;
+			env->pregs[PR_CCS] &= ~M_FLAG_V32;
 			env->pregs[PR_NRP] = env->pc;
 			break;
 
@@ -233,7 +233,7 @@ void do_interrupt(CPUCRISState *env)
 	/* Now that we are in kernel mode, load the handlers address.
 	   This load may not fault, real hw leaves that behaviour as
 	   undefined.  */
-	env->pc = ldl_code(env->pregs[PR_EBP] + ex_vec * 4);
+        env->pc = cpu_ldl_code(env, env->pregs[PR_EBP] + ex_vec * 4);
 
 	/* Clear the excption_index to avoid spurios hw_aborts for recursive
 	   bus faults.  */

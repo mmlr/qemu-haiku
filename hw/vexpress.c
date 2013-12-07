@@ -62,7 +62,6 @@ enum {
     VE_COMPACTFLASH,
     VE_CLCD,
     VE_NORFLASH0,
-    VE_NORFLASH0ALIAS,
     VE_NORFLASH1,
     VE_SRAM,
     VE_VIDEORAM,
@@ -104,9 +103,8 @@ static target_phys_addr_t motherboard_legacy_map[] = {
 };
 
 static target_phys_addr_t motherboard_aseries_map[] = {
-    /* CS0: 0x00000000 .. 0x0c000000 */
-    [VE_NORFLASH0] = 0x00000000,
-    [VE_NORFLASH0ALIAS] = 0x08000000,
+    /* CS0: 0x08000000 .. 0x0c000000 */
+    [VE_NORFLASH0] = 0x08000000,
     /* CS4: 0x0c000000 .. 0x10000000 */
     [VE_NORFLASH1] = 0x0c000000,
     /* CS5: 0x10000000 .. 0x14000000 */
@@ -159,7 +157,6 @@ static void a9_daughterboard_init(const VEDBoardInfo *daughterboard,
                                   const char *cpu_model,
                                   qemu_irq *pic, uint32_t *proc_id)
 {
-    CPUARMState *env = NULL;
     MemoryRegion *sysmem = get_system_memory();
     MemoryRegion *ram = g_new(MemoryRegion, 1);
     MemoryRegion *lowram = g_new(MemoryRegion, 1);
@@ -177,12 +174,12 @@ static void a9_daughterboard_init(const VEDBoardInfo *daughterboard,
     *proc_id = 0x0c000191;
 
     for (n = 0; n < smp_cpus; n++) {
-        env = cpu_init(cpu_model);
-        if (!env) {
+        ARMCPU *cpu = cpu_arm_init(cpu_model);
+        if (!cpu) {
             fprintf(stderr, "Unable to find CPU definition\n");
             exit(1);
         }
-        irqp = arm_pic_init_cpu(env);
+        irqp = arm_pic_init_cpu(cpu);
         cpu_irq[n] = irqp[ARM_PIC_CPU_IRQ];
     }
 
@@ -259,7 +256,6 @@ static void a15_daughterboard_init(const VEDBoardInfo *daughterboard,
                                    qemu_irq *pic, uint32_t *proc_id)
 {
     int n;
-    CPUARMState *env = NULL;
     MemoryRegion *sysmem = get_system_memory();
     MemoryRegion *ram = g_new(MemoryRegion, 1);
     MemoryRegion *sram = g_new(MemoryRegion, 1);
@@ -274,19 +270,28 @@ static void a15_daughterboard_init(const VEDBoardInfo *daughterboard,
     *proc_id = 0x14000217;
 
     for (n = 0; n < smp_cpus; n++) {
+        ARMCPU *cpu;
         qemu_irq *irqp;
-        env = cpu_init(cpu_model);
-        if (!env) {
+
+        cpu = cpu_arm_init(cpu_model);
+        if (!cpu) {
             fprintf(stderr, "Unable to find CPU definition\n");
             exit(1);
         }
-        irqp = arm_pic_init_cpu(env);
+        irqp = arm_pic_init_cpu(cpu);
         cpu_irq[n] = irqp[ARM_PIC_CPU_IRQ];
     }
 
-    if (ram_size > 0x80000000) {
-        fprintf(stderr, "vexpress-a15: cannot model more than 2GB RAM\n");
-        exit(1);
+    {
+        /* We have to use a separate 64 bit variable here to avoid the gcc
+         * "comparison is always false due to limited range of data type"
+         * warning if we are on a host where ram_addr_t is 32 bits.
+         */
+        uint64_t rsz = ram_size;
+        if (rsz > (30ULL * 1024 * 1024 * 1024)) {
+            fprintf(stderr, "vexpress-a15: cannot model more than 30GB RAM\n");
+            exit(1);
+        }
     }
 
     memory_region_init_ram(ram, "vexpress.highmem", ram_size);
@@ -406,7 +411,6 @@ static void vexpress_common_init(const VEDBoardInfo *daughterboard,
     sysbus_create_simple("pl111", map[VE_CLCD], pic[14]);
 
     /* VE_NORFLASH0: not modelled */
-    /* VE_NORFLASH0ALIAS: not modelled */
     /* VE_NORFLASH1: not modelled */
 
     sram_size = 0x2000000;
@@ -420,7 +424,7 @@ static void vexpress_common_init(const VEDBoardInfo *daughterboard,
     memory_region_add_subregion(sysmem, map[VE_VIDEORAM], vram);
 
     /* 0x4e000000 LAN9118 Ethernet */
-    if (nd_table[0].vlan) {
+    if (nd_table[0].used) {
         lan9118_init(&nd_table[0], map[VE_ETHERNET], pic[15]);
     }
 
@@ -438,7 +442,7 @@ static void vexpress_common_init(const VEDBoardInfo *daughterboard,
     vexpress_binfo.smp_loader_start = map[VE_SRAM];
     vexpress_binfo.smp_bootreg_addr = map[VE_SYSREGS] + 0x30;
     vexpress_binfo.gic_cpu_if_addr = daughterboard->gic_cpu_if_addr;
-    arm_load_kernel(first_cpu, &vexpress_binfo);
+    arm_load_kernel(arm_env_get_cpu(first_cpu), &vexpress_binfo);
 }
 
 static void vexpress_a9_init(ram_addr_t ram_size,

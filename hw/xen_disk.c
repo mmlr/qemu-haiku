@@ -35,15 +35,10 @@
 #include <sys/mman.h>
 #include <sys/uio.h>
 
-#include <xs.h>
-#include <xenctrl.h>
-#include <xen/io/xenbus.h>
-
 #include "hw.h"
-#include "block_int.h"
 #include "qemu-char.h"
-#include "xen_blkif.h"
 #include "xen_backend.h"
+#include "xen_blkif.h"
 #include "blockdev.h"
 
 /* ------------------------------------------------------------- */
@@ -650,7 +645,7 @@ static int blk_init(struct XenDevice *xendev)
     if (blkdev->file_size < 0) {
         xen_be_printf(&blkdev->xendev, 1, "bdrv_getlength: %d (%s) | drv %s\n",
                       (int)blkdev->file_size, strerror(-blkdev->file_size),
-                      blkdev->bs->drv ? blkdev->bs->drv->format_name : "-");
+                      bdrv_get_format_name(blkdev->bs) ?: "-");
         blkdev->file_size = 0;
     }
 

@@ -32,6 +32,7 @@
 #include "acl.h"
 #include "qemu-objects.h"
 #include "qmp-commands.h"
+#include "osdep.h"
 
 #define VNC_REFRESH_INTERVAL_BASE 30
 #define VNC_REFRESH_INTERVAL_INC  50
@@ -371,6 +372,10 @@ VncInfo *qmp_query_vnc(Error **errp)
             }
         }
 
+        if (vnc_display->lsock == -1) {
+            return info;
+        }
+
         if (getsockname(vnc_display->lsock, (struct sockaddr *)&sa,
                         &salen) == -1) {
             error_set(errp, QERR_UNDEFINED_ERROR);
@@ -526,7 +531,6 @@ static void vnc_desktop_resize(VncState *vs)
     vnc_flush(vs);
 }
 
-#ifdef CONFIG_VNC_THREAD
 static void vnc_abort_display_jobs(VncDisplay *vd)
 {
     VncState *vs;
@@ -545,11 +549,6 @@ static void vnc_abort_display_jobs(VncDisplay *vd)
         vnc_unlock_output(vs);
     }
 }
-#else
-static void vnc_abort_display_jobs(VncDisplay *vd)
-{
-}
-#endif
 
 static void vnc_dpy_resize(DisplayState *ds)
 {
@@ -867,19 +866,12 @@ static int find_and_clear_dirty_height(struct VncState *vs,
     return h;
 }
 
-#ifdef CONFIG_VNC_THREAD
 static int vnc_update_client_sync(VncState *vs, int has_dirty)
 {
     int ret = vnc_update_client(vs, has_dirty);
     vnc_jobs_join(vs);
     return ret;
 }
-#else
-static int vnc_update_client_sync(VncState *vs, int has_dirty)
-{
-    return vnc_update_client(vs, has_dirty);
-}
-#endif
 
 static int vnc_update_client(VncState *vs, int has_dirty)
 {
@@ -1066,11 +1058,9 @@ static void vnc_disconnect_finish(VncState *vs)
         qemu_remove_led_event_handler(vs->led);
     vnc_unlock_output(vs);
 
-#ifdef CONFIG_VNC_THREAD
     qemu_mutex_destroy(&vs->output_mutex);
     qemu_bh_delete(vs->bh);
     buffer_free(&vs->jobs_buffer);
-#endif
 
     for (i = 0; i < VNC_STAT_ROWS; ++i) {
         g_free(vs->lossy_rect[i]);
@@ -1286,14 +1276,12 @@ static long vnc_client_read_plain(VncState *vs)
     return ret;
 }
 
-#ifdef CONFIG_VNC_THREAD
 static void vnc_jobs_bh(void *opaque)
 {
     VncState *vs = opaque;
 
     vnc_jobs_consume_buffer(vs);
 }
-#endif
 
 /*
  * First function called whenever there is more data to be read from
@@ -1818,10 +1806,12 @@ static void set_encodings(VncState *vs, int32_t *encodings, size_t n_encodings)
             vs->features |= VNC_FEATURE_TIGHT_MASK;
             vs->vnc_encoding = enc;
             break;
+#ifdef CONFIG_VNC_PNG
         case VNC_ENCODING_TIGHT_PNG:
             vs->features |= VNC_FEATURE_TIGHT_PNG_MASK;
             vs->vnc_encoding = enc;
             break;
+#endif
         case VNC_ENCODING_ZLIB:
             vs->features |= VNC_FEATURE_ZLIB_MASK;
             vs->vnc_encoding = enc;
@@ -2699,10 +2689,8 @@ static void vnc_connect(VncDisplay *vd, int csock, int skipauth)
     vs->as.fmt = AUD_FMT_S16;
     vs->as.endianness = 0;
 
-#ifdef CONFIG_VNC_THREAD
     qemu_mutex_init(&vs->output_mutex);
     vs->bh = qemu_bh_new(vnc_jobs_bh, vs);
-#endif
 
     QTAILQ_INSERT_HEAD(&vd->clients, vs, next);
 
@@ -2762,10 +2750,8 @@ void vnc_display_init(DisplayState *ds)
     if (!vs->kbd_layout)
         exit(1);
 
-#ifdef CONFIG_VNC_THREAD
     qemu_mutex_init(&vs->mutex);
     vnc_start_worker_thread();
-#endif
 
     dcl->dpy_copy = vnc_dpy_copy;
     dcl->dpy_update = vnc_dpy_update;
@@ -2896,6 +2882,15 @@ int vnc_display_open(DisplayState *ds, const char *display)
     while ((options = strchr(options, ','))) {
         options++;
         if (strncmp(options, "password", 8) == 0) {
+            if (fips_get_state()) {
+                fprintf(stderr,
+                        "VNC password auth disabled due to FIPS mode, "
+                        "consider using the VeNCrypt or SASL authentication "
+                        "methods as an alternative\n");
+                g_free(vs->display);
+                vs->display = NULL;
+                return -1;
+            }
             password = 1; /* Require password auth */
         } else if (strncmp(options, "reverse", 7) == 0) {
             reverse = 1;
@@ -3072,7 +3067,7 @@ int vnc_display_open(DisplayState *ds, const char *display)
         if (strncmp(display, "unix:", 5) == 0)
             vs->lsock = unix_connect(display+5);
         else
-            vs->lsock = inet_connect(display, true, NULL);
+            vs->lsock = inet_connect(display, NULL);
         if (-1 == vs->lsock) {
             g_free(vs->display);
             vs->display = NULL;
@@ -3110,5 +3105,5 @@ void vnc_display_add_client(DisplayState *ds, int csock, int skipauth)
 {
     VncDisplay *vs = ds ? (VncDisplay *)ds->opaque : vnc_display;
 
-    return vnc_connect(vs, csock, skipauth);
+    vnc_connect(vs, csock, skipauth);
 }

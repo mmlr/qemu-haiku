@@ -312,7 +312,9 @@ void tlb_set_page(CPUArchState *env, target_ulong vaddr,
 
 /* NOTE: this function can trigger an exception */
 /* NOTE2: the returned address is not exactly the physical address: it
-   is the offset relative to phys_ram_base */
+ * is actually a ram_addr_t (in system mode; the user mode emulation
+ * version of this function returns a guest virtual address).
+ */
 tb_page_addr_t get_page_addr_code(CPUArchState *env1, target_ulong addr)
 {
     int mmu_idx, page_index, pd;
@@ -323,11 +325,7 @@ tb_page_addr_t get_page_addr_code(CPUArchState *env1, target_ulong addr)
     mmu_idx = cpu_mmu_index(env1);
     if (unlikely(env1->tlb_table[mmu_idx][page_index].addr_code !=
                  (addr & TARGET_PAGE_MASK))) {
-#ifdef CONFIG_TCG_PASS_AREG0
         cpu_ldub_code(env1, addr);
-#else
-        ldub_code(addr);
-#endif
     }
     pd = env1->iotlb[mmu_idx][page_index] & ~TARGET_PAGE_MASK;
     mr = iotlb_to_region(pd);
@@ -346,7 +344,6 @@ tb_page_addr_t get_page_addr_code(CPUArchState *env1, target_ulong addr)
 #define MMUSUFFIX _cmmu
 #undef GETPC
 #define GETPC() ((uintptr_t)0)
-#define env cpu_single_env
 #define SOFTMMU_CODE_ACCESS
 
 #define SHIFT 0

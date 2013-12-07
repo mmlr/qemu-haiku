@@ -59,6 +59,9 @@ static int debugflags = DBGBIT(TXERR) | DBGBIT(GENERAL);
 #define PNPMMIO_SIZE      0x20000
 #define MIN_BUF_SIZE      60 /* Min. octets in an ethernet frame sans FCS */
 
+/* this is the size past which hardware will drop packets when setting LPE=0 */
+#define MAXIMUM_ETHERNET_VLAN_SIZE 1522
+
 /*
  * HW models:
  *  E1000_DEV_ID_82540EM works with Windows and Linux
@@ -92,7 +95,6 @@ typedef struct E1000State_st {
 
     uint32_t rxbuf_size;
     uint32_t rxbuf_min_shift;
-    int check_rxov;
     struct e1000_tx {
         unsigned char header[256];
         unsigned char vlan_header[4];
@@ -295,6 +297,7 @@ set_rx_control(E1000State *s, int index, uint32_t val)
     s->rxbuf_min_shift = ((val / E1000_RCTL_RDMTS_QUAT) & 3) + 1;
     DBGOUT(RX, "RCTL: %d, mac_reg[RCTL] = 0x%x\n", s->mac_reg[RDT],
            s->mac_reg[RCTL]);
+    qemu_flush_queued_packets(&s->nic->nc);
 }
 
 static void
@@ -720,7 +723,7 @@ receive_filter(E1000State *s, const uint8_t *buf, int size)
 }
 
 static void
-e1000_set_link_status(VLANClientState *nc)
+e1000_set_link_status(NetClientState *nc)
 {
     E1000State *s = DO_UPCAST(NICState, nc, nc)->opaque;
     uint32_t old_status = s->mac_reg[STATUS];
@@ -740,11 +743,11 @@ static bool e1000_has_rxbufs(E1000State *s, size_t total_size)
     int bufs;
     /* Fast-path short packets */
     if (total_size <= s->rxbuf_size) {
-        return s->mac_reg[RDH] != s->mac_reg[RDT] || !s->check_rxov;
+        return s->mac_reg[RDH] != s->mac_reg[RDT];
     }
     if (s->mac_reg[RDH] < s->mac_reg[RDT]) {
         bufs = s->mac_reg[RDT] - s->mac_reg[RDH];
-    } else if (s->mac_reg[RDH] > s->mac_reg[RDT] || !s->check_rxov) {
+    } else if (s->mac_reg[RDH] > s->mac_reg[RDT]) {
         bufs = s->mac_reg[RDLEN] /  sizeof(struct e1000_rx_desc) +
             s->mac_reg[RDT] - s->mac_reg[RDH];
     } else {
@@ -754,7 +757,7 @@ static bool e1000_has_rxbufs(E1000State *s, size_t total_size)
 }
 
 static int
-e1000_can_receive(VLANClientState *nc)
+e1000_can_receive(NetClientState *nc)
 {
     E1000State *s = DO_UPCAST(NICState, nc, nc)->opaque;
 
@@ -770,7 +773,7 @@ static uint64_t rx_desc_base(E1000State *s)
 }
 
 static ssize_t
-e1000_receive(VLANClientState *nc, const uint8_t *buf, size_t size)
+e1000_receive(NetClientState *nc, const uint8_t *buf, size_t size)
 {
     E1000State *s = DO_UPCAST(NICState, nc, nc)->opaque;
     struct e1000_rx_desc desc;
@@ -793,6 +796,13 @@ e1000_receive(VLANClientState *nc, const uint8_t *buf, size_t size)
         memset(&min_buf[size], 0, sizeof(min_buf) - size);
         buf = min_buf;
         size = sizeof(min_buf);
+    }
+
+    /* Discard oversized packets if !LPE and !SBP. */
+    if (size > MAXIMUM_ETHERNET_VLAN_SIZE
+        && !(s->mac_reg[RCTL] & E1000_RCTL_LPE)
+        && !(s->mac_reg[RCTL] & E1000_RCTL_SBP)) {
+        return size;
     }
 
     if (!receive_filter(s, buf, size))
@@ -847,7 +857,6 @@ e1000_receive(VLANClientState *nc, const uint8_t *buf, size_t size)
 
         if (++s->mac_reg[RDH] * sizeof(desc) >= s->mac_reg[RDLEN])
             s->mac_reg[RDH] = 0;
-        s->check_rxov = 1;
         /* see comment in start_xmit; same here */
         if (s->mac_reg[RDH] == rdh_start) {
             DBGOUT(RXERR, "RDH wraparound @%x, RDT %x, RDLEN %x\n",
@@ -924,8 +933,10 @@ mac_writereg(E1000State *s, int index, uint32_t val)
 static void
 set_rdt(E1000State *s, int index, uint32_t val)
 {
-    s->check_rxov = 0;
     s->mac_reg[index] = val & 0xffff;
+    if (e1000_has_rxbufs(s, 1)) {
+        qemu_flush_queued_packets(&s->nic->nc);
+    }
 }
 
 static void
@@ -1185,14 +1196,14 @@ e1000_mmio_setup(E1000State *d)
 }
 
 static void
-e1000_cleanup(VLANClientState *nc)
+e1000_cleanup(NetClientState *nc)
 {
     E1000State *s = DO_UPCAST(NICState, nc, nc)->opaque;
 
     s->nic = NULL;
 }
 
-static int
+static void
 pci_e1000_uninit(PCIDevice *dev)
 {
     E1000State *d = DO_UPCAST(E1000State, dev, dev);
@@ -1201,12 +1212,11 @@ pci_e1000_uninit(PCIDevice *dev)
     qemu_free_timer(d->autoneg_timer);
     memory_region_destroy(&d->mmio);
     memory_region_destroy(&d->io);
-    qemu_del_vlan_client(&d->nic->nc);
-    return 0;
+    qemu_del_net_client(&d->nic->nc);
 }
 
 static NetClientInfo net_e1000_info = {
-    .type = NET_CLIENT_TYPE_NIC,
+    .type = NET_CLIENT_OPTIONS_KIND_NIC,
     .size = sizeof(NICState),
     .can_receive = e1000_can_receive,
     .receive = e1000_receive,

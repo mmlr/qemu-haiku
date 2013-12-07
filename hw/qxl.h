@@ -31,6 +31,9 @@ typedef struct PCIQXLDevice {
     uint32_t           debug;
     uint32_t           guestdebug;
     uint32_t           cmdlog;
+
+    uint32_t           guest_bug;
+
     enum qxl_mode      mode;
     uint32_t           cmdflags;
     int                generation;
@@ -68,6 +71,8 @@ typedef struct PCIQXLDevice {
     } guest_surfaces;
     QXLPHYSICAL        guest_cursor;
 
+    QXLPHYSICAL        guest_monitors_config;
+
     QemuMutex          track_lock;
 
     /* thread signaling */
@@ -81,6 +86,7 @@ typedef struct PCIQXLDevice {
     QXLReleaseInfo     *last_release;
     uint32_t           last_release_offset;
     uint32_t           oom_running;
+    uint32_t           vgamem_size;
 
     /* rom pci bar */
     QXLRom             shadow_rom;
@@ -102,6 +108,7 @@ typedef struct PCIQXLDevice {
     uint32_t          ram_size_mb;
     uint32_t          vram_size_mb;
     uint32_t          vram32_size_mb;
+    uint32_t          vgamem_size_mb;
 
     /* qxl_render_update state */
     int                render_update_cookie_num;
@@ -123,11 +130,17 @@ typedef struct PCIQXLDevice {
         }                                                               \
     } while (0)
 
+#if 0
+/* spice-server 0.12 is still in development */
+#define QXL_DEFAULT_REVISION QXL_REVISION_STABLE_V12
+#else
 #define QXL_DEFAULT_REVISION QXL_REVISION_STABLE_V10
+#endif
 
 /* qxl.c */
 void *qxl_phys2virt(PCIQXLDevice *qxl, QXLPHYSICAL phys, int group_id);
-void qxl_guest_bug(PCIQXLDevice *qxl, const char *msg, ...) GCC_FMT_ATTR(2, 3);
+void qxl_set_guest_bug(PCIQXLDevice *qxl, const char *msg, ...)
+    GCC_FMT_ATTR(2, 3);
 
 void qxl_spice_update_area(PCIQXLDevice *qxl, uint32_t surface_id,
                            struct QXLRect *area, struct QXLRect *dirty_rects,

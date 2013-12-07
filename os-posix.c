@@ -188,6 +188,11 @@ void os_parse_cmd_args(int index, const char *optarg)
     case QEMU_OPTION_daemonize:
         daemonize = 1;
         break;
+#if defined(CONFIG_LINUX)
+    case QEMU_OPTION_enablefips:
+        fips_set_state(true);
+        break;
+#endif
     }
     return;
 }
@@ -354,4 +359,9 @@ int qemu_create_pidfile(const char *filename)
 
     /* keep pidfile open & locked forever */
     return 0;
+}
+
+bool is_daemonized(void)
+{
+    return daemonize;
 }

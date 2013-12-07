@@ -79,6 +79,7 @@ typedef uint64_t TCGRegSet;
 #define TCG_TARGET_HAS_nand_i64         0
 #define TCG_TARGET_HAS_nor_i64          0
 #define TCG_TARGET_HAS_deposit_i64      0
+#define TCG_TARGET_HAS_movcond_i64      0
 #endif
 
 #ifndef TCG_TARGET_deposit_i32_valid
@@ -343,7 +344,7 @@ struct TCGContext {
 
     /* goto_tb support */
     uint8_t *code_buf;
-    unsigned long *tb_next;
+    uintptr_t *tb_next;
     uint16_t *tb_next_offset;
     uint16_t *tb_jmp_offset; /* != NULL if USE_DIRECT_JUMP */
 
@@ -458,11 +459,6 @@ static inline TCGv_i64 tcg_temp_local_new_i64(void)
 void tcg_temp_free_i64(TCGv_i64 arg);
 char *tcg_get_arg_str_i64(TCGContext *s, char *buf, int buf_size, TCGv_i64 arg);
 
-static inline bool tcg_arg_is_local(TCGContext *s, TCGArg arg)
-{
-    return s->temps[arg].temp_local;
-}
-
 #if defined(CONFIG_DEBUG_TCG)
 /* If you call tcg_clear_temp_count() at the start of a section of
  * code which is not supposed to leak any TCG temporaries, then
@@ -571,7 +567,7 @@ TCGArg *tcg_optimize(TCGContext *s, uint16_t *tcg_opc_ptr, TCGArg *args,
 /* only used for debugging purposes */
 void tcg_register_helper(void *func, const char *name);
 const char *tcg_helper_get_name(TCGContext *s, void *func);
-void tcg_dump_ops(TCGContext *s, FILE *outfile);
+void tcg_dump_ops(TCGContext *s);
 
 void dump_ops(const uint16_t *opc_buf, const TCGArg *opparam_buf);
 TCGv_i32 tcg_const_i32(int32_t val);

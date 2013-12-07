@@ -277,7 +277,8 @@ static void vdi_header_print(VdiHeader *header)
 }
 #endif
 
-static int vdi_check(BlockDriverState *bs, BdrvCheckResult *res)
+static int vdi_check(BlockDriverState *bs, BdrvCheckResult *res,
+                     BdrvCheckMode fix)
 {
     /* TODO: additional checks possible. */
     BDRVVdiState *s = (BDRVVdiState *)bs->opaque;
@@ -285,6 +286,10 @@ static int vdi_check(BlockDriverState *bs, BdrvCheckResult *res)
     uint32_t block;
     uint32_t *bmap;
     logout("\n");
+
+    if (fix) {
+        return -ENOTSUP;
+    }
 
     bmap = g_malloc(s->header.blocks_in_image * sizeof(uint32_t));
     memset(bmap, 0xff, s->header.blocks_in_image * sizeof(uint32_t));
@@ -623,7 +628,6 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options)
     VdiHeader header;
     size_t i;
     size_t bmap_size;
-    uint32_t *bmap;
 
     logout("\n");
 
@@ -648,8 +652,9 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options)
         options++;
     }
 
-    fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY | O_LARGEFILE,
-              0644);
+    fd = qemu_open(filename,
+                   O_WRONLY | O_CREAT | O_TRUNC | O_BINARY | O_LARGEFILE,
+                   0644);
     if (fd < 0) {
         return -errno;
     }
@@ -687,21 +692,21 @@ static int vdi_create(const char *filename, QEMUOptionParameter *options)
         result = -errno;
     }
 
-    bmap = NULL;
     if (bmap_size > 0) {
-        bmap = (uint32_t *)g_malloc0(bmap_size);
-    }
-    for (i = 0; i < blocks; i++) {
-        if (image_type == VDI_TYPE_STATIC) {
-            bmap[i] = i;
-        } else {
-            bmap[i] = VDI_UNALLOCATED;
+        uint32_t *bmap = g_malloc0(bmap_size);
+        for (i = 0; i < blocks; i++) {
+            if (image_type == VDI_TYPE_STATIC) {
+                bmap[i] = i;
+            } else {
+                bmap[i] = VDI_UNALLOCATED;
+            }
         }
+        if (write(fd, bmap, bmap_size) < 0) {
+            result = -errno;
+        }
+        g_free(bmap);
     }
-    if (write(fd, bmap, bmap_size) < 0) {
-        result = -errno;
-    }
-    g_free(bmap);
+
     if (image_type == VDI_TYPE_STATIC) {
         if (ftruncate(fd, sizeof(header) + bmap_size + blocks * block_size)) {
             result = -errno;
