@@ -47,6 +47,9 @@
 #elif defined CONFIG_SOLARIS
 # include <termios.h>
 # include <stropts.h>
+#elif defined CONFIG_HAIKU
+# include <termios.h>
+# include <pty.h>
 #endif
 
 #ifdef __sun__
