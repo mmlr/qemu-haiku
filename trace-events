@@ -147,7 +147,7 @@ hd_geometry_guess(void *bs, uint32_t cyls, uint32_t heads, uint32_t secs, int tr
 
 # hw/jazz-led.c
 jazz_led_read(uint64_t addr, uint8_t val) "read addr=0x%"PRIx64": 0x%x"
-jazz_led_write(uint64_t addr, uint8_t _new) "write addr=0x%"PRIx64": 0x%x"
+jazz_led_write(uint64_t addr, uint8_t new) "write addr=0x%"PRIx64": 0x%x"
 
 # hw/lance.c
 lance_mem_readw(uint64_t addr, uint32_t ret) "addr=%"PRIx64"val=0x%04x"
@@ -245,10 +245,10 @@ usb_port_release(int bus, const char *port) "bus %d, port %s"
 usb_ehci_reset(void) "=== RESET ==="
 usb_ehci_opreg_read(uint32_t addr, const char *str, uint32_t val) "rd mmio %04x [%s] = %x"
 usb_ehci_opreg_write(uint32_t addr, const char *str, uint32_t val) "wr mmio %04x [%s] = %x"
-usb_ehci_opreg_change(uint32_t addr, const char *str, uint32_t _new, uint32_t old) "ch mmio %04x [%s] = %x (old: %x)"
+usb_ehci_opreg_change(uint32_t addr, const char *str, uint32_t new, uint32_t old) "ch mmio %04x [%s] = %x (old: %x)"
 usb_ehci_portsc_read(uint32_t addr, uint32_t port, uint32_t val) "rd mmio %04x [port %d] = %x"
 usb_ehci_portsc_write(uint32_t addr, uint32_t port, uint32_t val) "wr mmio %04x [port %d] = %x"
-usb_ehci_portsc_change(uint32_t addr, uint32_t port, uint32_t _new, uint32_t old) "ch mmio %04x [port %d] = %x (old: %x)"
+usb_ehci_portsc_change(uint32_t addr, uint32_t port, uint32_t new, uint32_t old) "ch mmio %04x [port %d] = %x (old: %x)"
 usb_ehci_usbsts(const char *sts, int state) "usbsts %s %d"
 usb_ehci_state(const char *schedule, const char *state) "%s schedule %s"
 usb_ehci_qh_ptrs(void *q, uint32_t addr, uint32_t nxt, uint32_t c_qtd, uint32_t n_qtd, uint32_t a_qtd) "q %p - QH @ %08x: next %08x qtds %08x,%08x,%08x"
@@ -478,7 +478,7 @@ qed_aio_write_main(void *s, void *acb, int ret, uint64_t offset, size_t len) "s 
 
 # hw/g364fb.c
 g364fb_read(uint64_t addr, uint32_t val) "read addr=0x%"PRIx64": 0x%x"
-g364fb_write(uint64_t addr, uint32_t _new) "write addr=0x%"PRIx64": 0x%x"
+g364fb_write(uint64_t addr, uint32_t new) "write addr=0x%"PRIx64": 0x%x"
 
 # hw/grlib_gptimer.c
 grlib_gptimer_enable(int id, uint32_t count) "timer:%d set count 0x%x and run"
