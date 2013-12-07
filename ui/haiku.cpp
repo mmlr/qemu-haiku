@@ -63,8 +63,15 @@ static const uint32 kInvalidationRequest = 'ival';
 
 // QEMU C interface
 extern "C" {
+#define new		_new
+#define class	_class
+	// Guard against reserved keywords in C includes
+
 #include "qemu-common.h"
 #include "console.h"
+
+#undef new
+#undef class
 
 static	void	haiku_update(DisplayState *ds, int x, int y, int w, int h);
 static	void	haiku_resize(DisplayState *ds);
