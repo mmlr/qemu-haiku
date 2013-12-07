@@ -68,7 +68,7 @@ extern "C" {
 	// Guard against reserved keywords in C includes
 
 #include "qemu-common.h"
-#include "console.h"
+#include "ui/console.h"
 
 #undef new
 #undef class
@@ -76,7 +76,6 @@ extern "C" {
 static	void	haiku_update(DisplayState *ds, int x, int y, int w, int h);
 static	void	haiku_resize(DisplayState *ds);
 static	void	haiku_refresh(DisplayState *ds);
-		void	haiku_display_init(DisplayState *ds, int fullScreen);
 
 		// Redirected QEMU main
 		int		qemu_main(int argc, char **argv, char **envp);
