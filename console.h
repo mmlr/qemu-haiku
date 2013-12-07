@@ -347,7 +347,7 @@ static inline int ds_get_linesize(DisplayState *ds)
 
 static inline uint8_t* ds_get_data(DisplayState *ds)
 {
-    return (void *)pixman_image_get_data(ds->surface->image);
+    return (uint8_t *)pixman_image_get_data(ds->surface->image);
 }
 
 static inline int ds_get_width(DisplayState *ds)
