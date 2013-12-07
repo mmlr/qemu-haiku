@@ -75,9 +75,11 @@ extern "C" {
 #undef class
 #undef typename
 
-static	void	haiku_update(DisplayState *ds, int x, int y, int w, int h);
-static	void	haiku_resize(DisplayState *ds);
-static	void	haiku_refresh(DisplayState *ds);
+static	void	haiku_update(DisplayChangeListener *dcl, int x, int y, int w,
+					int h);
+static	void	haiku_switch(DisplayChangeListener *dcl,
+					DisplaySurface *newSurface);
+static	void	haiku_refresh(DisplayChangeListener *dcl);
 
 		// Redirected QEMU main
 		int		qemu_main(int argc, char **argv, char **envp);
@@ -519,13 +521,13 @@ QEMUView::ProcessEvents()
 					break;
 
 				console_select(console);
-				sGraphicConsole = is_graphic_console();
+				sGraphicConsole = qemu_console_is_graphic(NULL);
 				break;
 			}
 
 			case kInvalidationRequest:
-				vga_hw_invalidate();
-				vga_hw_update();
+				graphic_hw_invalidate(NULL);
+				graphic_hw_update(NULL);
 				break;
 		}
 
@@ -776,7 +778,7 @@ QEMUView::UpdateFrameBuffer(int width, int height, uchar *bits,
 
 
 static void
-haiku_update(DisplayState *ds, int x, int y, int w, int h)
+haiku_update(DisplayChangeListener *dcl, int x, int y, int w, int h)
 {
 	//printf("updating x=%d y=%d w=%d h=%d\n", x, y, w, h);
 	sView->Update(BPoint(x, y), w, h);
@@ -784,27 +786,28 @@ haiku_update(DisplayState *ds, int x, int y, int w, int h)
 
 
 static void
-haiku_resize(DisplayState *ds)
+haiku_switch(DisplayChangeListener *dcl, DisplaySurface *newSurface)
 {
 	//printf("resizing\n");
-	sWidth = ds_get_width(ds);
-	sHeight = ds_get_height(ds);
+	sWidth = surface_width(newSurface);
+	sHeight = surface_height(newSurface);
 	sCenter.x = (int32)(sWidth / 2);
 	sCenter.y = (int32)(sHeight / 2);
 	sWindow->ResizeTo(sWidth - 1, sHeight - 1);
 	sWindow->SetZoomLimits(sWidth, sHeight);
-	sView->UpdateFrameBuffer(ds_get_width(ds), ds_get_height(ds),
-		ds_get_data(ds), ds_get_linesize(ds), ds_get_bits_per_pixel(ds));
+	sView->UpdateFrameBuffer(surface_width(newSurface),
+		surface_height(newSurface), (uint8 *)surface_data(newSurface),
+		surface_stride(newSurface), surface_bits_per_pixel(newSurface));
 	sView->UpdateFullScreen();
 }
 
 
 static void
-haiku_refresh(DisplayState *ds)
+haiku_refresh(DisplayChangeListener *dcl)
 {
 	sView->ProcessEvents();
 	if (sGraphicConsole)
-		vga_hw_update();
+		graphic_hw_update(NULL);
 }
 
 
@@ -829,15 +832,21 @@ haiku_display_init(DisplayState *ds, int fullScreen)
 {
 	sApplication->InitDisplay();
 	sFullScreen = fullScreen != 0;
-	sGraphicConsole = is_graphic_console();
+	sGraphicConsole = qemu_console_is_graphic(NULL);
 	sAbsoluteMouse = kbd_mouse_is_absolute();
+
+	static DisplayChangeListenerOps sDisplayChangeListenerOps;
+	sDisplayChangeListenerOps.dpy_name			= "haiku";
+	sDisplayChangeListenerOps.dpy_gfx_update	= haiku_update;
+	sDisplayChangeListenerOps.dpy_gfx_switch	= haiku_switch;
+	sDisplayChangeListenerOps.dpy_refresh		= haiku_refresh;
+	sDisplayChangeListenerOps.dpy_mouse_set		= NULL;
+	sDisplayChangeListenerOps.dpy_cursor_define	= NULL;
 
 	DisplayChangeListener *displayChangeListener
 		= (DisplayChangeListener *)g_malloc0(sizeof(DisplayChangeListener));
-	displayChangeListener->dpy_gfx_update = haiku_update;
-	displayChangeListener->dpy_gfx_resize = haiku_resize;
-	displayChangeListener->dpy_refresh = haiku_refresh;
-	register_displaychangelistener(ds, displayChangeListener);
+	displayChangeListener->ops = &sDisplayChangeListenerOps;
+	register_displaychangelistener(displayChangeListener);
 
 	static Notifier sMouseModeChangeNotifier = { haiku_mouse_mode_change };
 	qemu_add_mouse_mode_change_notifier(&sMouseModeChangeNotifier);
