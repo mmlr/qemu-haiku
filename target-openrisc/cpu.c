@@ -62,19 +62,24 @@ static inline void set_feature(OpenRISCCPU *cpu, int feature)
     cpu->env.cpucfgr = cpu->feature;
 }
 
-void openrisc_cpu_realize(Object *obj, Error **errp)
+static void openrisc_cpu_realizefn(DeviceState *dev, Error **errp)
 {
-    OpenRISCCPU *cpu = OPENRISC_CPU(obj);
+    OpenRISCCPU *cpu = OPENRISC_CPU(dev);
+    OpenRISCCPUClass *occ = OPENRISC_CPU_GET_CLASS(dev);
 
     qemu_init_vcpu(&cpu->env);
     cpu_reset(CPU(cpu));
+
+    occ->parent_realize(dev, errp);
 }
 
 static void openrisc_cpu_initfn(Object *obj)
 {
+    CPUState *cs = CPU(obj);
     OpenRISCCPU *cpu = OPENRISC_CPU(obj);
     static int inited;
 
+    cs->env_ptr = &cpu->env;
     cpu_exec_init(&cpu->env);
 
 #ifndef CONFIG_USER_ONLY
@@ -92,12 +97,14 @@ static void openrisc_cpu_initfn(Object *obj)
 static ObjectClass *openrisc_cpu_class_by_name(const char *cpu_model)
 {
     ObjectClass *oc;
+    char *typename;
 
     if (cpu_model == NULL) {
         return NULL;
     }
 
-    oc = object_class_by_name(cpu_model);
+    typename = g_strdup_printf("%s-" TYPE_OPENRISC_CPU, cpu_model);
+    oc = object_class_by_name(typename);
     if (oc != NULL && (!object_class_dynamic_cast(oc, TYPE_OPENRISC_CPU) ||
                        object_class_is_abstract(oc))) {
         return NULL;
@@ -134,11 +141,16 @@ static void openrisc_cpu_class_init(ObjectClass *oc, void *data)
 {
     OpenRISCCPUClass *occ = OPENRISC_CPU_CLASS(oc);
     CPUClass *cc = CPU_CLASS(occ);
+    DeviceClass *dc = DEVICE_CLASS(oc);
+
+    occ->parent_realize = dc->realize;
+    dc->realize = openrisc_cpu_realizefn;
 
     occ->parent_reset = cc->reset;
     cc->reset = openrisc_cpu_reset;
 
     cc->class_by_name = openrisc_cpu_class_by_name;
+    cc->do_interrupt = openrisc_cpu_do_interrupt;
 }
 
 static void cpu_register(const OpenRISCCPUInfo *info)
@@ -187,7 +199,7 @@ OpenRISCCPU *cpu_openrisc_init(const char *cpu_model)
     cpu = OPENRISC_CPU(object_new(object_class_get_name(oc)));
     cpu->env.cpu_model_str = cpu_model;
 
-    openrisc_cpu_realize(OBJECT(cpu), NULL);
+    object_property_set_bool(OBJECT(cpu), true, "realized", NULL);
 
     return cpu;
 }
