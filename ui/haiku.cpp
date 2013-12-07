@@ -22,10 +22,7 @@
  * THE SOFTWARE.
  */
 
-// Haiku declaration collides with QEMU load_image
-#define load_image	haiku_load_image
 #include "haiku.h"
-#undef load_image
 
 #include <Cursor.h>
 #include <Path.h>

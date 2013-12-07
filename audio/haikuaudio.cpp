@@ -44,8 +44,7 @@ static	void *	haiku_audio_init(void);
 static	void	haiku_audio_fini(void *opaque);
 }
 
-// name conflict
-#define load_image _b_load_image
+#include "haiku-include-before.h"
 #include <SoundPlayer.h>
 
 typedef struct BufferInfo {

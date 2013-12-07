@@ -25,6 +25,7 @@
 #ifndef _HAIKU_H_
 #define _HAIKU_H_
 
+#include "haiku-include-before.h"
 #include <Accelerant.h>
 #include <Application.h>
 #include <Bitmap.h>

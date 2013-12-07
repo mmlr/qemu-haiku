@@ -90,6 +90,7 @@
 #endif
 
 #ifdef __HAIKU__
+#include "haiku-include-before.h"
 #include <Drivers.h>
 #include <sys/stat.h>
 #endif
