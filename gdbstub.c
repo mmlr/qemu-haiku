@@ -368,9 +368,6 @@ static inline void gdb_continue(GDBState *s)
 #ifdef CONFIG_USER_ONLY
     s->running_state = 1;
 #else
-    if (runstate_check(RUN_STATE_GUEST_PANICKED)) {
-        runstate_set(RUN_STATE_DEBUG);
-    }
     if (!runstate_needs_reset()) {
         vm_start();
     }
@@ -648,7 +645,7 @@ static int gdb_breakpoint_insert(target_ulong addr, target_ulong len, int type)
     switch (type) {
     case GDB_BREAKPOINT_SW:
     case GDB_BREAKPOINT_HW:
-        for (cpu = first_cpu; cpu != NULL; cpu = cpu->next_cpu) {
+        CPU_FOREACH(cpu) {
             env = cpu->env_ptr;
             err = cpu_breakpoint_insert(env, addr, BP_GDB, NULL);
             if (err)
@@ -659,7 +656,7 @@ static int gdb_breakpoint_insert(target_ulong addr, target_ulong len, int type)
     case GDB_WATCHPOINT_WRITE:
     case GDB_WATCHPOINT_READ:
     case GDB_WATCHPOINT_ACCESS:
-        for (cpu = first_cpu; cpu != NULL; cpu = cpu->next_cpu) {
+        CPU_FOREACH(cpu) {
             env = cpu->env_ptr;
             err = cpu_watchpoint_insert(env, addr, len, xlat_gdb_type[type],
                                         NULL);
@@ -686,7 +683,7 @@ static int gdb_breakpoint_remove(target_ulong addr, target_ulong len, int type)
     switch (type) {
     case GDB_BREAKPOINT_SW:
     case GDB_BREAKPOINT_HW:
-        for (cpu = first_cpu; cpu != NULL; cpu = cpu->next_cpu) {
+        CPU_FOREACH(cpu) {
             env = cpu->env_ptr;
             err = cpu_breakpoint_remove(env, addr, BP_GDB);
             if (err)
@@ -697,7 +694,7 @@ static int gdb_breakpoint_remove(target_ulong addr, target_ulong len, int type)
     case GDB_WATCHPOINT_WRITE:
     case GDB_WATCHPOINT_READ:
     case GDB_WATCHPOINT_ACCESS:
-        for (cpu = first_cpu; cpu != NULL; cpu = cpu->next_cpu) {
+        CPU_FOREACH(cpu) {
             env = cpu->env_ptr;
             err = cpu_watchpoint_remove(env, addr, len, xlat_gdb_type[type]);
             if (err)
@@ -720,7 +717,7 @@ static void gdb_breakpoint_remove_all(void)
         return;
     }
 
-    for (cpu = first_cpu; cpu != NULL; cpu = cpu->next_cpu) {
+    CPU_FOREACH(cpu) {
         env = cpu->env_ptr;
         cpu_breakpoint_remove_all(env, BP_GDB);
 #ifndef CONFIG_USER_ONLY
@@ -744,7 +741,7 @@ static CPUState *find_cpu(uint32_t thread_id)
 {
     CPUState *cpu;
 
-    for (cpu = first_cpu; cpu != NULL; cpu = cpu->next_cpu) {
+    CPU_FOREACH(cpu) {
         if (cpu_index(cpu) == thread_id) {
             return cpu;
         }
@@ -1070,7 +1067,7 @@ static int gdb_handle_packet(GDBState *s, const char *line_buf)
             if (s->query_cpu) {
                 snprintf(buf, sizeof(buf), "m%x", cpu_index(s->query_cpu));
                 put_packet(s, buf);
-                s->query_cpu = s->query_cpu->next_cpu;
+                s->query_cpu = CPU_NEXT(s->query_cpu);
             } else
                 put_packet(s, "l");
             break;
@@ -1553,7 +1550,7 @@ static void gdb_accept(void)
 static int gdbserver_open(int port)
 {
     struct sockaddr_in sockaddr;
-    int fd, val, ret;
+    int fd, ret;
 
     fd = socket(PF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -1564,9 +1561,7 @@ static int gdbserver_open(int port)
     fcntl(fd, F_SETFD, FD_CLOEXEC);
 #endif
 
-    /* allow fast reuse */
-    val = 1;
-    qemu_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+    socket_set_fast_reuse(fd);
 
     sockaddr.sin_family = AF_INET;
     sockaddr.sin_port = htons(port);

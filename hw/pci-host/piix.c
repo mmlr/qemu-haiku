@@ -48,6 +48,7 @@ typedef struct I440FXState {
     PCIHostState parent_obj;
     PcPciInfo pci_info;
     uint64_t pci_hole64_size;
+    uint32_t short_root_bus;
 } I440FXState;
 
 #define PIIX_NUM_PIC_IRQS       16      /* i8259 * 2 */
@@ -235,18 +236,24 @@ static void i440fx_pcihost_get_pci_hole64_start(Object *obj, Visitor *v,
                                                 void *opaque, const char *name,
                                                 Error **errp)
 {
-    I440FXState *s = I440FX_PCI_HOST_BRIDGE(obj);
+    PCIHostState *h = PCI_HOST_BRIDGE(obj);
+    Range w64;
 
-    visit_type_uint64(v, &s->pci_info.w64.begin, name, errp);
+    pci_bus_get_w64_range(h->bus, &w64);
+
+    visit_type_uint64(v, &w64.begin, name, errp);
 }
 
 static void i440fx_pcihost_get_pci_hole64_end(Object *obj, Visitor *v,
                                               void *opaque, const char *name,
                                               Error **errp)
 {
-    I440FXState *s = I440FX_PCI_HOST_BRIDGE(obj);
+    PCIHostState *h = PCI_HOST_BRIDGE(obj);
+    Range w64;
 
-    visit_type_uint64(v, &s->pci_info.w64.end, name, errp);
+    pci_bus_get_w64_range(h->bus, &w64);
+
+    visit_type_uint64(v, &w64.end, name, errp);
 }
 
 static void i440fx_pcihost_initfn(Object *obj)
@@ -408,6 +415,14 @@ PCIBus *i440fx_init(PCII440FXState **pi440fx_state,
     i440fx_update_memory_mappings(f);
 
     return b;
+}
+
+PCIBus *find_i440fx(void)
+{
+    PCIHostState *s = OBJECT_CHECK(PCIHostState,
+                                   object_resolve_path("/machine/i440fx", NULL),
+                                   TYPE_PCI_HOST_BRIDGE);
+    return s ? s->bus : NULL;
 }
 
 /* PIIX3 PCI to ISA bridge */
@@ -706,13 +721,19 @@ static const TypeInfo i440fx_info = {
 static const char *i440fx_pcihost_root_bus_path(PCIHostState *host_bridge,
                                                 PCIBus *rootbus)
 {
+    I440FXState *s = I440FX_PCI_HOST_BRIDGE(host_bridge);
+
     /* For backwards compat with old device paths */
-    return "0000";
+    if (s->short_root_bus) {
+        return "0000";
+    }
+    return "0000:00";
 }
 
 static Property i440fx_props[] = {
     DEFINE_PROP_SIZE(PCI_HOST_PROP_PCI_HOLE64_SIZE, I440FXState,
                      pci_hole64_size, DEFAULT_PCI_HOLE64_SIZE),
+    DEFINE_PROP_UINT32("short_root_bus", I440FXState, short_root_bus, 0),
     DEFINE_PROP_END_OF_LIST(),
 };
 

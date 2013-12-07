@@ -1473,7 +1473,7 @@ void memory_region_add_subregion(MemoryRegion *mr,
 void memory_region_add_subregion_overlap(MemoryRegion *mr,
                                          hwaddr offset,
                                          MemoryRegion *subregion,
-                                         unsigned priority)
+                                         int priority)
 {
     subregion->may_overlap = true;
     subregion->priority = priority;
@@ -1506,7 +1506,7 @@ void memory_region_set_enabled(MemoryRegion *mr, bool enabled)
 void memory_region_set_address(MemoryRegion *mr, hwaddr addr)
 {
     MemoryRegion *parent = mr->parent;
-    unsigned priority = mr->priority;
+    int priority = mr->priority;
     bool may_overlap = mr->may_overlap;
 
     if (addr == mr->addr || !parent) {
@@ -1809,7 +1809,9 @@ static void mtree_print_mr(fprintf_function mon_printf, void *f,
                    mr->alias->name,
                    mr->alias_offset,
                    mr->alias_offset
-                   + (hwaddr)int128_get64(mr->size) - 1);
+                   + (int128_nz(mr->size) ?
+                      (hwaddr)int128_get64(int128_sub(mr->size,
+                                                      int128_one())) : 0));
     } else {
         mon_printf(f,
                    TARGET_FMT_plx "-" TARGET_FMT_plx " (prio %d, %c%c): %s\n",
