@@ -9,14 +9,15 @@ static TCGArg *icount_arg;
 static int icount_label;
 static int exitreq_label;
 
-static inline void gen_icount_start(void)
+static inline void gen_tb_start(void)
 {
     TCGv_i32 count;
     TCGv_i32 flag;
 
     exitreq_label = gen_new_label();
-    flag = tcg_temp_local_new_i32();
-    tcg_gen_ld_i32(flag, cpu_env, offsetof(CPUArchState, tcg_exit_req));
+    flag = tcg_temp_new_i32();
+    tcg_gen_ld_i32(flag, cpu_env,
+                   offsetof(CPUState, tcg_exit_req) - ENV_OFFSET);
     tcg_gen_brcondi_i32(TCG_COND_NE, flag, 0, exitreq_label);
     tcg_temp_free_i32(flag);
 
@@ -35,7 +36,7 @@ static inline void gen_icount_start(void)
     tcg_temp_free_i32(count);
 }
 
-static void gen_icount_end(TranslationBlock *tb, int num_insns)
+static void gen_tb_end(TranslationBlock *tb, int num_insns)
 {
     gen_set_label(exitreq_label);
     tcg_gen_exit_tb((tcg_target_long)tb + TB_EXIT_REQUESTED);

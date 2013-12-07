@@ -26,10 +26,12 @@
 #include "hw/boards.h"
 #include "hw/pci/pci.h"
 #include "net/net.h"
-#include "hw/pc.h"
+#include "hw/i386/pc.h"
 #include "monitor/monitor.h"
-#include "hw/scsi.h"
-#include "hw/virtio-blk.h"
+#include "hw/scsi/scsi.h"
+#include "hw/virtio/virtio-blk.h"
+#include "hw/virtio/virtio-scsi.h"
+#include "hw/virtio/virtio-pci.h"
 #include "qemu/config-file.h"
 #include "sysemu/blockdev.h"
 #include "qapi/error.h"
@@ -79,13 +81,26 @@ static int scsi_hot_add(Monitor *mon, DeviceState *adapter,
 {
     SCSIBus *scsibus;
     SCSIDevice *scsidev;
+    VirtIOPCIProxy *virtio_proxy;
 
     scsibus = (SCSIBus *)
         object_dynamic_cast(OBJECT(QLIST_FIRST(&adapter->child_bus)),
                             TYPE_SCSI_BUS);
     if (!scsibus) {
-	error_report("Device is not a SCSI adapter");
-	return -1;
+        /*
+         * Check if the adapter is a virtio-scsi-pci, and forward scsi_hot_add
+         * to the virtio-scsi-device.
+         */
+        if (!object_dynamic_cast(OBJECT(adapter), TYPE_VIRTIO_SCSI_PCI)) {
+            error_report("Device is not a SCSI adapter");
+            return -1;
+        }
+        virtio_proxy = VIRTIO_PCI(adapter);
+        adapter = DEVICE(virtio_proxy->bus.vdev);
+        scsibus = (SCSIBus *)
+                  object_dynamic_cast(OBJECT(QLIST_FIRST(&adapter->child_bus)),
+                            TYPE_SCSI_BUS);
+        assert(scsibus);
     }
 
     /*
@@ -99,7 +114,7 @@ static int scsi_hot_add(Monitor *mon, DeviceState *adapter,
     dinfo->unit = qemu_opt_get_number(dinfo->opts, "unit", -1);
     dinfo->bus = scsibus->busnr;
     scsidev = scsi_bus_legacy_add_drive(scsibus, dinfo->bdrv, dinfo->unit,
-                                        false, -1);
+                                        false, -1, NULL);
     if (!scsidev) {
         return -1;
     }

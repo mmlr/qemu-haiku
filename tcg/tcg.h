@@ -57,8 +57,8 @@ typedef uint64_t TCGRegSet;
 #error unsupported
 #endif
 
-/* Turn some undef macros into false macros.  */
 #if TCG_TARGET_REG_BITS == 32
+/* Turn some undef macros into false macros.  */
 #define TCG_TARGET_HAS_div_i64          0
 #define TCG_TARGET_HAS_div2_i64         0
 #define TCG_TARGET_HAS_rot_i64          0
@@ -80,6 +80,14 @@ typedef uint64_t TCGRegSet;
 #define TCG_TARGET_HAS_nor_i64          0
 #define TCG_TARGET_HAS_deposit_i64      0
 #define TCG_TARGET_HAS_movcond_i64      0
+#define TCG_TARGET_HAS_add2_i64         0
+#define TCG_TARGET_HAS_sub2_i64         0
+#define TCG_TARGET_HAS_mulu2_i64        0
+#define TCG_TARGET_HAS_muls2_i64        0
+/* Turn some undef macros into true macros.  */
+#define TCG_TARGET_HAS_add2_i32         1
+#define TCG_TARGET_HAS_sub2_i32         1
+#define TCG_TARGET_HAS_mulu2_i32        1
 #endif
 
 #ifndef TCG_TARGET_deposit_i32_valid
@@ -462,6 +470,17 @@ struct TCGContext {
     uint16_t gen_opc_icount[OPC_BUF_SIZE];
     uint8_t gen_opc_instr_start[OPC_BUF_SIZE];
 
+    /* Code generation */
+    int code_gen_max_blocks;
+    uint8_t *code_gen_prologue;
+    uint8_t *code_gen_buffer;
+    size_t code_gen_buffer_size;
+    /* threshold to flush the translated code buffer */
+    size_t code_gen_buffer_max_size;
+    uint8_t *code_gen_ptr;
+
+    TBContext tb_ctx;
+
 #if defined(CONFIG_QEMU_LDST_OPTIMIZATION) && defined(CONFIG_SOFTMMU)
     /* labels info for qemu_ld/st IRs
        The labels help to generate TLB miss case codes at the end of TB */
@@ -658,8 +677,6 @@ TCGv_i64 tcg_const_i64(int64_t val);
 TCGv_i32 tcg_const_local_i32(int32_t val);
 TCGv_i64 tcg_const_local_i64(int64_t val);
 
-extern uint8_t *code_gen_prologue;
-
 /**
  * tcg_qemu_tb_exec:
  * @env: CPUArchState * for the CPU
@@ -710,7 +727,8 @@ extern uint8_t *code_gen_prologue;
 
 #if !defined(tcg_qemu_tb_exec)
 # define tcg_qemu_tb_exec(env, tb_ptr) \
-    ((tcg_target_ulong (*)(void *, void *))code_gen_prologue)(env, tb_ptr)
+    ((tcg_target_ulong (*)(void *, void *))tcg_ctx.code_gen_prologue)(env, \
+                                                                      tb_ptr)
 #endif
 
 void tcg_register_jit(void *buf, size_t buf_size);

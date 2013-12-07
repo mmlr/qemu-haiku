@@ -23,14 +23,14 @@
  * THE SOFTWARE.
  */
 #include <hw/hw.h>
-#include <hw/pc.h>
+#include <hw/i386/pc.h>
 #include <hw/pci/pci.h>
-#include <hw/isa.h>
+#include <hw/isa/isa.h>
 #include "qemu/error-report.h"
 #include "qemu/timer.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/dma.h"
-#include "hw/block-common.h"
+#include "hw/block/block.h"
 #include "sysemu/blockdev.h"
 
 #include <hw/ide/internal.h>
@@ -568,10 +568,18 @@ static void dma_buf_commit(IDEState *s)
     qemu_sglist_destroy(&s->sg);
 }
 
+static void ide_async_cmd_done(IDEState *s)
+{
+    if (s->bus->dma->ops->async_cmd_done) {
+        s->bus->dma->ops->async_cmd_done(s->bus->dma);
+    }
+}
+
 void ide_set_inactive(IDEState *s)
 {
     s->bus->dma->aiocb = NULL;
     s->bus->dma->ops->set_inactive(s->bus->dma);
+    ide_async_cmd_done(s);
 }
 
 void ide_dma_error(IDEState *s)
@@ -804,6 +812,7 @@ static void ide_flush_cb(void *opaque, int ret)
 
     bdrv_acct_done(s->bs, &s->acct);
     s->status = READY_STAT | SEEK_STAT;
+    ide_async_cmd_done(s);
     ide_set_irq(s->bus);
 }
 
@@ -814,6 +823,7 @@ void ide_flush_cache(IDEState *s)
         return;
     }
 
+    s->status |= BUSY_STAT;
     bdrv_acct_start(s->bs, &s->acct, 0, BDRV_ACCT_FLUSH);
     bdrv_aio_flush(s->bs, ide_flush_cb, s);
 }
@@ -1262,6 +1272,10 @@ void ide_exec_cmd(IDEBus *bus, uint32_t val)
         lba48 = 1;
         /* fall through */
     case WIN_READ_NATIVE_MAX:
+        /* Refuse if no sectors are addressable (e.g. medium not inserted) */
+        if (s->nb_sectors == 0) {
+            goto abort_cmd;
+        }
 	ide_cmd_lba48_transform(s, lba48);
         ide_set_sector(s, s->nb_sectors - 1);
         s->status = READY_STAT | SEEK_STAT;

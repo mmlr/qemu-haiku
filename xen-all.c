@@ -11,12 +11,12 @@
 #include <sys/mman.h>
 
 #include "hw/pci/pci.h"
-#include "hw/pc.h"
-#include "hw/xen_common.h"
-#include "hw/xen_backend.h"
+#include "hw/i386/pc.h"
+#include "hw/xen/xen_common.h"
+#include "hw/xen/xen_backend.h"
 #include "qmp-commands.h"
 
-#include "char/char.h"
+#include "sysemu/char.h"
 #include "qemu/range.h"
 #include "sysemu/xen-mapcache.h"
 #include "trace.h"
@@ -161,18 +161,18 @@ static void xen_ram_init(ram_addr_t ram_size)
     ram_addr_t block_len;
 
     block_len = ram_size;
-    if (ram_size >= HVM_BELOW_4G_RAM_END) {
+    if (ram_size >= QEMU_BELOW_4G_RAM_END) {
         /* Xen does not allocate the memory continuously, and keep a hole at
-         * HVM_BELOW_4G_MMIO_START of HVM_BELOW_4G_MMIO_LENGTH
+         * QEMU_BELOW_4G_RAM_END of QEMU_BELOW_4G_MMIO_LENGTH
          */
-        block_len += HVM_BELOW_4G_MMIO_LENGTH;
+        block_len += QEMU_BELOW_4G_MMIO_LENGTH;
     }
     memory_region_init_ram(&ram_memory, "xen.ram", block_len);
     vmstate_register_ram_global(&ram_memory);
 
-    if (ram_size >= HVM_BELOW_4G_RAM_END) {
-        above_4g_mem_size = ram_size - HVM_BELOW_4G_RAM_END;
-        below_4g_mem_size = HVM_BELOW_4G_RAM_END;
+    if (ram_size >= QEMU_BELOW_4G_RAM_END) {
+        above_4g_mem_size = ram_size - QEMU_BELOW_4G_RAM_END;
+        below_4g_mem_size = QEMU_BELOW_4G_RAM_END;
     } else {
         below_4g_mem_size = ram_size;
     }
@@ -578,16 +578,18 @@ void qmp_xen_set_global_dirty_log(bool enable, Error **errp)
 
 static void xen_reset_vcpu(void *opaque)
 {
-    CPUArchState *env = opaque;
+    CPUState *cpu = opaque;
 
-    env->halted = 1;
+    cpu->halted = 1;
 }
 
 void xen_vcpu_init(void)
 {
     if (first_cpu != NULL) {
-        qemu_register_reset(xen_reset_vcpu, first_cpu);
-        xen_reset_vcpu(first_cpu);
+        CPUState *cpu = ENV_GET_CPU(first_cpu);
+
+        qemu_register_reset(xen_reset_vcpu, cpu);
+        xen_reset_vcpu(cpu);
     }
     /* if rtc_clock is left to default (host_clock), disable it */
     if (rtc_clock == host_clock) {
