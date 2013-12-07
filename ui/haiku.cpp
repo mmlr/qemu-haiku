@@ -73,6 +73,8 @@ static	void	haiku_refresh(DisplayState *ds);
 
 		// Redirected QEMU main
 		int		qemu_main(int argc, char **argv, char **envp);
+
+		void	qemu_system_shutdown_request(void);
 };
 
 
