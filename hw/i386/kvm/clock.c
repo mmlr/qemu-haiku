@@ -22,8 +22,14 @@
 #include <linux/kvm.h>
 #include <linux/kvm_para.h>
 
+#define TYPE_KVM_CLOCK "kvmclock"
+#define KVM_CLOCK(obj) OBJECT_CHECK(KVMClockState, (obj), TYPE_KVM_CLOCK)
+
 typedef struct KVMClockState {
+    /*< private >*/
     SysBusDevice busdev;
+    /*< public >*/
+
     uint64_t clock;
     bool clock_valid;
 } KVMClockState;
@@ -33,7 +39,7 @@ static void kvmclock_vm_state_change(void *opaque, int running,
                                      RunState state)
 {
     KVMClockState *s = opaque;
-    CPUArchState *penv = first_cpu;
+    CPUState *cpu = first_cpu;
     int cap_clock_ctrl = kvm_check_extension(kvm_state, KVM_CAP_KVMCLOCK_CTRL);
     int ret;
 
@@ -53,8 +59,8 @@ static void kvmclock_vm_state_change(void *opaque, int running,
         if (!cap_clock_ctrl) {
             return;
         }
-        for (penv = first_cpu; penv != NULL; penv = penv->next_cpu) {
-            ret = kvm_vcpu_ioctl(ENV_GET_CPU(penv), KVM_KVMCLOCK_CTRL, 0);
+        for (cpu = first_cpu; cpu != NULL; cpu = cpu->next_cpu) {
+            ret = kvm_vcpu_ioctl(cpu, KVM_KVMCLOCK_CTRL, 0);
             if (ret) {
                 if (ret != -EINVAL) {
                     fprintf(stderr, "%s: %s\n", __func__, strerror(-ret));
@@ -85,12 +91,11 @@ static void kvmclock_vm_state_change(void *opaque, int running,
     }
 }
 
-static int kvmclock_init(SysBusDevice *dev)
+static void kvmclock_realize(DeviceState *dev, Error **errp)
 {
-    KVMClockState *s = FROM_SYSBUS(KVMClockState, dev);
+    KVMClockState *s = KVM_CLOCK(dev);
 
     qemu_add_vm_change_state_handler(kvmclock_vm_state_change, s);
-    return 0;
 }
 
 static const VMStateDescription kvmclock_vmsd = {
@@ -107,15 +112,14 @@ static const VMStateDescription kvmclock_vmsd = {
 static void kvmclock_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    k->init = kvmclock_init;
+    dc->realize = kvmclock_realize;
     dc->no_user = 1;
     dc->vmsd = &kvmclock_vmsd;
 }
 
 static const TypeInfo kvmclock_info = {
-    .name          = "kvmclock",
+    .name          = TYPE_KVM_CLOCK,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(KVMClockState),
     .class_init    = kvmclock_class_init,
@@ -124,10 +128,12 @@ static const TypeInfo kvmclock_info = {
 /* Note: Must be called after VCPU initialization. */
 void kvmclock_create(void)
 {
+    X86CPU *cpu = X86_CPU(first_cpu);
+
     if (kvm_enabled() &&
-        first_cpu->features[FEAT_KVM] & ((1ULL << KVM_FEATURE_CLOCKSOURCE) |
-                                         (1ULL << KVM_FEATURE_CLOCKSOURCE2))) {
-        sysbus_create_simple("kvmclock", -1, NULL);
+        cpu->env.features[FEAT_KVM] & ((1ULL << KVM_FEATURE_CLOCKSOURCE) |
+                                       (1ULL << KVM_FEATURE_CLOCKSOURCE2))) {
+        sysbus_create_simple(TYPE_KVM_CLOCK, -1, NULL);
     }
 }
 

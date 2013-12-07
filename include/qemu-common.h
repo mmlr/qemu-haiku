@@ -161,6 +161,7 @@ char *pstrcat(char *buf, int buf_size, const char *s);
 int strstart(const char *str, const char *val, const char **ptr);
 int stristart(const char *str, const char *val, const char **ptr);
 int qemu_strnlen(const char *s, int max_len);
+char *qemu_strsep(char **input, const char *delim);
 time_t mktimegm(struct tm *tm);
 int qemu_fls(int i);
 int qemu_fdatasync(int fd);
@@ -178,6 +179,8 @@ int parse_uint_full(const char *s, unsigned long long *value, int base);
  * A-Z, as strtosz() will use qemu_toupper() on the given argument
  * prior to comparison.
  */
+#define STRTOSZ_DEFSUFFIX_EB	'E'
+#define STRTOSZ_DEFSUFFIX_PB	'P'
 #define STRTOSZ_DEFSUFFIX_TB	'T'
 #define STRTOSZ_DEFSUFFIX_GB	'G'
 #define STRTOSZ_DEFSUFFIX_MB	'M'
@@ -276,8 +279,10 @@ bool tcg_enabled(void);
 void cpu_exec_init_all(void);
 
 /* CPU save/load.  */
+#ifdef CPU_SAVE_VERSION
 void cpu_save(QEMUFile *f, void *opaque);
 int cpu_load(QEMUFile *f, void *opaque, int version_id);
+#endif
 
 /* Unblock cpu */
 void qemu_cpu_kick_self(void);
@@ -288,15 +293,8 @@ struct qemu_work_item {
     void (*func)(void *data);
     void *data;
     int done;
+    bool free;
 };
-
-#ifdef CONFIG_USER_ONLY
-static inline void qemu_init_vcpu(void *env)
-{
-}
-#else
-void qemu_init_vcpu(void *env);
-#endif
 
 
 /**
