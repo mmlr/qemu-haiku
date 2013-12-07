@@ -161,8 +161,11 @@ static void trace(TraceEventID event, uint64_t x1, uint64_t x2, uint64_t x3,
     }
 
     timestamp = get_clock();
-
+#if GLIB_CHECK_VERSION(2, 30, 0)
+    idx = g_atomic_int_add((gint *)&trace_idx, 1) % TRACE_BUF_LEN;
+#else
     idx = g_atomic_int_exchange_and_add((gint *)&trace_idx, 1) % TRACE_BUF_LEN;
+#endif
     trace_buf[idx] = (TraceRecord){
         .event = event,
         .timestamp_ns = timestamp,
@@ -363,7 +366,7 @@ static GThread *trace_thread_create(GThreadFunc fn)
     sigfillset(&set);
     pthread_sigmask(SIG_SETMASK, &set, &oldset);
 #endif
-    thread = g_thread_create(writeout_thread, NULL, FALSE, NULL);
+    thread = g_thread_create(fn, NULL, FALSE, NULL);
 #ifndef _WIN32
     pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 #endif
@@ -376,7 +379,12 @@ bool trace_backend_init(const char *events, const char *file)
     GThread *thread;
 
     if (!g_thread_supported()) {
+#if !GLIB_CHECK_VERSION(2, 31, 0)
         g_thread_init(NULL);
+#else
+        fprintf(stderr, "glib threading failed to initialize.\n");
+        exit(1);
+#endif
     }
 
     trace_available_cond = g_cond_new();

@@ -585,17 +585,20 @@ static int audio_pcm_info_eq (struct audio_pcm_info *info, struct audsettings *a
     switch (as->fmt) {
     case AUD_FMT_S8:
         sign = 1;
+        /* fall through */
     case AUD_FMT_U8:
         break;
 
     case AUD_FMT_S16:
         sign = 1;
+        /* fall through */
     case AUD_FMT_U16:
         bits = 16;
         break;
 
     case AUD_FMT_S32:
         sign = 1;
+        /* fall through */
     case AUD_FMT_U32:
         bits = 32;
         break;
@@ -954,7 +957,9 @@ int audio_pcm_sw_read (SWVoiceIn *sw, void *buf, int size)
         total += isamp;
     }
 
-    mixeng_volume (sw->buf, ret, &sw->vol);
+    if (!(hw->ctl_caps & VOICE_VOLUME_CAP)) {
+        mixeng_volume (sw->buf, ret, &sw->vol);
+    }
 
     sw->clip (buf, sw->buf, ret);
     sw->total_hw_samples_acquired += total;
@@ -1038,7 +1043,10 @@ int audio_pcm_sw_write (SWVoiceOut *sw, void *buf, int size)
     swlim = audio_MIN (swlim, samples);
     if (swlim) {
         sw->conv (sw->buf, buf, swlim);
-        mixeng_volume (sw->buf, swlim, &sw->vol);
+
+        if (!(sw->hw->ctl_caps & VOICE_VOLUME_CAP)) {
+            mixeng_volume (sw->buf, swlim, &sw->vol);
+        }
     }
 
     while (swlim) {
@@ -1665,7 +1673,7 @@ static void audio_pp_nb_voices (const char *typ, int nb)
         printf ("Theoretically supports many %s voices\n", typ);
         break;
     default:
-        printf ("Theoretically supports upto %d %s voices\n", nb, typ);
+        printf ("Theoretically supports up to %d %s voices\n", nb, typ);
         break;
     }
 
@@ -1767,10 +1775,12 @@ static void audio_atexit (void)
     HWVoiceOut *hwo = NULL;
     HWVoiceIn *hwi = NULL;
 
-    while ((hwo = audio_pcm_hw_find_any_enabled_out (hwo))) {
+    while ((hwo = audio_pcm_hw_find_any_out (hwo))) {
         SWVoiceCap *sc;
 
-        hwo->pcm_ops->ctl_out (hwo, VOICE_DISABLE);
+        if (hwo->enabled) {
+            hwo->pcm_ops->ctl_out (hwo, VOICE_DISABLE);
+        }
         hwo->pcm_ops->fini_out (hwo);
 
         for (sc = hwo->cap_head.lh_first; sc; sc = sc->entries.le_next) {
@@ -1783,8 +1793,10 @@ static void audio_atexit (void)
         }
     }
 
-    while ((hwi = audio_pcm_hw_find_any_enabled_in (hwi))) {
-        hwi->pcm_ops->ctl_in (hwi, VOICE_DISABLE);
+    while ((hwi = audio_pcm_hw_find_any_in (hwi))) {
+        if (hwi->enabled) {
+            hwi->pcm_ops->ctl_in (hwi, VOICE_DISABLE);
+        }
         hwi->pcm_ops->fini_in (hwi);
     }
 
@@ -2050,17 +2062,29 @@ void AUD_del_capture (CaptureVoiceOut *cap, void *cb_opaque)
 void AUD_set_volume_out (SWVoiceOut *sw, int mute, uint8_t lvol, uint8_t rvol)
 {
     if (sw) {
+        HWVoiceOut *hw = sw->hw;
+
         sw->vol.mute = mute;
         sw->vol.l = nominal_volume.l * lvol / 255;
         sw->vol.r = nominal_volume.r * rvol / 255;
+
+        if (hw->pcm_ops->ctl_out) {
+            hw->pcm_ops->ctl_out (hw, VOICE_VOLUME, sw);
+        }
     }
 }
 
 void AUD_set_volume_in (SWVoiceIn *sw, int mute, uint8_t lvol, uint8_t rvol)
 {
     if (sw) {
+        HWVoiceIn *hw = sw->hw;
+
         sw->vol.mute = mute;
         sw->vol.l = nominal_volume.l * lvol / 255;
         sw->vol.r = nominal_volume.r * rvol / 255;
+
+        if (hw->pcm_ops->ctl_in) {
+            hw->pcm_ops->ctl_in (hw, VOICE_VOLUME, sw);
+        }
     }
 }

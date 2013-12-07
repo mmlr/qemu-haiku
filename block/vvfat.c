@@ -982,6 +982,12 @@ static BDRVVVFATState *vvv = NULL;
 static int enable_write_target(BDRVVVFATState *s);
 static int is_consistent(BDRVVVFATState *s);
 
+static void vvfat_rebind(BlockDriverState *bs)
+{
+    BDRVVVFATState *s = bs->opaque;
+    s->bs = bs;
+}
+
 static int vvfat_open(BlockDriverState *bs, const char* dirname, int flags)
 {
     BDRVVVFATState *s = bs->opaque;
@@ -2218,6 +2224,7 @@ static int commit_one_file(BDRVVVFATState* s,
     }
     if (offset > 0) {
         if (lseek(fd, offset, SEEK_SET) != offset) {
+            close(fd);
             g_free(cluster);
             return -3;
         }
@@ -2238,11 +2245,13 @@ static int commit_one_file(BDRVVVFATState* s,
 	    (uint8_t*)cluster, (rest_size + 0x1ff) / 0x200);
 
         if (ret < 0) {
+            close(fd);
             g_free(cluster);
             return ret;
         }
 
         if (write(fd, cluster, rest_size) < 0) {
+            close(fd);
             g_free(cluster);
             return -2;
         }
@@ -2758,7 +2767,7 @@ static coroutine_fn int vvfat_co_write(BlockDriverState *bs, int64_t sector_num,
     return ret;
 }
 
-static int vvfat_is_allocated(BlockDriverState *bs,
+static int coroutine_fn vvfat_co_is_allocated(BlockDriverState *bs,
 	int64_t sector_num, int nb_sectors, int* n)
 {
     BDRVVVFATState* s = bs->opaque;
@@ -2799,7 +2808,12 @@ static int enable_write_target(BDRVVVFATState *s)
     array_init(&(s->commits), sizeof(commit_t));
 
     s->qcow_filename = g_malloc(1024);
-    get_tmp_filename(s->qcow_filename, 1024);
+    ret = get_tmp_filename(s->qcow_filename, 1024);
+    if (ret < 0) {
+        g_free(s->qcow_filename);
+        s->qcow_filename = NULL;
+        return ret;
+    }
 
     bdrv_qcow = bdrv_find_format("qcow");
     options = parse_option_parameters("", bdrv_qcow->create_options, NULL);
@@ -2852,10 +2866,11 @@ static BlockDriver bdrv_vvfat = {
     .format_name	= "vvfat",
     .instance_size	= sizeof(BDRVVVFATState),
     .bdrv_file_open	= vvfat_open,
+    .bdrv_rebind	= vvfat_rebind,
     .bdrv_read          = vvfat_co_read,
     .bdrv_write         = vvfat_co_write,
     .bdrv_close		= vvfat_close,
-    .bdrv_is_allocated	= vvfat_is_allocated,
+    .bdrv_co_is_allocated = vvfat_co_is_allocated,
     .protocol_name	= "fat",
 };
 

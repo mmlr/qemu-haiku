@@ -44,13 +44,26 @@ int setenv(const char *name, const char *value, int overwrite)
         char *string = g_malloc(length);
         snprintf(string, length, "%s=%s", name, value);
         result = putenv(string);
+
+        /* Windows takes a copy and does not continue to use our string.
+         * Therefore it can be safely freed on this platform.  POSIX code
+         * typically has to leak the string because according to the spec it
+         * becomes part of the environment.
+         */
+        g_free(string);
     }
     return result;
 }
 
 static BOOL WINAPI qemu_ctrl_handler(DWORD type)
 {
-    exit(STATUS_CONTROL_C_EXIT);
+    qemu_system_shutdown_request();
+    /* Windows 7 kills application when the function returns.
+       Sleep here to give QEMU a try for closing.
+       Sleep period is 10000ms because Windows kills the program
+       after 10 seconds anyway. */
+    Sleep(10000);
+
     return TRUE;
 }
 
@@ -143,9 +156,4 @@ int qemu_create_pidfile(const char *filename)
         return -1;
     }
     return 0;
-}
-
-int qemu_get_thread_id(void)
-{
-    return GetCurrentThreadId();
 }

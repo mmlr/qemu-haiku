@@ -772,7 +772,7 @@ QemuCocoaView *cocoaView;
               modalForWindow:normalWindow modalDelegate:self
               didEndSelector:@selector(openPanelDidEnd:returnCode:contextInfo:) contextInfo:NULL];
     } else {
-        // or Launch Qemu, with the global args
+        // or launch QEMU, with the global args
         [self startEmulationWithArgc:gArgc argv:(char **)gArgv];
     }
 }
@@ -879,7 +879,8 @@ int main (int argc, const char * argv[]) {
                 !strcmp(opt, "-vnc") ||
                 !strcmp(opt, "-nographic") ||
                 !strcmp(opt, "-version") ||
-                !strcmp(opt, "-curses")) {
+                !strcmp(opt, "-curses") ||
+                !strcmp(opt, "-qtest")) {
                 return qemu_main(gArgc, gArgv, *_NSGetEnviron());
             }
         }

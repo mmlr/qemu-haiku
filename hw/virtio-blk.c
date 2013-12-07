@@ -29,7 +29,7 @@ typedef struct VirtIOBlock
     void *rq;
     QEMUBH *bh;
     BlockConf *conf;
-    char *serial;
+    VirtIOBlkConf *blk;
     unsigned short sector_mask;
     DeviceState *qdev;
 } VirtIOBlock;
@@ -69,7 +69,7 @@ static int virtio_blk_handle_rw_error(VirtIOBlockReq *req, int error,
     VirtIOBlock *s = req->dev;
 
     if (action == BLOCK_ERR_IGNORE) {
-        bdrv_mon_event(s->bs, BDRV_ACTION_IGNORE, is_read);
+        bdrv_emit_qmp_error_event(s->bs, BDRV_ACTION_IGNORE, is_read);
         return 0;
     }
 
@@ -77,14 +77,14 @@ static int virtio_blk_handle_rw_error(VirtIOBlockReq *req, int error,
             || action == BLOCK_ERR_STOP_ANY) {
         req->next = s->rq;
         s->rq = req;
-        bdrv_mon_event(s->bs, BDRV_ACTION_STOP, is_read);
+        bdrv_emit_qmp_error_event(s->bs, BDRV_ACTION_STOP, is_read);
         vm_stop(RUN_STATE_IO_ERROR);
         bdrv_iostatus_set_err(s->bs, error);
     } else {
         virtio_blk_req_complete(req, VIRTIO_BLK_S_IOERR);
         bdrv_acct_done(s->bs, &req->acct);
         g_free(req);
-        bdrv_mon_event(s->bs, BDRV_ACTION_REPORT, is_read);
+        bdrv_emit_qmp_error_event(s->bs, BDRV_ACTION_REPORT, is_read);
     }
 
     return 1;
@@ -145,13 +145,13 @@ static VirtIOBlockReq *virtio_blk_get_request(VirtIOBlock *s)
     return req;
 }
 
-#ifdef __linux__
 static void virtio_blk_handle_scsi(VirtIOBlockReq *req)
 {
-    struct sg_io_hdr hdr;
+#ifdef __linux__
     int ret;
-    int status;
     int i;
+#endif
+    int status = VIRTIO_BLK_S_OK;
 
     /*
      * We require at least one output segment each for the virtio_blk_outhdr
@@ -167,20 +167,26 @@ static void virtio_blk_handle_scsi(VirtIOBlockReq *req)
     }
 
     /*
-     * No support for bidirection commands yet.
-     */
-    if (req->elem.out_num > 2 && req->elem.in_num > 3) {
-        virtio_blk_req_complete(req, VIRTIO_BLK_S_UNSUPP);
-        g_free(req);
-        return;
-    }
-
-    /*
      * The scsi inhdr is placed in the second-to-last input segment, just
      * before the regular inhdr.
      */
     req->scsi = (void *)req->elem.in_sg[req->elem.in_num - 2].iov_base;
 
+    if (!req->dev->blk->scsi) {
+        status = VIRTIO_BLK_S_UNSUPP;
+        goto fail;
+    }
+
+    /*
+     * No support for bidirection commands yet.
+     */
+    if (req->elem.out_num > 2 && req->elem.in_num > 3) {
+        status = VIRTIO_BLK_S_UNSUPP;
+        goto fail;
+    }
+
+#ifdef __linux__
+    struct sg_io_hdr hdr;
     memset(&hdr, 0, sizeof(struct sg_io_hdr));
     hdr.interface_id = 'S';
     hdr.cmd_len = req->elem.out_sg[1].iov_len;
@@ -224,12 +230,7 @@ static void virtio_blk_handle_scsi(VirtIOBlockReq *req)
     ret = bdrv_ioctl(req->dev->bs, SG_IO, &hdr);
     if (ret) {
         status = VIRTIO_BLK_S_UNSUPP;
-        hdr.status = ret;
-        hdr.resid = hdr.dxfer_len;
-    } else if (hdr.status) {
-        status = VIRTIO_BLK_S_IOERR;
-    } else {
-        status = VIRTIO_BLK_S_OK;
+        goto fail;
     }
 
     /*
@@ -252,14 +253,17 @@ static void virtio_blk_handle_scsi(VirtIOBlockReq *req)
 
     virtio_blk_req_complete(req, status);
     g_free(req);
-}
+    return;
 #else
-static void virtio_blk_handle_scsi(VirtIOBlockReq *req)
-{
-    virtio_blk_req_complete(req, VIRTIO_BLK_S_UNSUPP);
+    abort();
+#endif
+
+fail:
+    /* Just put anything nonzero so that the ioctl fails in the guest.  */
+    stl_p(&req->scsi->errors, 255);
+    virtio_blk_req_complete(req, status);
     g_free(req);
 }
-#endif /* __linux__ */
 
 typedef struct MultiReqBuffer {
     BlockRequest        blkreq[32];
@@ -288,19 +292,13 @@ static void virtio_submit_multiwrite(BlockDriverState *bs, MultiReqBuffer *mrb)
 
 static void virtio_blk_handle_flush(VirtIOBlockReq *req, MultiReqBuffer *mrb)
 {
-    BlockDriverAIOCB *acb;
-
     bdrv_acct_start(req->dev->bs, &req->acct, 0, BDRV_ACCT_FLUSH);
 
     /*
      * Make sure all outstanding writes are posted to the backing device.
      */
     virtio_submit_multiwrite(req->dev->bs, mrb);
-
-    acb = bdrv_aio_flush(req->dev->bs, virtio_blk_flush_complete, req);
-    if (!acb) {
-        virtio_blk_flush_complete(req, -EIO);
-    }
+    bdrv_aio_flush(req->dev->bs, virtio_blk_flush_complete, req);
 }
 
 static void virtio_blk_handle_write(VirtIOBlockReq *req, MultiReqBuffer *mrb)
@@ -340,12 +338,13 @@ static void virtio_blk_handle_write(VirtIOBlockReq *req, MultiReqBuffer *mrb)
 
 static void virtio_blk_handle_read(VirtIOBlockReq *req)
 {
-    BlockDriverAIOCB *acb;
     uint64_t sector;
 
     sector = ldq_p(&req->out->sector);
 
     bdrv_acct_start(req->dev->bs, &req->acct, req->qiov.size, BDRV_ACCT_READ);
+
+    trace_virtio_blk_handle_read(req, sector, req->qiov.size / 512);
 
     if (sector & req->dev->sector_mask) {
         virtio_blk_rw_complete(req, -EIO);
@@ -355,13 +354,9 @@ static void virtio_blk_handle_read(VirtIOBlockReq *req)
         virtio_blk_rw_complete(req, -EIO);
         return;
     }
-
-    acb = bdrv_aio_readv(req->dev->bs, sector, &req->qiov,
-                         req->qiov.size / BDRV_SECTOR_SIZE,
-                         virtio_blk_rw_complete, req);
-    if (!acb) {
-        virtio_blk_rw_complete(req, -EIO);
-    }
+    bdrv_aio_readv(req->dev->bs, sector, &req->qiov,
+                   req->qiov.size / BDRV_SECTOR_SIZE,
+                   virtio_blk_rw_complete, req);
 }
 
 static void virtio_blk_handle_request(VirtIOBlockReq *req,
@@ -397,7 +392,7 @@ static void virtio_blk_handle_request(VirtIOBlockReq *req,
          * terminated by '\0' only when shorter than buffer.
          */
         strncpy(req->elem.in_sg[0].iov_base,
-                s->serial ? s->serial : "",
+                s->blk->serial ? s->blk->serial : "",
                 MIN(req->elem.in_sg[0].iov_len, VIRTIO_BLK_ID_BYTES));
         virtio_blk_req_complete(req, VIRTIO_BLK_S_OK);
         g_free(req);
@@ -474,7 +469,7 @@ static void virtio_blk_reset(VirtIODevice *vdev)
      * This should cancel pending requests, but can't do nicely until there
      * are per-device request lists.
      */
-    qemu_aio_flush();
+    bdrv_drain_all();
 }
 
 /* coalesce internal state, copy to pci i/o region 0
@@ -497,7 +492,22 @@ static void virtio_blk_update_config(VirtIODevice *vdev, uint8_t *config)
     stw_raw(&blkcfg.min_io_size, s->conf->min_io_size / blk_size);
     stw_raw(&blkcfg.opt_io_size, s->conf->opt_io_size / blk_size);
     blkcfg.heads = heads;
-    blkcfg.sectors = secs & ~s->sector_mask;
+    /*
+     * We must ensure that the block device capacity is a multiple of
+     * the logical block size. If that is not the case, lets use
+     * sector_mask to adopt the geometry to have a correct picture.
+     * For those devices where the capacity is ok for the given geometry
+     * we dont touch the sector value of the geometry, since some devices
+     * (like s390 dasd) need a specific value. Here the capacity is already
+     * cyls*heads*secs*blk_size and the sector value is not block size
+     * divided by 512 - instead it is the amount of blk_size blocks
+     * per track (cylinder).
+     */
+    if (bdrv_getlength(s->bs) /  heads / secs % blk_size) {
+        blkcfg.sectors = secs & ~s->sector_mask;
+    } else {
+        blkcfg.sectors = secs;
+    }
     blkcfg.size_max = 0;
     blkcfg.physical_block_exp = get_physical_block_exp(s->conf);
     blkcfg.alignment_offset = 0;
@@ -512,6 +522,7 @@ static uint32_t virtio_blk_get_features(VirtIODevice *vdev, uint32_t features)
     features |= (1 << VIRTIO_BLK_F_GEOMETRY);
     features |= (1 << VIRTIO_BLK_F_TOPOLOGY);
     features |= (1 << VIRTIO_BLK_F_BLK_SIZE);
+    features |= (1 << VIRTIO_BLK_F_SCSI);
 
     if (bdrv_enable_write_cache(s->bs))
         features |= (1 << VIRTIO_BLK_F_WCACHE);
@@ -540,11 +551,16 @@ static void virtio_blk_save(QEMUFile *f, void *opaque)
 static int virtio_blk_load(QEMUFile *f, void *opaque, int version_id)
 {
     VirtIOBlock *s = opaque;
+    int ret;
 
     if (version_id != 2)
         return -EINVAL;
 
-    virtio_load(&s->vdev, f);
+    ret = virtio_load(&s->vdev, f);
+    if (ret) {
+        return ret;
+    }
+
     while (qemu_get_sbyte(f)) {
         VirtIOBlockReq *req = virtio_blk_alloc_request(s);
         qemu_get_buffer(f, (unsigned char*)&req->elem, sizeof(req->elem));
@@ -571,28 +587,27 @@ static const BlockDevOps virtio_block_ops = {
     .resize_cb = virtio_blk_resize,
 };
 
-VirtIODevice *virtio_blk_init(DeviceState *dev, BlockConf *conf,
-                              char **serial)
+VirtIODevice *virtio_blk_init(DeviceState *dev, VirtIOBlkConf *blk)
 {
     VirtIOBlock *s;
     int cylinders, heads, secs;
     static int virtio_blk_id;
     DriveInfo *dinfo;
 
-    if (!conf->bs) {
-        error_report("virtio-blk-pci: drive property not set");
+    if (!blk->conf.bs) {
+        error_report("drive property not set");
         return NULL;
     }
-    if (!bdrv_is_inserted(conf->bs)) {
+    if (!bdrv_is_inserted(blk->conf.bs)) {
         error_report("Device needs media, but drive is empty");
         return NULL;
     }
 
-    if (!*serial) {
+    if (!blk->serial) {
         /* try to fall back to value set with legacy -drive serial=... */
-        dinfo = drive_get_by_blockdev(conf->bs);
+        dinfo = drive_get_by_blockdev(blk->conf.bs);
         if (*dinfo->serial) {
-            *serial = strdup(dinfo->serial);
+            blk->serial = strdup(dinfo->serial);
         }
     }
 
@@ -603,9 +618,9 @@ VirtIODevice *virtio_blk_init(DeviceState *dev, BlockConf *conf,
     s->vdev.get_config = virtio_blk_update_config;
     s->vdev.get_features = virtio_blk_get_features;
     s->vdev.reset = virtio_blk_reset;
-    s->bs = conf->bs;
-    s->conf = conf;
-    s->serial = *serial;
+    s->bs = blk->conf.bs;
+    s->conf = &blk->conf;
+    s->blk = blk;
     s->rq = NULL;
     s->sector_mask = (s->conf->logical_block_size / BDRV_SECTOR_SIZE) - 1;
     bdrv_guess_geometry(s->bs, &cylinders, &heads, &secs);
@@ -617,10 +632,10 @@ VirtIODevice *virtio_blk_init(DeviceState *dev, BlockConf *conf,
     register_savevm(dev, "virtio-blk", virtio_blk_id++, 2,
                     virtio_blk_save, virtio_blk_load, s);
     bdrv_set_dev_ops(s->bs, &virtio_block_ops, s);
-    bdrv_set_buffer_alignment(s->bs, conf->logical_block_size);
+    bdrv_set_buffer_alignment(s->bs, s->conf->logical_block_size);
 
     bdrv_iostatus_enable(s->bs);
-    add_boot_device_path(conf->bootindex, dev, "/disk@0,0");
+    add_boot_device_path(s->conf->bootindex, dev, "/disk@0,0");
 
     return &s->vdev;
 }
@@ -629,5 +644,6 @@ void virtio_blk_exit(VirtIODevice *vdev)
 {
     VirtIOBlock *s = to_virtio_blk(vdev);
     unregister_savevm(s->qdev, "virtio-blk", s);
+    blockdev_mark_auto_del(s->bs);
     virtio_cleanup(vdev);
 }
