@@ -410,7 +410,7 @@ static void es1370_update_voices (ES1370State *s, uint32_t ctl, uint32_t sctl)
 
         if ((old_fmt != new_fmt) || (old_freq != new_freq)) {
             d->shift = (new_fmt & 1) + (new_fmt >> 1);
-            ldebug ("channel %d, freq = %d, nchannels %d, fmt %d, shift %d\n",
+            ldebug ("channel %zu, freq = %d, nchannels %d, fmt %d, shift %d\n",
                     i,
                     new_freq,
                     1 << (new_fmt & 1),
@@ -578,7 +578,7 @@ IO_WRITE_PROTO (es1370_writel)
         d++;
     case ES1370_REG_DAC1_SCOUNT:
         d->scount = (val & 0xffff) | (d->scount & ~0xffff);
-        ldebug ("chan %d CURR_SAMP_CT %d, SAMP_CT %d\n",
+        ldebug ("chan %td CURR_SAMP_CT %d, SAMP_CT %d\n",
                 d - &s->chan[0], val >> 16, (val & 0xffff));
         break;
 
@@ -588,7 +588,7 @@ IO_WRITE_PROTO (es1370_writel)
         d++;
     case ES1370_REG_DAC1_FRAMEADR:
         d->frame_addr = val;
-        ldebug ("chan %d frame address %#x\n", d - &s->chan[0], val);
+        ldebug ("chan %td frame address %#x\n", d - &s->chan[0], val);
         break;
 
     case ES1370_REG_PHANTOM_FRAMECNT:
@@ -605,7 +605,7 @@ IO_WRITE_PROTO (es1370_writel)
     case ES1370_REG_DAC1_FRAMECNT:
         d->frame_cnt = val;
         d->leftover = 0;
-        ldebug ("chan %d frame count %d, buffer size %d\n",
+        ldebug ("chan %td frame count %d, buffer size %d\n",
                 d - &s->chan[0], val >> 16, val & 0xffff);
         break;
 
@@ -745,9 +745,10 @@ IO_READ_PROTO (es1370_readl)
         {
             uint32_t size = ((d->frame_cnt & 0xffff) + 1) << 2;
             uint32_t curr = ((d->frame_cnt >> 16) + 1) << 2;
-            if (curr > size)
+            if (curr > size) {
                 dolog ("read framecnt curr %d, size %d %d\n", curr, size,
                        curr > size);
+            }
         }
 #endif
         break;
@@ -788,7 +789,7 @@ static void es1370_transfer_audio (ES1370State *s, struct chan *d, int loop_sel,
     int cnt = d->frame_cnt >> 16;
     int size = d->frame_cnt & 0xffff;
     int left = ((size - cnt + 1) << 2) + d->leftover;
-    int transfered = 0;
+    int transferred = 0;
     int temp = audio_MIN (max, audio_MIN (left, csc_bytes));
     int index = d - &s->chan[0];
 
@@ -807,7 +808,7 @@ static void es1370_transfer_audio (ES1370State *s, struct chan *d, int loop_sel,
 
             temp -= acquired;
             addr += acquired;
-            transfered += acquired;
+            transferred += acquired;
         }
     }
     else {
@@ -823,11 +824,11 @@ static void es1370_transfer_audio (ES1370State *s, struct chan *d, int loop_sel,
                 break;
             temp -= copied;
             addr += copied;
-            transfered += copied;
+            transferred += copied;
         }
     }
 
-    if (csc_bytes == transfered) {
+    if (csc_bytes == transferred) {
         *irq = 1;
         d->scount = sc | (sc << 16);
         ldebug ("sc = %d, rate = %f\n",
@@ -836,10 +837,10 @@ static void es1370_transfer_audio (ES1370State *s, struct chan *d, int loop_sel,
     }
     else {
         *irq = 0;
-        d->scount = sc | (((csc_bytes - transfered - 1) >> d->shift) << 16);
+        d->scount = sc | (((csc_bytes - transferred - 1) >> d->shift) << 16);
     }
 
-    cnt += (transfered + d->leftover) >> 2;
+    cnt += (transferred + d->leftover) >> 2;
 
     if (s->sctl & loop_sel) {
         /* Bah, how stupid is that having a 0 represent true value?
@@ -853,7 +854,7 @@ static void es1370_transfer_audio (ES1370State *s, struct chan *d, int loop_sel,
             d->frame_cnt |= cnt << 16;
     }
 
-    d->leftover = (transfered + d->leftover) & 3;
+    d->leftover = (transferred + d->leftover) & 3;
 }
 
 static void es1370_run_channel (ES1370State *s, size_t chan, int free_or_avail)
@@ -914,7 +915,7 @@ static const MemoryRegionPortio es1370_portio[] = {
     { 0, 0x40 * 4, 1, .read = es1370_readb, },
     { 0, 0x40 * 2, 2, .read = es1370_readw, },
     { 0, 0x40, 4, .read = es1370_readl, },
-    PORTIO_END_OF_LIST()
+    PORTIO_END_OF_LIST ()
 };
 
 static const MemoryRegionOps es1370_io_ops = {
@@ -928,12 +929,12 @@ static const VMStateDescription vmstate_es1370_channel = {
     .minimum_version_id = 2,
     .minimum_version_id_old = 2,
     .fields      = (VMStateField []) {
-        VMSTATE_UINT32(shift, struct chan),
-        VMSTATE_UINT32(leftover, struct chan),
-        VMSTATE_UINT32(scount, struct chan),
-        VMSTATE_UINT32(frame_addr, struct chan),
-        VMSTATE_UINT32(frame_cnt, struct chan),
-        VMSTATE_END_OF_LIST()
+        VMSTATE_UINT32 (shift, struct chan),
+        VMSTATE_UINT32 (leftover, struct chan),
+        VMSTATE_UINT32 (scount, struct chan),
+        VMSTATE_UINT32 (frame_addr, struct chan),
+        VMSTATE_UINT32 (frame_cnt, struct chan),
+        VMSTATE_END_OF_LIST ()
     }
 };
 
@@ -973,15 +974,15 @@ static const VMStateDescription vmstate_es1370 = {
     .minimum_version_id_old = 2,
     .post_load = es1370_post_load,
     .fields      = (VMStateField []) {
-        VMSTATE_PCI_DEVICE(dev, ES1370State),
-        VMSTATE_STRUCT_ARRAY(chan, ES1370State, NB_CHANNELS, 2,
-                             vmstate_es1370_channel, struct chan),
-        VMSTATE_UINT32(ctl, ES1370State),
-        VMSTATE_UINT32(status, ES1370State),
-        VMSTATE_UINT32(mempage, ES1370State),
-        VMSTATE_UINT32(codec, ES1370State),
-        VMSTATE_UINT32(sctl, ES1370State),
-        VMSTATE_END_OF_LIST()
+        VMSTATE_PCI_DEVICE (dev, ES1370State),
+        VMSTATE_STRUCT_ARRAY (chan, ES1370State, NB_CHANNELS, 2,
+                              vmstate_es1370_channel, struct chan),
+        VMSTATE_UINT32 (ctl, ES1370State),
+        VMSTATE_UINT32 (status, ES1370State),
+        VMSTATE_UINT32 (mempage, ES1370State),
+        VMSTATE_UINT32 (codec, ES1370State),
+        VMSTATE_UINT32 (sctl, ES1370State),
+        VMSTATE_END_OF_LIST ()
     }
 };
 
@@ -1017,7 +1018,7 @@ static int es1370_initfn (PCIDevice *dev)
     return 0;
 }
 
-static int es1370_exitfn(PCIDevice *dev)
+static int es1370_exitfn (PCIDevice *dev)
 {
     ES1370State *s = DO_UPCAST (ES1370State, dev, dev);
 
@@ -1031,28 +1032,33 @@ int es1370_init (PCIBus *bus)
     return 0;
 }
 
-static PCIDeviceInfo es1370_info = {
-    .qdev.name    = "ES1370",
-    .qdev.desc    = "ENSONIQ AudioPCI ES1370",
-    .qdev.size    = sizeof (ES1370State),
-    .qdev.vmsd    = &vmstate_es1370,
-    .init         = es1370_initfn,
-    .exit         = es1370_exitfn,
-    .vendor_id    = PCI_VENDOR_ID_ENSONIQ,
-    .device_id    = PCI_DEVICE_ID_ENSONIQ_ES1370,
-    .class_id     = PCI_CLASS_MULTIMEDIA_AUDIO,
-#if 1
-    .subsystem_vendor_id = 0x4942,
-    .subsystem_id = 0x4c4c,
-#else
-    .subsystem_vendor_id = 0x1274,
-    .subsystem_id = 0x1371,
-#endif
+static void es1370_class_init (ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS (klass);
+    PCIDeviceClass *k = PCI_DEVICE_CLASS (klass);
+
+    k->init = es1370_initfn;
+    k->exit = es1370_exitfn;
+    k->vendor_id = PCI_VENDOR_ID_ENSONIQ;
+    k->device_id = PCI_DEVICE_ID_ENSONIQ_ES1370;
+    k->class_id = PCI_CLASS_MULTIMEDIA_AUDIO;
+    k->subsystem_vendor_id = 0x4942;
+    k->subsystem_id = 0x4c4c;
+    dc->desc = "ENSONIQ AudioPCI ES1370";
+    dc->vmsd = &vmstate_es1370;
+}
+
+static TypeInfo es1370_info = {
+    .name          = "ES1370",
+    .parent        = TYPE_PCI_DEVICE,
+    .instance_size = sizeof (ES1370State),
+    .class_init    = es1370_class_init,
 };
 
-static void es1370_register (void)
+static void es1370_register_types (void)
 {
-    pci_qdev_register (&es1370_info);
+    type_register_static (&es1370_info);
 }
-device_init (es1370_register);
+
+type_init (es1370_register_types)
 

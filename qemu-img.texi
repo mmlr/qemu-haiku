@@ -4,6 +4,16 @@ usage: qemu-img command [command options]
 @c man end
 @end example
 
+@c man begin DESCRIPTION
+qemu-img allows you to create, convert and modify images offline. It can handle
+all image formats supported by QEMU.
+
+@b{Warning:} Never use qemu-img to modify images in use by a running virtual
+machine or any other process; this may destroy the image. Also, be aware that
+querying an image that is being modified by another process may encounter
+inconsistent state.
+@c man end
+
 @c man begin OPTIONS
 
 The following commands are supported:
@@ -159,6 +169,24 @@ It can be used without an accessible old backing file, i.e. you can use it to
 fix an image whose backing file has already been moved/renamed.
 @end table
 
+You can use @code{rebase} to perform a ``diff'' operation on two
+disk images.  This can be useful when you have copied or cloned
+a guest, and you want to get back to a thin image on top of a
+template or base image.
+
+Say that @code{base.img} has been cloned as @code{modified.img} by
+copying it, and that the @code{modified.img} guest has run so there
+are now some changes compared to @code{base.img}.  To construct a thin
+image called @code{diff.qcow2} that contains just the differences, do:
+
+@example
+qemu-img create -f qcow2 -b modified.img diff.qcow2
+qemu-img rebase -b base.img diff.qcow2
+@end example
+
+At this point, @code{modified.img} can be discarded, since
+@code{base.img + diff.qcow2} contains the same information.
+
 @item resize @var{filename} [+ | -]@var{size}
 
 Change the disk image as if it had been created with @var{size}.
@@ -214,6 +242,29 @@ to grow.
 
 @end table
 
+@item qed
+Image format with support for backing files and compact image files (when your
+filesystem or transport medium does not support holes).  Good performance due
+to less metadata than the more featureful qcow2 format, especially with
+cache=writethrough or cache=directsync.  Consider using qcow2 which will soon
+have a similar optimization and is most actively developed.
+
+Supported options:
+@table @code
+@item backing_file
+File name of a base image (see @option{create} subcommand).
+@item backing_fmt
+Image file format of backing file (optional).  Useful if the format cannot be
+autodetected because it has no header, like some vhd/vpc files.
+@item cluster_size
+Changes the cluster size (must be power-of-2 between 4K and 64K). Smaller
+cluster sizes can improve the image file size whereas larger cluster sizes
+generally provide better performance.
+@item table_size
+Changes the number of clusters per L1/L2 table (must be power-of-2 between 1
+and 16).  There is normally no need to change this value but this option can be
+used for performance benchmarking.
+@end table
 
 @item qcow
 Old QEMU image format. Left for compatibility.

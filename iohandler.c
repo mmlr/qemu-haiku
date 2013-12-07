@@ -33,13 +33,13 @@
 #endif
 
 typedef struct IOHandlerRecord {
-    int fd;
     IOCanReadHandler *fd_read_poll;
     IOHandler *fd_read;
     IOHandler *fd_write;
-    int deleted;
     void *opaque;
     QLIST_ENTRY(IOHandlerRecord) next;
+    int fd;
+    bool deleted;
 } IOHandlerRecord;
 
 static QLIST_HEAD(, IOHandlerRecord) io_handlers =
@@ -77,6 +77,7 @@ int qemu_set_fd_handler2(int fd,
         ioh->fd_write = fd_write;
         ioh->opaque = opaque;
         ioh->deleted = 0;
+        qemu_notify_event();
     }
     return 0;
 }

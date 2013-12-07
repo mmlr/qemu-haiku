@@ -15,8 +15,10 @@
 #ifndef QEMU_VIRTIO_PCI_H
 #define QEMU_VIRTIO_PCI_H
 
+#include "virtio-blk.h"
 #include "virtio-net.h"
 #include "virtio-serial.h"
+#include "virtio-scsi.h"
 
 /* Performance improves when virtqueue kick processing is decoupled from the
  * vcpu thread using ioeventfd for some devices. */
@@ -31,8 +33,7 @@ typedef struct {
     uint32_t flags;
     uint32_t class_code;
     uint32_t nvectors;
-    BlockConf block;
-    char *block_serial;
+    VirtIOBlkConf blk;
     NICConf nic;
     uint32_t host_features;
 #ifdef CONFIG_LINUX
@@ -40,6 +41,7 @@ typedef struct {
 #endif
     virtio_serial_conf serial;
     virtio_net_conf net;
+    VirtIOSCSIConf scsi;
     bool ioeventfd_disabled;
     bool ioeventfd_started;
 } VirtIOPCIProxy;

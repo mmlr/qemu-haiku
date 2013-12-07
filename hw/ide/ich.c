@@ -84,6 +84,14 @@ static const VMStateDescription vmstate_ahci = {
     .unmigratable = 1,
 };
 
+static void pci_ich9_reset(void *opaque)
+{
+    struct AHCIPCIState *d = opaque;
+
+    msi_reset(&d->card);
+    ahci_reset(opaque);
+}
+
 static int pci_ich9_ahci_init(PCIDevice *dev)
 {
     struct AHCIPCIState *d;
@@ -102,7 +110,7 @@ static int pci_ich9_ahci_init(PCIDevice *dev)
     /* XXX Software should program this register */
     d->card.config[0x90]   = 1 << 6; /* Address Map Register - AHCI mode */
 
-    qemu_register_reset(ahci_reset, d);
+    qemu_register_reset(pci_ich9_reset, d);
 
     msi_init(dev, 0x50, 1, true, false);
     d->ahci.irq = d->card.irq[0];
@@ -133,7 +141,7 @@ static int pci_ich9_uninit(PCIDevice *dev)
     d = DO_UPCAST(struct AHCIPCIState, card, dev);
 
     msi_uninit(dev);
-    qemu_unregister_reset(ahci_reset, d);
+    qemu_unregister_reset(pci_ich9_reset, d);
     ahci_uninit(&d->ahci);
 
     return 0;
@@ -146,26 +154,31 @@ static void pci_ich9_write_config(PCIDevice *pci, uint32_t addr,
     msi_write_config(pci, addr, val, len);
 }
 
-static PCIDeviceInfo ich_ahci_info[] = {
-    {
-        .qdev.name    = "ich9-ahci",
-        .qdev.alias   = "ahci",
-        .qdev.size    = sizeof(AHCIPCIState),
-        .qdev.vmsd    = &vmstate_ahci,
-        .init         = pci_ich9_ahci_init,
-        .exit         = pci_ich9_uninit,
-        .config_write = pci_ich9_write_config,
-        .vendor_id    = PCI_VENDOR_ID_INTEL,
-        .device_id    = PCI_DEVICE_ID_INTEL_82801IR,
-        .revision     = 0x02,
-        .class_id     = PCI_CLASS_STORAGE_SATA,
-    },{
-        /* end of list */
-    }
+static void ich_ahci_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
+
+    k->init = pci_ich9_ahci_init;
+    k->exit = pci_ich9_uninit;
+    k->config_write = pci_ich9_write_config;
+    k->vendor_id = PCI_VENDOR_ID_INTEL;
+    k->device_id = PCI_DEVICE_ID_INTEL_82801IR;
+    k->revision = 0x02;
+    k->class_id = PCI_CLASS_STORAGE_SATA;
+    dc->vmsd = &vmstate_ahci;
+}
+
+static TypeInfo ich_ahci_info = {
+    .name          = "ich9-ahci",
+    .parent        = TYPE_PCI_DEVICE,
+    .instance_size = sizeof(AHCIPCIState),
+    .class_init    = ich_ahci_class_init,
 };
 
-static void ich_ahci_register(void)
+static void ich_ahci_register_types(void)
 {
-    pci_qdev_register_many(ich_ahci_info);
+    type_register_static(&ich_ahci_info);
 }
-device_init(ich_ahci_register);
+
+type_init(ich_ahci_register_types)

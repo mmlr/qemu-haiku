@@ -77,26 +77,20 @@ VirtIODevice *virtio_9p_init(DeviceState *dev, V9fsConf *conf)
         exit(1);
     }
 
-    if (!fse->path || !conf->tag) {
-        /* we haven't specified a mount_tag or the path */
-        fprintf(stderr, "fsdev with id %s needs path "
-                "and Virtio-9p device needs mount_tag arguments\n",
+    if (!conf->tag) {
+        /* we haven't specified a mount_tag */
+        fprintf(stderr, "fsdev with id %s needs mount_tag arguments\n",
                 conf->fsdev_id);
         exit(1);
     }
 
     s->ctx.export_flags = fse->export_flags;
-    s->ctx.fs_root = g_strdup(fse->path);
-    s->ctx.exops.get_st_gen = NULL;
-
-    if (fse->export_flags & V9FS_SM_PASSTHROUGH) {
-        s->ctx.xops = passthrough_xattr_ops;
-    } else if (fse->export_flags & V9FS_SM_MAPPED) {
-        s->ctx.xops = mapped_xattr_ops;
-    } else if (fse->export_flags & V9FS_SM_NONE) {
-        s->ctx.xops = none_xattr_ops;
+    if (fse->path) {
+        s->ctx.fs_root = g_strdup(fse->path);
+    } else {
+        s->ctx.fs_root = NULL;
     }
-
+    s->ctx.exops.get_st_gen = NULL;
     len = strlen(conf->tag);
     if (len > MAX_TAG_LEN - 1) {
         fprintf(stderr, "mount tag '%s' (%d bytes) is longer than "
@@ -160,30 +154,40 @@ static int virtio_9p_init_pci(PCIDevice *pci_dev)
     return 0;
 }
 
-static PCIDeviceInfo virtio_9p_info = {
-    .qdev.name = "virtio-9p-pci",
-    .qdev.size = sizeof(VirtIOPCIProxy),
-    .init      = virtio_9p_init_pci,
-    .vendor_id = PCI_VENDOR_ID_REDHAT_QUMRANET,
-    .device_id = 0x1009,
-    .revision  = VIRTIO_PCI_ABI_VERSION,
-    .class_id  = 0x2,
-    .qdev.props = (Property[]) {
-        DEFINE_PROP_BIT("ioeventfd", VirtIOPCIProxy, flags,
-                        VIRTIO_PCI_FLAG_USE_IOEVENTFD_BIT, true),
-        DEFINE_PROP_UINT32("vectors", VirtIOPCIProxy, nvectors, 2),
-        DEFINE_VIRTIO_COMMON_FEATURES(VirtIOPCIProxy, host_features),
-        DEFINE_PROP_STRING("mount_tag", VirtIOPCIProxy, fsconf.tag),
-        DEFINE_PROP_STRING("fsdev", VirtIOPCIProxy, fsconf.fsdev_id),
-        DEFINE_PROP_END_OF_LIST(),
-    },
-    .qdev.reset = virtio_pci_reset,
+static Property virtio_9p_properties[] = {
+    DEFINE_PROP_BIT("ioeventfd", VirtIOPCIProxy, flags, VIRTIO_PCI_FLAG_USE_IOEVENTFD_BIT, true),
+    DEFINE_PROP_UINT32("vectors", VirtIOPCIProxy, nvectors, 2),
+    DEFINE_VIRTIO_COMMON_FEATURES(VirtIOPCIProxy, host_features),
+    DEFINE_PROP_STRING("mount_tag", VirtIOPCIProxy, fsconf.tag),
+    DEFINE_PROP_STRING("fsdev", VirtIOPCIProxy, fsconf.fsdev_id),
+    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void virtio_9p_register_devices(void)
+static void virtio_9p_class_init(ObjectClass *klass, void *data)
 {
-    pci_qdev_register(&virtio_9p_info);
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
+
+    k->init = virtio_9p_init_pci;
+    k->vendor_id = PCI_VENDOR_ID_REDHAT_QUMRANET;
+    k->device_id = 0x1009;
+    k->revision = VIRTIO_PCI_ABI_VERSION;
+    k->class_id = 0x2;
+    dc->props = virtio_9p_properties;
+    dc->reset = virtio_pci_reset;
+}
+
+static TypeInfo virtio_9p_info = {
+    .name          = "virtio-9p-pci",
+    .parent        = TYPE_PCI_DEVICE,
+    .instance_size = sizeof(VirtIOPCIProxy),
+    .class_init    = virtio_9p_class_init,
+};
+
+static void virtio_9p_register_types(void)
+{
+    type_register_static(&virtio_9p_info);
     virtio_9p_set_fd_limit();
 }
 
-device_init(virtio_9p_register_devices)
+type_init(virtio_9p_register_types)

@@ -9,9 +9,13 @@
  *
  * This work is licensed under the terms of the GNU GPL, version 2.  See
  * the COPYING file in the top-level directory.
+ *
+ * Contributions after 2012-01-13 are licensed under the terms of the
+ * GNU GPL, version 2 or (at your option) any later version.
  */
 
 #include "hw.h"
+#include "msi.h"
 #include "msix.h"
 #include "pci.h"
 #include "range.h"
@@ -31,9 +35,6 @@
 #define MSIX_PAGE_PENDING (MSIX_PAGE_SIZE / 2)
 #define MSIX_MAX_ENTRIES 32
 
-
-/* Flag for interrupt controller to declare MSI-X support */
-int msix_supported;
 
 /* Add MSI-X capability to the config space for the device. */
 /* Given a bar and its size, add MSI-X table on top of it
@@ -235,10 +236,11 @@ int msix_init(struct PCIDevice *dev, unsigned short nentries,
               unsigned bar_nr, unsigned bar_size)
 {
     int ret;
-    /* Nothing to do if MSI is not supported by interrupt controller */
-    if (!msix_supported)
-        return -ENOTSUP;
 
+    /* Nothing to do if MSI is not supported by interrupt controller */
+    if (!msi_supported) {
+        return -ENOTSUP;
+    }
     if (nentries > MSIX_MAX_ENTRIES)
         return -EINVAL;
 
@@ -276,6 +278,15 @@ static void msix_free_irq_entries(PCIDevice *dev)
 
     for (vector = 0; vector < dev->msix_entries_nr; ++vector) {
         dev->msix_entry_used[vector] = 0;
+        msix_clr_pending(dev, vector);
+    }
+}
+
+static void msix_clear_all_vectors(PCIDevice *dev)
+{
+    int vector;
+
+    for (vector = 0; vector < dev->msix_entries_nr; ++vector) {
         msix_clr_pending(dev, vector);
     }
 }
@@ -320,7 +331,7 @@ void msix_load(PCIDevice *dev, QEMUFile *f)
         return;
     }
 
-    msix_free_irq_entries(dev);
+    msix_clear_all_vectors(dev);
     qemu_get_buffer(f, dev->msix_table_page, n * PCI_MSIX_ENTRY_SIZE);
     qemu_get_buffer(f, dev->msix_table_page + MSIX_PAGE_PENDING, (n + 7) / 8);
     msix_update_function_masked(dev);
@@ -370,7 +381,7 @@ void msix_reset(PCIDevice *dev)
 {
     if (!(dev->cap_present & QEMU_PCI_CAP_MSIX))
         return;
-    msix_free_irq_entries(dev);
+    msix_clear_all_vectors(dev);
     dev->config[dev->msix_cap + MSIX_CONTROL_OFFSET] &=
 	    ~dev->wmask[dev->msix_cap + MSIX_CONTROL_OFFSET];
     memset(dev->msix_table_page, 0, MSIX_PAGE_SIZE);

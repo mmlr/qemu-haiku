@@ -14,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <http://www.gnu.org/licenses/>.
+ *
+ *  Contributions after 2012-01-13 are licensed under the terms of the
+ *  GNU GPL, version 2 or (at your option) any later version.
  */
 
 #include <stdio.h>
@@ -45,11 +48,9 @@
 
 /* ------------------------------------------------------------- */
 
-static int syncwrite    = 0;
 static int batch_maps   = 0;
 
 static int max_requests = 32;
-static int use_aio      = 1;
 
 /* ------------------------------------------------------------- */
 
@@ -65,6 +66,7 @@ struct ioreq {
     QEMUIOVector        v;
     int                 presync;
     int                 postsync;
+    uint8_t             mapped;
 
     /* grant mapping */
     uint32_t            domids[BLKIF_MAX_SEGMENTS_PER_REQUEST];
@@ -152,7 +154,7 @@ static void ioreq_finish(struct ioreq *ioreq)
     blkdev->requests_finished++;
 }
 
-static void ioreq_release(struct ioreq *ioreq)
+static void ioreq_release(struct ioreq *ioreq, bool finish)
 {
     struct XenBlkDev *blkdev = ioreq->blkdev;
 
@@ -160,7 +162,11 @@ static void ioreq_release(struct ioreq *ioreq)
     memset(ioreq, 0, sizeof(*ioreq));
     ioreq->blkdev = blkdev;
     QLIST_INSERT_HEAD(&blkdev->freelist, ioreq, list);
-    blkdev->requests_finished--;
+    if (finish) {
+        blkdev->requests_finished--;
+    } else {
+        blkdev->requests_inflight--;
+    }
 }
 
 /*
@@ -187,15 +193,10 @@ static int ioreq_parse(struct ioreq *ioreq)
             ioreq->presync = 1;
             return 0;
         }
-        if (!syncwrite) {
-            ioreq->presync = ioreq->postsync = 1;
-        }
+        ioreq->presync = ioreq->postsync = 1;
         /* fall through */
     case BLKIF_OP_WRITE:
         ioreq->prot = PROT_READ; /* from memory */
-        if (syncwrite) {
-            ioreq->postsync = 1;
-        }
         break;
     default:
         xen_be_printf(&blkdev->xendev, 0, "error: unknown operation (%d)\n",
@@ -246,7 +247,7 @@ static void ioreq_unmap(struct ioreq *ioreq)
     XenGnttab gnt = ioreq->blkdev->xendev.gnttabdev;
     int i;
 
-    if (ioreq->v.niov == 0) {
+    if (ioreq->v.niov == 0 || ioreq->mapped == 0) {
         return;
     }
     if (batch_maps) {
@@ -272,6 +273,7 @@ static void ioreq_unmap(struct ioreq *ioreq)
             ioreq->page[i] = NULL;
         }
     }
+    ioreq->mapped = 0;
 }
 
 static int ioreq_map(struct ioreq *ioreq)
@@ -279,7 +281,7 @@ static int ioreq_map(struct ioreq *ioreq)
     XenGnttab gnt = ioreq->blkdev->xendev.gnttabdev;
     int i;
 
-    if (ioreq->v.niov == 0) {
+    if (ioreq->v.niov == 0 || ioreq->mapped == 1) {
         return 0;
     }
     if (batch_maps) {
@@ -311,78 +313,11 @@ static int ioreq_map(struct ioreq *ioreq)
             ioreq->blkdev->cnt_map++;
         }
     }
+    ioreq->mapped = 1;
     return 0;
 }
 
-static int ioreq_runio_qemu_sync(struct ioreq *ioreq)
-{
-    struct XenBlkDev *blkdev = ioreq->blkdev;
-    int i, rc;
-    off_t pos;
-
-    if (ioreq->req.nr_segments && ioreq_map(ioreq) == -1) {
-        goto err_no_map;
-    }
-    if (ioreq->presync) {
-        bdrv_flush(blkdev->bs);
-    }
-
-    switch (ioreq->req.operation) {
-    case BLKIF_OP_READ:
-        pos = ioreq->start;
-        for (i = 0; i < ioreq->v.niov; i++) {
-            rc = bdrv_read(blkdev->bs, pos / BLOCK_SIZE,
-                           ioreq->v.iov[i].iov_base,
-                           ioreq->v.iov[i].iov_len / BLOCK_SIZE);
-            if (rc != 0) {
-                xen_be_printf(&blkdev->xendev, 0, "rd I/O error (%p, len %zd)\n",
-                              ioreq->v.iov[i].iov_base,
-                              ioreq->v.iov[i].iov_len);
-                goto err;
-            }
-            pos += ioreq->v.iov[i].iov_len;
-        }
-        break;
-    case BLKIF_OP_WRITE:
-    case BLKIF_OP_WRITE_BARRIER:
-        if (!ioreq->req.nr_segments) {
-            break;
-        }
-        pos = ioreq->start;
-        for (i = 0; i < ioreq->v.niov; i++) {
-            rc = bdrv_write(blkdev->bs, pos / BLOCK_SIZE,
-                            ioreq->v.iov[i].iov_base,
-                            ioreq->v.iov[i].iov_len / BLOCK_SIZE);
-            if (rc != 0) {
-                xen_be_printf(&blkdev->xendev, 0, "wr I/O error (%p, len %zd)\n",
-                              ioreq->v.iov[i].iov_base,
-                              ioreq->v.iov[i].iov_len);
-                goto err;
-            }
-            pos += ioreq->v.iov[i].iov_len;
-        }
-        break;
-    default:
-        /* unknown operation (shouldn't happen -- parse catches this) */
-        goto err;
-    }
-
-    if (ioreq->postsync) {
-        bdrv_flush(blkdev->bs);
-    }
-    ioreq->status = BLKIF_RSP_OKAY;
-
-    ioreq_unmap(ioreq);
-    ioreq_finish(ioreq);
-    return 0;
-
-err:
-    ioreq_unmap(ioreq);
-err_no_map:
-    ioreq_finish(ioreq);
-    ioreq->status = BLKIF_RSP_ERROR;
-    return -1;
-}
+static int ioreq_runio_qemu_aio(struct ioreq *ioreq);
 
 static void qemu_aio_complete(void *opaque, int ret)
 {
@@ -395,7 +330,18 @@ static void qemu_aio_complete(void *opaque, int ret)
     }
 
     ioreq->aio_inflight--;
+    if (ioreq->presync) {
+        ioreq->presync = 0;
+        ioreq_runio_qemu_aio(ioreq);
+        return;
+    }
     if (ioreq->aio_inflight > 0) {
+        return;
+    }
+    if (ioreq->postsync) {
+        ioreq->postsync = 0;
+        ioreq->aio_inflight++;
+        bdrv_aio_flush(ioreq->blkdev->bs, qemu_aio_complete, ioreq);
         return;
     }
 
@@ -416,7 +362,8 @@ static int ioreq_runio_qemu_aio(struct ioreq *ioreq)
 
     ioreq->aio_inflight++;
     if (ioreq->presync) {
-        bdrv_flush(blkdev->bs); /* FIXME: aio_flush() ??? */
+        bdrv_aio_flush(ioreq->blkdev->bs, qemu_aio_complete, ioreq);
+        return 0;
     }
 
     switch (ioreq->req.operation) {
@@ -444,9 +391,6 @@ static int ioreq_runio_qemu_aio(struct ioreq *ioreq)
         goto err;
     }
 
-    if (ioreq->postsync) {
-        bdrv_flush(blkdev->bs); /* FIXME: aio_flush() ??? */
-    }
     qemu_aio_complete(ioreq, 0);
 
     return 0;
@@ -517,7 +461,7 @@ static void blk_send_response_all(struct XenBlkDev *blkdev)
     while (!QLIST_EMPTY(&blkdev->finished)) {
         ioreq = QLIST_FIRST(&blkdev->finished);
         send_notify += blk_send_response_one(ioreq);
-        ioreq_release(ioreq);
+        ioreq_release(ioreq, true);
     }
     if (send_notify) {
         xen_be_send_notify(&blkdev->xendev);
@@ -554,9 +498,7 @@ static void blk_handle_requests(struct XenBlkDev *blkdev)
     rp = blkdev->rings.common.sring->req_prod;
     xen_rmb(); /* Ensure we see queued requests up to 'rp'. */
 
-    if (use_aio) {
-        blk_send_response_all(blkdev);
-    }
+    blk_send_response_all(blkdev);
     while (rc != rp) {
         /* pull request from ring */
         if (RING_REQUEST_CONS_OVERFLOW(&blkdev->rings.common, rc)) {
@@ -575,20 +517,11 @@ static void blk_handle_requests(struct XenBlkDev *blkdev)
             if (blk_send_response_one(ioreq)) {
                 xen_be_send_notify(&blkdev->xendev);
             }
-            ioreq_release(ioreq);
+            ioreq_release(ioreq, false);
             continue;
         }
 
-        if (use_aio) {
-            /* run i/o in aio mode */
-            ioreq_runio_qemu_aio(ioreq);
-        } else {
-            /* run i/o in sync mode */
-            ioreq_runio_qemu_sync(ioreq);
-        }
-    }
-    if (!use_aio) {
-        blk_send_response_all(blkdev);
+        ioreq_runio_qemu_aio(ioreq);
     }
 
     if (blkdev->more_work && blkdev->requests_inflight < max_requests) {
@@ -604,6 +537,15 @@ static void blk_bh(void *opaque)
     blk_handle_requests(blkdev);
 }
 
+/*
+ * We need to account for the grant allocations requiring contiguous
+ * chunks; the worst case number would be
+ *     max_req * max_seg + (max_req - 1) * (max_seg - 1) + 1,
+ * but in order to keep things simple just use
+ *     2 * max_req * max_seg.
+ */
+#define MAX_GRANTS(max_req, max_seg) (2 * (max_req) * (max_seg))
+
 static void blk_alloc(struct XenDevice *xendev)
 {
     struct XenBlkDev *blkdev = container_of(xendev, struct XenBlkDev, xendev);
@@ -614,6 +556,11 @@ static void blk_alloc(struct XenDevice *xendev)
     blkdev->bh = qemu_bh_new(blk_bh, blkdev);
     if (xen_mode != XEN_EMULATE) {
         batch_maps = 1;
+    }
+    if (xc_gnttab_set_max_grants(xendev->gnttabdev,
+            MAX_GRANTS(max_requests, BLKIF_MAX_SEGMENTS_PER_REQUEST)) < 0) {
+        xen_be_printf(xendev, 0, "xc_gnttab_set_max_grants failed: %s\n",
+                      strerror(errno));
     }
 }
 
@@ -663,10 +610,10 @@ static int blk_init(struct XenDevice *xendev)
     }
 
     /* read-only ? */
+    qflags = BDRV_O_NOCACHE | BDRV_O_CACHE_WB | BDRV_O_NATIVE_AIO;
     if (strcmp(blkdev->mode, "w") == 0) {
-        qflags = BDRV_O_RDWR;
+        qflags |= BDRV_O_RDWR;
     } else {
-        qflags = 0;
         info  |= VDISK_READONLY;
     }
 
@@ -805,6 +752,7 @@ static void blk_disconnect(struct XenDevice *xendev)
         if (!blkdev->dinfo) {
             /* close/delete only if we created it ourself */
             bdrv_close(blkdev->bs);
+            bdrv_detach_dev(blkdev->bs, blkdev);
             bdrv_delete(blkdev->bs);
         }
         blkdev->bs = NULL;
@@ -822,6 +770,10 @@ static int blk_free(struct XenDevice *xendev)
 {
     struct XenBlkDev *blkdev = container_of(xendev, struct XenBlkDev, xendev);
     struct ioreq *ioreq;
+
+    if (blkdev->bs || blkdev->sring) {
+        blk_disconnect(xendev);
+    }
 
     while (!QLIST_EMPTY(&blkdev->freelist)) {
         ioreq = QLIST_FIRST(&blkdev->freelist);

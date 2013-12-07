@@ -891,11 +891,15 @@ static int virtio_net_load(QEMUFile *f, void *opaque, int version_id)
 {
     VirtIONet *n = opaque;
     int i;
+    int ret;
 
     if (version_id < 2 || version_id > VIRTIO_NET_VM_VERSION)
         return -EINVAL;
 
-    virtio_load(&n->vdev, f);
+    ret = virtio_load(&n->vdev, f);
+    if (ret) {
+        return ret;
+    }
 
     qemu_get_buffer(f, n->mac, ETH_ALEN);
     n->tx_waiting = qemu_get_be32(f);
@@ -1030,7 +1034,7 @@ VirtIODevice *virtio_net_init(DeviceState *dev, NICConf *conf,
     memcpy(&n->mac[0], &conf->macaddr, sizeof(n->mac));
     n->status = VIRTIO_NET_S_LINK_UP;
 
-    n->nic = qemu_new_nic(&net_virtio_info, conf, dev->info->name, dev->id, n);
+    n->nic = qemu_new_nic(&net_virtio_info, conf, object_get_typename(OBJECT(dev)), dev->id, n);
 
     qemu_format_nic_info_str(&n->nic->nc, conf->macaddr.a);
 
