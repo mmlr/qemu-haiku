@@ -833,8 +833,8 @@ haiku_display_init(DisplayState *ds, int fullScreen)
 
 	DisplayChangeListener *displayChangeListener
 		= (DisplayChangeListener *)g_malloc0(sizeof(DisplayChangeListener));
-	displayChangeListener->dpy_update = haiku_update;
-	displayChangeListener->dpy_resize = haiku_resize;
+	displayChangeListener->dpy_gfx_update = haiku_update;
+	displayChangeListener->dpy_gfx_resize = haiku_resize;
 	displayChangeListener->dpy_refresh = haiku_refresh;
 	register_displaychangelistener(ds, displayChangeListener);
 
