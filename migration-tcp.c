@@ -53,29 +53,18 @@ static int tcp_close(MigrationState *s)
     return r;
 }
 
-static void tcp_wait_for_connect(void *opaque)
+static void tcp_wait_for_connect(int fd, void *opaque)
 {
     MigrationState *s = opaque;
-    int val, ret;
-    socklen_t valsize = sizeof(val);
 
-    DPRINTF("connect completed\n");
-    do {
-        ret = getsockopt(s->fd, SOL_SOCKET, SO_ERROR, (void *) &val, &valsize);
-    } while (ret == -1 && (socket_error()) == EINTR);
-
-    if (ret < 0) {
+    if (fd < 0) {
+        DPRINTF("migrate connect error\n");
+        s->fd = -1;
         migrate_fd_error(s);
-        return;
-    }
-
-    qemu_set_fd_handler2(s->fd, NULL, NULL, NULL, NULL);
-
-    if (val == 0)
+    } else {
+        DPRINTF("migrate connect success\n");
+        s->fd = fd;
         migrate_fd_connect(s);
-    else {
-        DPRINTF("error connecting %d\n", val);
-        migrate_fd_error(s);
     }
 }
 
@@ -86,22 +75,10 @@ int tcp_start_outgoing_migration(MigrationState *s, const char *host_port,
     s->write = socket_write;
     s->close = tcp_close;
 
-    s->fd = inet_connect(host_port, false, errp);
-
-    if (!error_is_set(errp)) {
-        migrate_fd_connect(s);
-    } else if (error_is_type(*errp, QERR_SOCKET_CONNECT_IN_PROGRESS)) {
-        DPRINTF("connect in progress\n");
-        qemu_set_fd_handler2(s->fd, NULL, NULL, tcp_wait_for_connect, s);
-    } else if (error_is_type(*errp, QERR_SOCKET_CREATE_FAILED)) {
-        DPRINTF("connect failed\n");
-        return -1;
-    } else if (error_is_type(*errp, QERR_SOCKET_CONNECT_FAILED)) {
-        DPRINTF("connect failed\n");
+    s->fd = inet_nonblocking_connect(host_port, tcp_wait_for_connect, s,
+                                     errp);
+    if (error_is_set(errp)) {
         migrate_fd_error(s);
-        return -1;
-    } else {
-        DPRINTF("unknown error\n");
         return -1;
     }
 

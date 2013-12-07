@@ -560,13 +560,15 @@ static void xen_log_global_stop(MemoryListener *listener)
 
 static void xen_eventfd_add(MemoryListener *listener,
                             MemoryRegionSection *section,
-                            bool match_data, uint64_t data, int fd)
+                            bool match_data, uint64_t data,
+                            EventNotifier *e)
 {
 }
 
 static void xen_eventfd_del(MemoryListener *listener,
                             MemoryRegionSection *section,
-                            bool match_data, uint64_t data, int fd)
+                            bool match_data, uint64_t data,
+                            EventNotifier *e)
 {
 }
 
@@ -1198,4 +1200,16 @@ void destroy_hvm_domain(bool reboot)
 void xen_register_framebuffer(MemoryRegion *mr)
 {
     framebuffer = mr;
+}
+
+void xen_shutdown_fatal_error(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "Will destroy the domain.\n");
+    /* destroy the domain */
+    qemu_system_shutdown_request();
 }

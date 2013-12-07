@@ -1155,6 +1155,68 @@ static int cpu_gdb_write_register(CPUMIPSState *env, uint8_t *mem_buf, int n)
 
     return sizeof(target_ulong);
 }
+#elif defined(TARGET_OPENRISC)
+
+#define NUM_CORE_REGS (32 + 3)
+
+static int cpu_gdb_read_register(CPUOpenRISCState *env, uint8_t *mem_buf, int n)
+{
+    if (n < 32) {
+        GET_REG32(env->gpr[n]);
+    } else {
+        switch (n) {
+        case 32:    /* PPC */
+            GET_REG32(env->ppc);
+            break;
+
+        case 33:    /* NPC */
+            GET_REG32(env->npc);
+            break;
+
+        case 34:    /* SR */
+            GET_REG32(env->sr);
+            break;
+
+        default:
+            break;
+        }
+    }
+    return 0;
+}
+
+static int cpu_gdb_write_register(CPUOpenRISCState *env,
+                                  uint8_t *mem_buf, int n)
+{
+    uint32_t tmp;
+
+    if (n > NUM_CORE_REGS) {
+        return 0;
+    }
+
+    tmp = ldl_p(mem_buf);
+
+    if (n < 32) {
+        env->gpr[n] = tmp;
+    } else {
+        switch (n) {
+        case 32: /* PPC */
+            env->ppc = tmp;
+            break;
+
+        case 33: /* NPC */
+            env->npc = tmp;
+            break;
+
+        case 34: /* SR */
+            env->sr = tmp;
+            break;
+
+        default:
+            break;
+        }
+    }
+    return 4;
+}
 #elif defined (TARGET_SH4)
 
 /* Hint: Use "set architecture sh4" in GDB to see fpu registers */
@@ -1164,33 +1226,48 @@ static int cpu_gdb_write_register(CPUMIPSState *env, uint8_t *mem_buf, int n)
 
 static int cpu_gdb_read_register(CPUSH4State *env, uint8_t *mem_buf, int n)
 {
-    if (n < 8) {
+    switch (n) {
+    case 0 ... 7:
         if ((env->sr & (SR_MD | SR_RB)) == (SR_MD | SR_RB)) {
             GET_REGL(env->gregs[n + 16]);
         } else {
             GET_REGL(env->gregs[n]);
         }
-    } else if (n < 16) {
+    case 8 ... 15:
         GET_REGL(env->gregs[n]);
-    } else if (n >= 25 && n < 41) {
-	GET_REGL(env->fregs[(n - 25) + ((env->fpscr & FPSCR_FR) ? 16 : 0)]);
-    } else if (n >= 43 && n < 51) {
-	GET_REGL(env->gregs[n - 43]);
-    } else if (n >= 51 && n < 59) {
-	GET_REGL(env->gregs[n - (51 - 16)]);
-    }
-    switch (n) {
-    case 16: GET_REGL(env->pc);
-    case 17: GET_REGL(env->pr);
-    case 18: GET_REGL(env->gbr);
-    case 19: GET_REGL(env->vbr);
-    case 20: GET_REGL(env->mach);
-    case 21: GET_REGL(env->macl);
-    case 22: GET_REGL(env->sr);
-    case 23: GET_REGL(env->fpul);
-    case 24: GET_REGL(env->fpscr);
-    case 41: GET_REGL(env->ssr);
-    case 42: GET_REGL(env->spc);
+    case 16:
+        GET_REGL(env->pc);
+    case 17:
+        GET_REGL(env->pr);
+    case 18:
+        GET_REGL(env->gbr);
+    case 19:
+        GET_REGL(env->vbr);
+    case 20:
+        GET_REGL(env->mach);
+    case 21:
+        GET_REGL(env->macl);
+    case 22:
+        GET_REGL(env->sr);
+    case 23:
+        GET_REGL(env->fpul);
+    case 24:
+        GET_REGL(env->fpscr);
+    case 25 ... 40:
+        if (env->fpscr & FPSCR_FR) {
+            stfl_p(mem_buf, env->fregs[n - 9]);
+        } else {
+            stfl_p(mem_buf, env->fregs[n - 25]);
+        }
+        return 4;
+    case 41:
+        GET_REGL(env->ssr);
+    case 42:
+        GET_REGL(env->spc);
+    case 43 ... 50:
+        GET_REGL(env->gregs[n - 43]);
+    case 51 ... 58:
+        GET_REGL(env->gregs[n - (51 - 16)]);
     }
 
     return 0;
@@ -1198,42 +1275,63 @@ static int cpu_gdb_read_register(CPUSH4State *env, uint8_t *mem_buf, int n)
 
 static int cpu_gdb_write_register(CPUSH4State *env, uint8_t *mem_buf, int n)
 {
-    uint32_t tmp;
-
-    tmp = ldl_p(mem_buf);
-
-    if (n < 8) {
-        if ((env->sr & (SR_MD | SR_RB)) == (SR_MD | SR_RB)) {
-            env->gregs[n + 16] = tmp;
-        } else {
-            env->gregs[n] = tmp;
-        }
-	return 4;
-    } else if (n < 16) {
-        env->gregs[n] = tmp;
-	return 4;
-    } else if (n >= 25 && n < 41) {
-	env->fregs[(n - 25) + ((env->fpscr & FPSCR_FR) ? 16 : 0)] = tmp;
-	return 4;
-    } else if (n >= 43 && n < 51) {
-	env->gregs[n - 43] = tmp;
-	return 4;
-    } else if (n >= 51 && n < 59) {
-	env->gregs[n - (51 - 16)] = tmp;
-	return 4;
-    }
     switch (n) {
-    case 16: env->pc = tmp; break;
-    case 17: env->pr = tmp; break;
-    case 18: env->gbr = tmp; break;
-    case 19: env->vbr = tmp; break;
-    case 20: env->mach = tmp; break;
-    case 21: env->macl = tmp; break;
-    case 22: env->sr = tmp; break;
-    case 23: env->fpul = tmp; break;
-    case 24: env->fpscr = tmp; break;
-    case 41: env->ssr = tmp; break;
-    case 42: env->spc = tmp; break;
+    case 0 ... 7:
+        if ((env->sr & (SR_MD | SR_RB)) == (SR_MD | SR_RB)) {
+            env->gregs[n + 16] = ldl_p(mem_buf);
+        } else {
+            env->gregs[n] = ldl_p(mem_buf);
+        }
+        break;
+    case 8 ... 15:
+        env->gregs[n] = ldl_p(mem_buf);
+        break;
+    case 16:
+        env->pc = ldl_p(mem_buf);
+        break;
+    case 17:
+        env->pr = ldl_p(mem_buf);
+        break;
+    case 18:
+        env->gbr = ldl_p(mem_buf);
+        break;
+    case 19:
+        env->vbr = ldl_p(mem_buf);
+        break;
+    case 20:
+        env->mach = ldl_p(mem_buf);
+        break;
+    case 21:
+        env->macl = ldl_p(mem_buf);
+        break;
+    case 22:
+        env->sr = ldl_p(mem_buf);
+        break;
+    case 23:
+        env->fpul = ldl_p(mem_buf);
+        break;
+    case 24:
+        env->fpscr = ldl_p(mem_buf);
+        break;
+    case 25 ... 40:
+        if (env->fpscr & FPSCR_FR) {
+            env->fregs[n - 9] = ldfl_p(mem_buf);
+        } else {
+            env->fregs[n - 25] = ldfl_p(mem_buf);
+        }
+        break;
+    case 41:
+        env->ssr = ldl_p(mem_buf);
+        break;
+    case 42:
+        env->spc = ldl_p(mem_buf);
+        break;
+    case 43 ... 50:
+        env->gregs[n - 43] = ldl_p(mem_buf);
+        break;
+    case 51 ... 58:
+        env->gregs[n - (51 - 16)] = ldl_p(mem_buf);
+        break;
     default: return 0;
     }
 
@@ -1924,6 +2022,8 @@ static void gdb_set_cpu_pc(GDBState *s, target_ulong pc)
     }
 #elif defined (TARGET_MICROBLAZE)
     s->c_cpu->sregs[SR_PC] = pc;
+#elif defined(TARGET_OPENRISC)
+    s->c_cpu->pc = pc;
 #elif defined (TARGET_CRIS)
     s->c_cpu->pc = pc;
 #elif defined (TARGET_ALPHA)
@@ -1937,21 +2037,12 @@ static void gdb_set_cpu_pc(GDBState *s, target_ulong pc)
 #endif
 }
 
-static inline int gdb_id(CPUArchState *env)
-{
-#if defined(CONFIG_USER_ONLY) && defined(CONFIG_USE_NPTL)
-    return env->host_tid;
-#else
-    return env->cpu_index + 1;
-#endif
-}
-
 static CPUArchState *find_cpu(uint32_t thread_id)
 {
     CPUArchState *env;
 
     for (env = first_cpu; env != NULL; env = env->next_cpu) {
-        if (gdb_id(env) == thread_id) {
+        if (cpu_index(env) == thread_id) {
             return env;
         }
     }
@@ -1979,7 +2070,7 @@ static int gdb_handle_packet(GDBState *s, const char *line_buf)
     case '?':
         /* TODO: Make this return the correct value for user-mode.  */
         snprintf(buf, sizeof(buf), "T%02xthread:%02x;", GDB_SIGNAL_TRAP,
-                 gdb_id(s->c_cpu));
+                 cpu_index(s->c_cpu));
         put_packet(s, buf);
         /* Remove all the breakpoints when this query is issued,
          * because gdb is doing and initial connect and the state
@@ -2274,7 +2365,7 @@ static int gdb_handle_packet(GDBState *s, const char *line_buf)
         } else if (strcmp(p,"sThreadInfo") == 0) {
         report_cpuinfo:
             if (s->query_cpu) {
-                snprintf(buf, sizeof(buf), "m%x", gdb_id(s->query_cpu));
+                snprintf(buf, sizeof(buf), "m%x", cpu_index(s->query_cpu));
                 put_packet(s, buf);
                 s->query_cpu = s->query_cpu->next_cpu;
             } else
@@ -2422,7 +2513,7 @@ static void gdb_vm_state_change(void *opaque, int running, RunState state)
             }
             snprintf(buf, sizeof(buf),
                      "T%02xthread:%02x;%swatch:" TARGET_FMT_lx ";",
-                     GDB_SIGNAL_TRAP, gdb_id(env), type,
+                     GDB_SIGNAL_TRAP, cpu_index(env), type,
                      env->watchpoint_hit->vaddr);
             env->watchpoint_hit = NULL;
             goto send_packet;
@@ -2455,7 +2546,7 @@ static void gdb_vm_state_change(void *opaque, int running, RunState state)
         ret = GDB_SIGNAL_UNKNOWN;
         break;
     }
-    snprintf(buf, sizeof(buf), "T%02xthread:%02x;", ret, gdb_id(env));
+    snprintf(buf, sizeof(buf), "T%02xthread:%02x;", ret, cpu_index(env));
 
 send_packet:
     put_packet(s, buf);

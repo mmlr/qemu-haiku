@@ -30,6 +30,7 @@
 #include "qemu-timer.h"
 #include "sysemu.h"
 #include "dma.h"
+#include "hw/block-common.h"
 #include "blockdev.h"
 
 #include <hw/ide/internal.h>
@@ -52,8 +53,6 @@ static const int smart_attributes[][12] = {
     { 0x0c, 0x03, 0x00, 0x64, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
     /* airflow-temperature-celsius */
     { 190,  0x03, 0x00, 0x45, 0x45, 0x1f, 0x00, 0x1f, 0x1f, 0x00, 0x00, 0x32},
-    /* end of list */
-    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 };
 
 static int ide_handle_rw_error(IDEState *s, int error, int op);
@@ -1047,6 +1046,7 @@ static bool ide_cmd_permitted(IDEState *s, uint32_t cmd)
 
 void ide_exec_cmd(IDEBus *bus, uint32_t val)
 {
+    uint16_t *identify_data;
     IDEState *s;
     int n;
     int lba48 = 0;
@@ -1231,10 +1231,21 @@ void ide_exec_cmd(IDEBus *bus, uint32_t val)
             goto abort_cmd;
         /* XXX: valid for CDROM ? */
         switch(s->feature) {
+        case 0x02: /* write cache enable */
+            bdrv_set_enable_write_cache(s->bs, true);
+            identify_data = (uint16_t *)s->identify_data;
+            put_le16(identify_data + 85, (1 << 14) | (1 << 5) | 1);
+            s->status = READY_STAT | SEEK_STAT;
+            ide_set_irq(s->bus);
+            break;
+        case 0x82: /* write cache disable */
+            bdrv_set_enable_write_cache(s->bs, false);
+            identify_data = (uint16_t *)s->identify_data;
+            put_le16(identify_data + 85, (1 << 14) | 1);
+            ide_flush_cache(s);
+            break;
         case 0xcc: /* reverting to power-on defaults enable */
         case 0x66: /* reverting to power-on defaults disable */
-        case 0x02: /* write cache enable */
-        case 0x82: /* write cache disable */
         case 0xaa: /* read look-ahead enable */
         case 0x55: /* read look-ahead disable */
         case 0x05: /* set advanced power management mode */
@@ -1250,7 +1261,7 @@ void ide_exec_cmd(IDEBus *bus, uint32_t val)
             break;
         case 0x03: { /* set transfer mode */
 		uint8_t val = s->nsector & 0x07;
-            uint16_t *identify_data = (uint16_t *)s->identify_data;
+		identify_data = (uint16_t *)s->identify_data;
 
 		switch (s->nsector >> 3) {
 		case 0x00: /* pio default */
@@ -1455,9 +1466,7 @@ void ide_exec_cmd(IDEBus *bus, uint32_t val)
 	case SMART_READ_THRESH:
 		memset(s->io_buffer, 0, 0x200);
 		s->io_buffer[0] = 0x01; /* smart struct version */
-		for (n=0; n<30; n++) {
-		if (smart_attributes[n][0] == 0)
-			break;
+		for (n = 0; n < ARRAY_SIZE(smart_attributes); n++) {
 		s->io_buffer[2+0+(n*12)] = smart_attributes[n][0];
 		s->io_buffer[2+1+(n*12)] = smart_attributes[n][11];
 		}
@@ -1471,10 +1480,7 @@ void ide_exec_cmd(IDEBus *bus, uint32_t val)
 	case SMART_READ_DATA:
 		memset(s->io_buffer, 0, 0x200);
 		s->io_buffer[0] = 0x01; /* smart struct version */
-		for (n=0; n<30; n++) {
-		    if (smart_attributes[n][0] == 0) {
-			break;
-		    }
+		for (n = 0; n < ARRAY_SIZE(smart_attributes); n++) {
 		    int i;
 		    for(i = 0; i < 11; i++) {
 			s->io_buffer[2+i+(n*12)] = smart_attributes[n][i];
@@ -1912,31 +1918,20 @@ static const BlockDevOps ide_cd_block_ops = {
 
 int ide_init_drive(IDEState *s, BlockDriverState *bs, IDEDriveKind kind,
                    const char *version, const char *serial, const char *model,
-                   uint64_t wwn)
+                   uint64_t wwn,
+                   uint32_t cylinders, uint32_t heads, uint32_t secs,
+                   int chs_trans)
 {
-    int cylinders, heads, secs;
     uint64_t nb_sectors;
 
     s->bs = bs;
     s->drive_kind = kind;
 
     bdrv_get_geometry(bs, &nb_sectors);
-    bdrv_guess_geometry(bs, &cylinders, &heads, &secs);
-    if (cylinders < 1 || cylinders > 16383) {
-        error_report("cyls must be between 1 and 16383");
-        return -1;
-    }
-    if (heads < 1 || heads > 16) {
-        error_report("heads must be between 1 and 16");
-        return -1;
-    }
-    if (secs < 1 || secs > 63) {
-        error_report("secs must be between 1 and 63");
-        return -1;
-    }
     s->cylinders = cylinders;
     s->heads = heads;
     s->sectors = secs;
+    s->chs_trans = chs_trans;
     s->nb_sectors = nb_sectors;
     s->wwn = wwn;
     /* The SMART values should be preserved across power cycles
@@ -1983,7 +1978,7 @@ int ide_init_drive(IDEState *s, BlockDriverState *bs, IDEDriveKind kind,
     if (version) {
         pstrcpy(s->version, sizeof(s->version), version);
     } else {
-        pstrcpy(s->version, sizeof(s->version), QEMU_VERSION);
+        pstrcpy(s->version, sizeof(s->version), qemu_get_version());
     }
 
     ide_reset(s);
@@ -2063,17 +2058,39 @@ void ide_init2(IDEBus *bus, qemu_irq irq)
 void ide_init2_with_non_qdev_drives(IDEBus *bus, DriveInfo *hd0,
                                     DriveInfo *hd1, qemu_irq irq)
 {
-    int i;
+    int i, trans;
     DriveInfo *dinfo;
+    uint32_t cyls, heads, secs;
 
     for(i = 0; i < 2; i++) {
         dinfo = i == 0 ? hd0 : hd1;
         ide_init1(bus, i);
         if (dinfo) {
+            cyls  = dinfo->cyls;
+            heads = dinfo->heads;
+            secs  = dinfo->secs;
+            trans = dinfo->trans;
+            if (!cyls && !heads && !secs) {
+                hd_geometry_guess(dinfo->bdrv, &cyls, &heads, &secs, &trans);
+            } else if (trans == BIOS_ATA_TRANSLATION_AUTO) {
+                trans = hd_bios_chs_auto_trans(cyls, heads, secs);
+            }
+            if (cyls < 1 || cyls > 65535) {
+                error_report("cyls must be between 1 and 65535");
+                exit(1);
+            }
+            if (heads < 1 || heads > 16) {
+                error_report("heads must be between 1 and 16");
+                exit(1);
+            }
+            if (secs < 1 || secs > 255) {
+                error_report("secs must be between 1 and 255");
+                exit(1);
+            }
             if (ide_init_drive(&bus->ifs[i], dinfo->bdrv,
-                               dinfo->media_cd ? IDE_CD : IDE_HD, NULL,
-                               *dinfo->serial ? dinfo->serial : NULL,
-                               NULL, 0) < 0) {
+                               dinfo->media_cd ? IDE_CD : IDE_HD,
+                               NULL, dinfo->serial, NULL, 0,
+                               cyls, heads, secs, trans) < 0) {
                 error_report("Can't set up IDE drive %s", dinfo->id);
                 exit(1);
             }
@@ -2145,6 +2162,9 @@ static int ide_drive_post_load(void *opaque, int version_id)
             s->asc == ASC_MEDIUM_MAY_HAVE_CHANGED) {
             s->cdrom_changed = 1;
         }
+    }
+    if (s->identify_set) {
+        bdrv_set_enable_write_cache(s->bs, !!(s->identify_data[85] & (1 << 5)));
     }
     return 0;
 }

@@ -1078,7 +1078,7 @@ static const VMStateDescription vmstate_vmware_vga = {
     }
 };
 
-static void vmsvga_init(struct vmsvga_state_s *s, int vga_ram_size,
+static void vmsvga_init(struct vmsvga_state_s *s,
                         MemoryRegion *address_space, MemoryRegion *io)
 {
     s->scratch_size = SVGA_SCRATCH_SIZE;
@@ -1095,7 +1095,7 @@ static void vmsvga_init(struct vmsvga_state_s *s, int vga_ram_size,
     vmstate_register_ram_global(&s->fifo_ram);
     s->fifo_ptr = memory_region_get_ram_ptr(&s->fifo_ram);
 
-    vga_common_init(&s->vga, vga_ram_size);
+    vga_common_init(&s->vga);
     vga_init(&s->vga, address_space, io, true);
     vmstate_register(NULL, 0, &vmstate_vga_common, &s->vga);
 
@@ -1150,11 +1150,14 @@ static void vmsvga_io_write(void *opaque, target_phys_addr_t addr,
 
     switch (addr) {
     case SVGA_IO_MUL * SVGA_INDEX_PORT:
-        return vmsvga_index_write(s, addr, data);
+        vmsvga_index_write(s, addr, data);
+        break;
     case SVGA_IO_MUL * SVGA_VALUE_PORT:
-        return vmsvga_value_write(s, addr, data);
+        vmsvga_value_write(s, addr, data);
+        break;
     case SVGA_IO_MUL * SVGA_BIOS_PORT:
-        return vmsvga_bios_write(s, addr, data);
+        vmsvga_bios_write(s, addr, data);
+        break;
     }
 }
 
@@ -1184,7 +1187,7 @@ static int pci_vmsvga_initfn(PCIDevice *dev)
                           "vmsvga-io", 0x10);
     pci_register_bar(&s->card, 0, PCI_BASE_ADDRESS_SPACE_IO, &s->io_bar);
 
-    vmsvga_init(&s->chip, VGA_RAM_SIZE, pci_address_space(dev),
+    vmsvga_init(&s->chip, pci_address_space(dev),
                 pci_address_space_io(dev));
 
     pci_register_bar(&s->card, 1, PCI_BASE_ADDRESS_MEM_PREFETCH, iomem);
@@ -1198,6 +1201,12 @@ static int pci_vmsvga_initfn(PCIDevice *dev)
 
     return 0;
 }
+
+static Property vga_vmware_properties[] = {
+    DEFINE_PROP_UINT32("vgamem_mb", struct pci_vmsvga_state_s,
+                       chip.vga.vram_size_mb, 16),
+    DEFINE_PROP_END_OF_LIST(),
+};
 
 static void vmsvga_class_init(ObjectClass *klass, void *data)
 {
@@ -1214,6 +1223,7 @@ static void vmsvga_class_init(ObjectClass *klass, void *data)
     k->subsystem_id = SVGA_PCI_DEVICE_ID;
     dc->reset = vmsvga_reset;
     dc->vmsd = &vmstate_vmware_vga;
+    dc->props = vga_vmware_properties;
 }
 
 static TypeInfo vmsvga_info = {

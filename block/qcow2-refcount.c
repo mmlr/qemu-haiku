@@ -301,7 +301,8 @@ static int alloc_refcount_block(BlockDriverState *bs,
     uint64_t last_table_size;
     uint64_t blocks_clusters;
     do {
-        uint64_t table_clusters = size_to_clusters(s, table_size);
+        uint64_t table_clusters =
+            size_to_clusters(s, table_size * sizeof(uint64_t));
         blocks_clusters = 1 +
             ((table_clusters + refcount_block_clusters - 1)
             / refcount_block_clusters);
@@ -627,10 +628,11 @@ int64_t qcow2_alloc_bytes(BlockDriverState *bs, int size)
     BLKDBG_EVENT(bs->file, BLKDBG_CLUSTER_ALLOC_BYTES);
     assert(size > 0 && size <= s->cluster_size);
     if (s->free_byte_offset == 0) {
-        s->free_byte_offset = qcow2_alloc_clusters(bs, s->cluster_size);
-        if (s->free_byte_offset < 0) {
-            return s->free_byte_offset;
+        offset = qcow2_alloc_clusters(bs, s->cluster_size);
+        if (offset < 0) {
+            return offset;
         }
+        s->free_byte_offset = offset;
     }
  redo:
     free_in_cluster = s->cluster_size -
@@ -726,13 +728,6 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
     int64_t old_offset, old_l2_offset;
     int i, j, l1_modified = 0, nb_csectors, refcount;
     int ret;
-    bool old_l2_writethrough, old_refcount_writethrough;
-
-    /* Switch caches to writeback mode during update */
-    old_l2_writethrough =
-        qcow2_cache_set_writethrough(bs, s->l2_table_cache, false);
-    old_refcount_writethrough =
-        qcow2_cache_set_writethrough(bs, s->refcount_block_cache, false);
 
     l2_table = NULL;
     l1_table = NULL;
@@ -855,11 +850,6 @@ fail:
     if (l2_table) {
         qcow2_cache_put(bs, s->l2_table_cache, (void**) &l2_table);
     }
-
-    /* Enable writethrough cache mode again */
-    qcow2_cache_set_writethrough(bs, s->l2_table_cache, old_l2_writethrough);
-    qcow2_cache_set_writethrough(bs, s->refcount_block_cache,
-        old_refcount_writethrough);
 
     /* Update L1 only if it isn't deleted anyway (addend = -1) */
     if (addend >= 0 && l1_modified) {
@@ -1122,11 +1112,12 @@ fail:
  * Returns 0 if no errors are found, the number of errors in case the image is
  * detected as corrupted, and -errno when an internal error occurred.
  */
-int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res)
+int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
+                          BdrvCheckMode fix)
 {
     BDRVQcowState *s = bs->opaque;
-    int64_t size;
-    int nb_clusters, refcount1, refcount2, i;
+    int64_t size, i;
+    int nb_clusters, refcount1, refcount2;
     QCowSnapshot *sn;
     uint16_t *refcount_table;
     int ret;
@@ -1170,14 +1161,15 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res)
 
         /* Refcount blocks are cluster aligned */
         if (offset & (s->cluster_size - 1)) {
-            fprintf(stderr, "ERROR refcount block %d is not "
+            fprintf(stderr, "ERROR refcount block %" PRId64 " is not "
                 "cluster aligned; refcount table entry corrupted\n", i);
             res->corruptions++;
             continue;
         }
 
         if (cluster >= nb_clusters) {
-            fprintf(stderr, "ERROR refcount block %d is outside image\n", i);
+            fprintf(stderr, "ERROR refcount block %" PRId64
+                    " is outside image\n", i);
             res->corruptions++;
             continue;
         }
@@ -1186,7 +1178,8 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res)
             inc_refcounts(bs, res, refcount_table, nb_clusters,
                 offset, s->cluster_size);
             if (refcount_table[cluster] != 1) {
-                fprintf(stderr, "ERROR refcount block %d refcount=%d\n",
+                fprintf(stderr, "ERROR refcount block %" PRId64
+                    " refcount=%d\n",
                     i, refcount_table[cluster]);
                 res->corruptions++;
             }
@@ -1197,7 +1190,7 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res)
     for(i = 0; i < nb_clusters; i++) {
         refcount1 = get_refcount(bs, i);
         if (refcount1 < 0) {
-            fprintf(stderr, "Can't get refcount for cluster %d: %s\n",
+            fprintf(stderr, "Can't get refcount for cluster %" PRId64 ": %s\n",
                 i, strerror(-refcount1));
             res->check_errors++;
             continue;
@@ -1205,9 +1198,31 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res)
 
         refcount2 = refcount_table[i];
         if (refcount1 != refcount2) {
-            fprintf(stderr, "%s cluster %d refcount=%d reference=%d\n",
-                   refcount1 < refcount2 ? "ERROR" : "Leaked",
+
+            /* Check if we're allowed to fix the mismatch */
+            int *num_fixed = NULL;
+            if (refcount1 > refcount2 && (fix & BDRV_FIX_LEAKS)) {
+                num_fixed = &res->leaks_fixed;
+            } else if (refcount1 < refcount2 && (fix & BDRV_FIX_ERRORS)) {
+                num_fixed = &res->corruptions_fixed;
+            }
+
+            fprintf(stderr, "%s cluster %" PRId64 " refcount=%d reference=%d\n",
+                   num_fixed != NULL     ? "Repairing" :
+                   refcount1 < refcount2 ? "ERROR" :
+                                           "Leaked",
                    i, refcount1, refcount2);
+
+            if (num_fixed) {
+                ret = update_refcount(bs, i << s->cluster_bits, 1,
+                                      refcount2 - refcount1);
+                if (ret >= 0) {
+                    (*num_fixed)++;
+                    continue;
+                }
+            }
+
+            /* And if we couldn't, print an error */
             if (refcount1 < refcount2) {
                 res->corruptions++;
             } else {

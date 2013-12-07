@@ -28,6 +28,7 @@
 //#define DEBUG_CONSOLE
 #define DEFAULT_BACKSCROLL 512
 #define MAX_CONSOLES 12
+#define CONSOLE_CURSOR_PERIOD 500
 
 #define QEMU_RGBA(r, g, b, a) (((a) << 24) | ((r) << 16) | ((g) << 8) | (b))
 #define QEMU_RGB(r, g, b) QEMU_RGBA(r, g, b, 0xff)
@@ -139,6 +140,8 @@ struct TextConsole {
     TextCell *cells;
     int text_x[2], text_y[2], cursor_invalidate;
     int echo;
+    bool cursor_visible_phase;
+    QEMUTimer *cursor_timer;
 
     int update_x0;
     int update_y0;
@@ -615,7 +618,7 @@ static void console_show_cursor(TextConsole *s, int show)
             y += s->total_height;
         if (y < s->height) {
             c = &s->cells[y1 * s->width + x];
-            if (show) {
+            if (show && s->cursor_visible_phase) {
                 TextAttributes t_attrib = s->t_attrib_default;
                 t_attrib.invers = !(t_attrib.invers); /* invert fg and bg */
                 vga_putcharxy(s->ds, x, y, c->ch, &t_attrib);
@@ -934,8 +937,11 @@ static void console_putchar(TextConsole *s, int ch)
     case TTY_STATE_CSI: /* handle escape sequence parameters */
         if (ch >= '0' && ch <= '9') {
             if (s->nb_esc_params < MAX_ESC_PARAMS) {
-                s->esc_params[s->nb_esc_params] =
-                    s->esc_params[s->nb_esc_params] * 10 + ch - '0';
+                int *param = &s->esc_params[s->nb_esc_params];
+                int digit = (ch - '0');
+
+                *param = (*param <= (INT_MAX - digit) / 10) ?
+                         *param * 10 + digit : INT_MAX;
             }
         } else {
             if (s->nb_esc_params < MAX_ESC_PARAMS)
@@ -1082,12 +1088,20 @@ void console_select(unsigned int index)
     s = consoles[index];
     if (s) {
         DisplayState *ds = s->ds;
+
+        if (active_console && active_console->cursor_timer) {
+            qemu_del_timer(active_console->cursor_timer);
+        }
         active_console = s;
         if (ds_get_bits_per_pixel(s->ds)) {
             ds->surface = qemu_resize_displaysurface(ds, s->g_width, s->g_height);
         } else {
             s->ds->surface->width = s->width;
             s->ds->surface->height = s->height;
+        }
+        if (s->cursor_timer) {
+            qemu_mod_timer(s->cursor_timer,
+                   qemu_get_clock_ms(rt_clock) + CONSOLE_CURSOR_PERIOD / 2);
         }
         dpy_resize(s->ds);
         vga_hw_invalidate();
@@ -1453,6 +1467,16 @@ static void text_console_set_echo(CharDriverState *chr, bool echo)
     s->echo = echo;
 }
 
+static void text_console_update_cursor(void *opaque)
+{
+    TextConsole *s = opaque;
+
+    s->cursor_visible_phase = !s->cursor_visible_phase;
+    vga_hw_invalidate();
+    qemu_mod_timer(s->cursor_timer,
+                   qemu_get_clock_ms(rt_clock) + CONSOLE_CURSOR_PERIOD / 2);
+}
+
 static void text_console_do_init(CharDriverState *chr, DisplayState *ds)
 {
     TextConsole *s;
@@ -1480,6 +1504,9 @@ static void text_console_do_init(CharDriverState *chr, DisplayState *ds)
         s->g_width = ds_get_width(s->ds);
         s->g_height = ds_get_height(s->ds);
     }
+
+    s->cursor_timer =
+        qemu_new_timer_ms(rt_clock, text_console_update_cursor, s);
 
     s->hw_invalidate = text_console_invalidate;
     s->hw_text_update = text_console_update;
@@ -1587,7 +1614,7 @@ PixelFormat qemu_different_endianness_pixelformat(int bpp)
     memset(&pf, 0x00, sizeof(PixelFormat));
 
     pf.bits_per_pixel = bpp;
-    pf.bytes_per_pixel = bpp / 8;
+    pf.bytes_per_pixel = DIV_ROUND_UP(bpp, 8);
     pf.depth = bpp == 32 ? 24 : bpp;
 
     switch (bpp) {
@@ -1636,13 +1663,12 @@ PixelFormat qemu_default_pixelformat(int bpp)
     memset(&pf, 0x00, sizeof(PixelFormat));
 
     pf.bits_per_pixel = bpp;
-    pf.bytes_per_pixel = bpp / 8;
+    pf.bytes_per_pixel = DIV_ROUND_UP(bpp, 8);
     pf.depth = bpp == 32 ? 24 : bpp;
 
     switch (bpp) {
         case 15:
             pf.bits_per_pixel = 16;
-            pf.bytes_per_pixel = 2;
             pf.rmask = 0x00007c00;
             pf.gmask = 0x000003E0;
             pf.bmask = 0x0000001F;
