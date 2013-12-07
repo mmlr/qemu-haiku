@@ -364,6 +364,7 @@ bool is_daemonized(void)
     return daemonize;
 }
 
+#if !defined(CONFIG_HAIKU)
 int os_mlock(void)
 {
     int ret = 0;
@@ -375,3 +376,9 @@ int os_mlock(void)
 
     return ret;
 }
+#else /* !CONFIG_HAIKU */
+int os_mlock(void)
+{
+    return -ENOSYS;
+}
+#endif
