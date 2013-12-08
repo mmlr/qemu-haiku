@@ -95,6 +95,7 @@ enum {
 
 static uint32_t errno_h2g(int host_errno)
 {
+#if !defined(CONFIG_HAIKU)
     static const uint32_t guest_errno[] = {
         [EPERM]         = TARGET_EPERM,
         [ENOENT]        = TARGET_ENOENT,
@@ -148,6 +149,68 @@ static uint32_t errno_h2g(int host_errno)
     } else {
         return TARGET_EINVAL;
     }
+#else /* !CONFIG_HAIKU */
+	static const struct {
+		int host_errno;
+		uint32_t guest_errno;
+	} guest_errno[] = {
+        { EPERM, TARGET_EPERM },
+        { ENOENT, TARGET_ENOENT },
+        { ESRCH, TARGET_ESRCH },
+        { EINTR, TARGET_EINTR },
+        { EIO, TARGET_EIO },
+        { ENXIO, TARGET_ENXIO },
+        { E2BIG, TARGET_E2BIG },
+        { ENOEXEC, TARGET_ENOEXEC },
+        { EBADF, TARGET_EBADF },
+        { ECHILD, TARGET_ECHILD },
+        { EAGAIN, TARGET_EAGAIN },
+        { ENOMEM, TARGET_ENOMEM },
+        { EACCES, TARGET_EACCES },
+        { EFAULT, TARGET_EFAULT },
+#ifdef ENOTBLK
+        { ENOTBLK, TARGET_ENOTBLK },
+#endif
+        { EBUSY, TARGET_EBUSY },
+        { EEXIST, TARGET_EEXIST },
+        { EXDEV, TARGET_EXDEV },
+        { ENODEV, TARGET_ENODEV },
+        { ENOTDIR, TARGET_ENOTDIR },
+        { EISDIR, TARGET_EISDIR },
+        { EINVAL, TARGET_EINVAL },
+        { ENFILE, TARGET_ENFILE },
+        { EMFILE, TARGET_EMFILE },
+        { ENOTTY, TARGET_ENOTTY },
+#ifdef ETXTBSY
+        { ETXTBSY, TARGET_ETXTBSY },
+#endif
+        { EFBIG, TARGET_EFBIG },
+        { ENOSPC, TARGET_ENOSPC },
+        { ESPIPE, TARGET_ESPIPE },
+        { EROFS, TARGET_EROFS },
+        { EMLINK, TARGET_EMLINK },
+        { EPIPE, TARGET_EPIPE },
+        { EDOM, TARGET_EDOM },
+        { ERANGE, TARGET_ERANGE },
+        { ENOSYS, TARGET_ENOSYS },
+#ifdef ELOOP
+        { ELOOP, TARGET_ELOOP },
+#endif
+    };
+    size_t i;
+
+    if (host_errno == 0) {
+        return 0;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(guest_errno); i++) {
+      if (host_errno == guest_errno[i].host_errno) {
+        return guest_errno[i].guest_errno;
+      }
+    }
+
+    return TARGET_EINVAL;
+#endif
 }
 
 void HELPER(simcall)(CPUXtensaState *env)
