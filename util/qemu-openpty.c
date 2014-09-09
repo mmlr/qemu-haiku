@@ -50,6 +50,8 @@
 #elif defined CONFIG_HAIKU
 # include <termios.h>
 # include <pty.h>
+#else
+# include <termios.h>
 #endif
 
 #ifdef __sun__
