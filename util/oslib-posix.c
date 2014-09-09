@@ -60,7 +60,12 @@ extern int daemon(int, int);
 #include <sys/mman.h>
 #include <libgen.h>
 #include <setjmp.h>
+
+#ifndef CONFIG_HAIKU
 #include <sys/signal.h>
+#else
+#include <signal.h>
+#endif
 
 #ifdef CONFIG_LINUX
 #include <sys/syscall.h>

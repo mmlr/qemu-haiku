@@ -674,7 +674,7 @@ Haiku)
   sysconfdir="${prefix}/etc"
   bindir="${prefix}"
   confsuffix=""
-  CFLAGS="-fno-pic -march=prescott -mtune=core2 $CFLAGS"
+  CFLAGS="-fno-pic -march=prescott -mtune=core2 -D_POSIX_C_SOURCE $CFLAGS"
   QEMU_CFLAGS="-DB_USE_POSITIVE_POSIX_ERRORS $QEMU_CFLAGS"
   LIBS="-lposix_error_mapper -lnetwork -lbe -lbsd -lgame -lmedia -lstdc++ $LIBS"
 ;;

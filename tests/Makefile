@@ -341,7 +341,11 @@ tests/qemu-iotests/socket_scm_helper$(EXESUF): tests/qemu-iotests/socket_scm_hel
 tests/test-qemu-opts$(EXESUF): tests/test-qemu-opts.o libqemuutil.a libqemustub.a
 
 ifeq ($(CONFIG_POSIX),y)
+ifneq ($(CONFIG_HAIKU),y)
 LIBS += -lutil
+else
+LIBS += -lbsd
+endif
 endif
 
 # QTest rules
