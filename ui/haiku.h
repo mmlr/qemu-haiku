@@ -85,7 +85,7 @@ static	void				CenterMouse(bool &warp);
 static	void				StartGrab(bool &grab);
 static	void				EndGrab(bool &grab, int32 modifiers);
 
-static	void				QueueKeycode(uint8 keycode);
+static	void				QueueKeycode(uint8 keycode, bool keyDown);
 static	void				QueueKeysym(int32 keysym);
 static	void				QueueMouseEvent(BPoint where, int32 deltaZ,
 								int32 buttonState);

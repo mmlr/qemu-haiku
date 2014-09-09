@@ -34,11 +34,13 @@
 
 #include <signal.h>
 
+struct QemuConsole;
 
 static QEMUApplication *sApplication = NULL;
 static QEMUWindow *sWindow = NULL;
 static QEMUView *sView = NULL;
 static bool sFullScreen = false;
+static QemuConsole *sCurrentConsole = NULL;
 static bool sGraphicConsole = false;
 static bool sAbsoluteMouse = false;
 static bool sGrabInput = false;
@@ -67,6 +69,7 @@ extern "C" {
 
 #include "qemu-common.h"
 #include "ui/console.h"
+#include "ui/input.h"
 
 #undef new
 #undef class
@@ -352,32 +355,24 @@ QEMUView::EndGrab(bool &grab, int32 modifiers)
 
 	// reset any set modifiers
 	if (modifiers & B_LEFT_SHIFT_KEY)
-		QueueKeycode(0xaa);
+		QueueKeycode(0x2a, false);
 	if (modifiers & B_RIGHT_SHIFT_KEY)
-		QueueKeycode(0xb6);
+		QueueKeycode(0x36, false);
 
 	if (modifiers & B_LEFT_COMMAND_KEY)
-		QueueKeycode(0xb8);
-	if (modifiers & B_RIGHT_COMMAND_KEY) {
-		QueueKeycode(0xe0);
-		QueueKeycode(0xb8);
-	}
+		QueueKeycode(0x38, false);
+	if (modifiers & B_RIGHT_COMMAND_KEY)
+		QueueKeycode(0xb8, false);
 
 	if (modifiers & B_LEFT_CONTROL_KEY)
-		QueueKeycode(0x9d);
-	if (modifiers & B_RIGHT_CONTROL_KEY) {
-		QueueKeycode(0xe0);
-		QueueKeycode(0x9d);
-	}
+		QueueKeycode(0x1d, false);
+	if (modifiers & B_RIGHT_CONTROL_KEY)
+		QueueKeycode(0x9d, false);
 
-	if (modifiers & B_LEFT_OPTION_KEY) {
-		QueueKeycode(0xe0);
-		QueueKeycode(0xdb);
-	}
-	if (modifiers & B_RIGHT_OPTION_KEY) {
-		QueueKeycode(0xe0);
-		QueueKeycode(0xdc);
-	}
+	if (modifiers & B_LEFT_OPTION_KEY)
+		QueueKeycode(0xdb, false);
+	if (modifiers & B_RIGHT_OPTION_KEY)
+		QueueKeycode(0xdc, false);
 }
 
 
@@ -393,10 +388,11 @@ QEMUView::QueueEvent(BMessage *event)
 
 
 void
-QEMUView::QueueKeycode(uint8 keycode)
+QEMUView::QueueKeycode(uint8 keycode, bool keyDown)
 {
 	BMessage *event = new BMessage(kKeycodeEvent);
 	event->AddUInt8("keycode", keycode);
+	event->AddBool("keyDown", keyDown);
 	sView->QueueEvent(event);
 }
 
@@ -416,10 +412,7 @@ QEMUView::QueueMouseEvent(BPoint where, int32 deltaZ, int32 buttonState)
 	int32 deltaX = where.x;
 	int32 deltaY = where.y;
 
-	if (sAbsoluteMouse) {
-		deltaX = deltaX * 0x7fff / (sWidth -1);
-		deltaY = deltaY * 0x7fff / (sHeight - 1);
-	} else {
+	if (!sAbsoluteMouse) {
 		deltaX -= sCenter.x;
 		deltaY -= sCenter.y;
 	}
@@ -473,10 +466,14 @@ QEMUView::ProcessEvents()
 			case kKeycodeEvent:
 			{
 				uint8 keycode = 0;
-				if (event->FindUInt8("keycode", &keycode) != B_OK)
+				bool keyDown = false;
+				if (event->FindUInt8("keycode", &keycode) != B_OK
+					|| event->FindBool("keyDown", &keyDown) != B_OK) {
 					break;
+				}
 
-				kbd_put_keycode(keycode);
+				qemu_input_event_send_key_number(sCurrentConsole, keycode,
+					keyDown);
 				break;
 			}
 
@@ -503,7 +500,43 @@ QEMUView::ProcessEvents()
 					break;
 				}
 
-				kbd_mouse_event(deltaX, deltaY, deltaZ, buttonState);
+				if (sAbsoluteMouse) {
+					qemu_input_queue_abs(sCurrentConsole, INPUT_AXIS_X, deltaX,
+						sWidth);
+					qemu_input_queue_abs(sCurrentConsole, INPUT_AXIS_Y, deltaY,
+						sHeight);
+				} else {
+					qemu_input_queue_rel(sCurrentConsole, INPUT_AXIS_X, deltaX);
+					qemu_input_queue_rel(sCurrentConsole, INPUT_AXIS_Y, deltaY);
+				}
+
+				static int32 lastButtonState = 0;
+				if (lastButtonState != buttonState) {
+					// Haiku buttons are the same as QEMU
+					static uint32_t buttonMap[INPUT_BUTTON_MAX] = {
+						[INPUT_BUTTON_LEFT] = B_PRIMARY_MOUSE_BUTTON,
+						[INPUT_BUTTON_MIDDLE] = B_TERTIARY_MOUSE_BUTTON,
+						[INPUT_BUTTON_RIGHT] = B_SECONDARY_MOUSE_BUTTON
+					};
+
+					qemu_input_update_buttons(sCurrentConsole, buttonMap,
+						lastButtonState, buttonState);
+					lastButtonState = buttonState;
+				}
+
+			    qemu_input_event_sync();
+
+				if (deltaZ != 0) {
+					qemu_input_queue_btn(sCurrentConsole, deltaZ < 0
+							? INPUT_BUTTON_WHEEL_UP : INPUT_BUTTON_WHEEL_DOWN,
+						true);
+				    qemu_input_event_sync();
+					qemu_input_queue_btn(sCurrentConsole, deltaZ < 0
+							? INPUT_BUTTON_WHEEL_UP : INPUT_BUTTON_WHEEL_DOWN,
+						false);
+				    qemu_input_event_sync();
+				}
+
 				break;
 			}
 
@@ -518,6 +551,7 @@ QEMUView::ProcessEvents()
 					break;
 
 				console_select(console);
+				sCurrentConsole = qemu_console_lookup_by_index(console);
 				sGraphicConsole = qemu_console_is_graphic(NULL);
 				break;
 			}
@@ -646,14 +680,7 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 				return B_SKIP_MESSAGE;
 			}
 
-			if (keycode & 0x80)
-				QueueKeycode(0xe0);
-
-			if (keyDown)
-				QueueKeycode(keycode & 0x7f);
-			else
-				QueueKeycode(keycode | 0x80);
-
+			QueueKeycode(keycode, keyDown);
 			return B_SKIP_MESSAGE;
 		} break;
 
@@ -666,9 +693,14 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 				return B_SKIP_MESSAGE;
 			}
 
+			int32 transit;
+			if (message->FindInt32("be:transit", &transit) == B_OK
+				&& transit != B_ENTERED_VIEW && transit != B_INSIDE_VIEW) {
+				break;
+			}
+
 			message->FindPoint("where", &sMousePosition);
 
-			// Haiku buttons are the same as QEMU
 			QueueMouseEvent(sMousePosition, 0, sMouseButtons);
 
 			if (!sAbsoluteMouse)
@@ -694,7 +726,6 @@ QEMUView::MessageFilter(BMessage *message, BHandler **target,
 			sMouseButtons = buttons;
 			message->FindPoint("where", &sMousePosition);
 
-			// Haiku buttons are the same as QEMU
 			QueueMouseEvent(sMousePosition, 0, sMouseButtons);
 			return B_SKIP_MESSAGE;
 		} break;
@@ -811,7 +842,7 @@ haiku_refresh(DisplayChangeListener *dcl)
 static void
 haiku_mouse_mode_change(Notifier *notifier, void *data)
 {
-	sAbsoluteMouse = kbd_mouse_is_absolute();
+	sAbsoluteMouse = qemu_input_is_absolute();
 	BCursor cursor(sAbsoluteMouse ? B_CURSOR_ID_NO_CURSOR
 		: B_CURSOR_ID_SYSTEM_DEFAULT);
 
@@ -830,7 +861,7 @@ haiku_display_init(DisplayState *ds, int fullScreen)
 	sApplication->InitDisplay();
 	sFullScreen = fullScreen != 0;
 	sGraphicConsole = qemu_console_is_graphic(NULL);
-	sAbsoluteMouse = kbd_mouse_is_absolute();
+	sAbsoluteMouse = qemu_input_is_absolute();
 
 	static DisplayChangeListenerOps sDisplayChangeListenerOps;
 	sDisplayChangeListenerOps.dpy_name			= "haiku";
