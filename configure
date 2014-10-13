@@ -1739,6 +1739,7 @@ fi
 
 cat > $TMPC <<EOF
 #include <sys/socket.h>
+#include <linux/ip.h>
 int main(void) { return sizeof(struct mmsghdr); }
 EOF
 if compile_prog "" "" ; then
