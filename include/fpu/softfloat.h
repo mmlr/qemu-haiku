@@ -64,14 +64,12 @@ typedef uint64_t uint64;
 typedef int64_t int64;
 #else
 // Haiku types
-typedef signed char int8;
-typedef unsigned char uint8;
-typedef short int16;
-typedef unsigned short uint16;
-typedef long int32;
-typedef unsigned long uint32;
-typedef long long int64;
-typedef unsigned long long uint64;
+typedef __haiku_uint8 uint8;
+typedef	__haiku_int8 int8;
+typedef __haiku_uint32 uint32;
+typedef	__haiku_int32 int32;
+typedef __haiku_uint64 uint64;
+typedef	__haiku_int64 int64;
 #endif
 
 #define LIT64( a ) a##LL
