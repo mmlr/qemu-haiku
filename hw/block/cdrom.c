@@ -36,33 +36,86 @@ static void lba_to_msf(uint8_t *buf, int lba)
     buf[2] = lba % 75;
 }
 
+static int cdrom_empty_track_map[1] = { 0 };
+static int *cdrom_track_map = cdrom_empty_track_map;
+static bool cdrom_track_map_built = false;
+static int cdrom_track_count = 1;
+
+int *cdrom_build_toc(void);
+
+int *
+cdrom_build_toc(void)
+{
+    const char *buffer = cdrom_toc;
+
+    if (cdrom_track_map_built) {
+        return cdrom_track_map;
+    }
+
+    /* there can be a maximum of 100 tracks per CD */
+    cdrom_track_map = (int *)malloc(100 * sizeof(int));
+    memset(cdrom_track_map, 0, 100 * sizeof(int));
+    cdrom_track_count = 0;
+
+    while (true) {
+        int sector;
+        if (sscanf(buffer, "%d", &sector) != 1)
+            break;
+
+        cdrom_track_map[cdrom_track_count++] = sector;
+        buffer = strstr(buffer, ",");
+        if (!buffer)
+            break;
+
+        buffer++;
+    }
+
+    if (cdrom_track_count == 0) {
+        cdrom_track_count = 1;
+        cdrom_track_map[0] = 0;
+    }
+
+    if (cdrom_track_map[0] != 0)
+        printf("warning: cdrom track 1 not starting at sector 0\n");
+
+    cdrom_track_map_built = true;
+    return cdrom_track_map;
+}
+
 /* same toc as bochs. Return -1 if error or the toc length */
 /* XXX: check this */
 int cdrom_read_toc(int nb_sectors, uint8_t *buf, int msf, int start_track)
 {
     uint8_t *q;
-    int len;
+    int len, i;
 
-    if (start_track > 1 && start_track != 0xaa)
+    cdrom_build_toc();
+
+    if (start_track > cdrom_track_count && start_track != 0xaa)
         return -1;
-    q = buf + 2;
-    *q++ = 1; /* first session */
-    *q++ = 1; /* last session */
-    if (start_track <= 1) {
+
+    q = buf;
+    q += 2; /* toc length written at the end */
+
+    *q++ = 1; /* first track */
+    *q++ = cdrom_track_count; /* last track */
+
+    for (i = 0; i < cdrom_track_count; i++) {
         *q++ = 0; /* reserved */
-        *q++ = 0x14; /* ADR, control */
-        *q++ = 1;    /* track number */
+        *q++ = 0x10; /* ADR, control */
+        *q++ = i + 1;    /* track number */
         *q++ = 0; /* reserved */
         if (msf) {
             *q++ = 0; /* reserved */
-            lba_to_msf(q, 0);
+            lba_to_msf(q, cdrom_track_map[i]);
             q += 3;
         } else {
             /* sector 0 */
-            stl_be_p(q, 0);
+            stl_be_p((uint32_t *)q, cdrom_track_map[i]);
             q += 4;
         }
     }
+
     /* lead out track */
     *q++ = 0; /* reserved */
     *q++ = 0x16; /* ADR, control */
@@ -85,7 +138,7 @@ int cdrom_read_toc(int nb_sectors, uint8_t *buf, int msf, int start_track)
 int cdrom_read_toc_raw(int nb_sectors, uint8_t *buf, int msf, int session_num)
 {
     uint8_t *q;
-    int len;
+    int i, len;
 
     q = buf + 2;
     *q++ = 1; /* first session */
@@ -111,7 +164,7 @@ int cdrom_read_toc_raw(int nb_sectors, uint8_t *buf, int msf, int session_num)
     *q++ = 0; /* sec */
     *q++ = 0; /* frame */
     *q++ = 0;
-    *q++ = 1; /* last track */
+    *q++ = cdrom_track_count; /* last track */
     *q++ = 0x00;
     *q++ = 0x00;
 
@@ -122,31 +175,25 @@ int cdrom_read_toc_raw(int nb_sectors, uint8_t *buf, int msf, int session_num)
     *q++ = 0; /* min */
     *q++ = 0; /* sec */
     *q++ = 0; /* frame */
-    if (msf) {
-        *q++ = 0; /* reserved */
-        lba_to_msf(q, nb_sectors);
-        q += 3;
-    } else {
-        stl_be_p(q, nb_sectors);
-        q += 4;
-    }
 
-    *q++ = 1; /* session number */
-    *q++ = 0x14; /* ADR, control */
-    *q++ = 0;    /* track number */
-    *q++ = 1;    /* point */
-    *q++ = 0; /* min */
-    *q++ = 0; /* sec */
-    *q++ = 0; /* frame */
-    if (msf) {
+    /* The MMC Specification says: "None of the fields in the response data
+       of Format 0010b are affected by the TIME bit in the CDB." */
+    *q++ = 0; /* reserved */
+    lba_to_msf(q, nb_sectors);
+    q += 3;
+
+    for (i = 0; i < cdrom_track_count; i++) {
+        *q++ = 1; /* session number */
+        *q++ = 0x14; /* ADR, control */
+        *q++ = i + 1; /* track number */
+        *q++ = i + 1; /* point */
+        *q++ = 0; /* min */
+        *q++ = 0; /* sec */
+        *q++ = 0; /* frame */
+
         *q++ = 0;
-        lba_to_msf(q, 0);
+        lba_to_msf(q, cdrom_track_map[i]);
         q += 3;
-    } else {
-        *q++ = 0;
-        *q++ = 0;
-        *q++ = 0;
-        *q++ = 0;
     }
 
     len = q - buf;

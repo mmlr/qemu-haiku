@@ -187,6 +187,7 @@ static bool boot_strict;
 uint8_t *boot_splash_filedata;
 size_t boot_splash_filedata_size;
 uint8_t qemu_extra_params_fw[2];
+const char *cdrom_toc = "";
 
 typedef struct FWBootEntry FWBootEntry;
 
@@ -3965,6 +3966,9 @@ int main(int argc, char **argv, char **envp)
                     fprintf(stderr, "open %s: %s\n", optarg, strerror(errno));
                     exit(1);
                 }
+                break;
+            case QEMU_OPTION_cdtoc:
+                cdrom_toc = optarg;
                 break;
             default:
                 os_parse_cmd_args(popt->index, optarg);
